@@ -18,9 +18,9 @@ async def main():
             'jd_text': 'Senior Backend Software Engineer. Must have 5+ years of experience with Python, Kafka, and distributed systems. Remote in Canada allowed. Salary: $170k - $200k.'
         }]
         
-    logging.info(f"Found {len(jobs)} jobs to process.")
+    logging.info(f"Found {len(jobs)} jobs to process. Processing only the first one for testing.")
     
-    for job in jobs:
+    for job in jobs[:1]:
         url = job['url']
         jd_text = job['jd_text']
         

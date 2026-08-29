@@ -314,10 +314,28 @@ async def save_materials(company: str, role: str, llm_output: str):
             # Convert local path to file URL
             file_url = "file://" + os.path.abspath(html_out)
             await page.goto(file_url, wait_until="networkidle")
+            
+            # Auto-Scale Algorithm to guarantee 1-page fit
+            scale = await page.evaluate("""
+                () => {
+                    // Letter height = 11in. CSS Margins = 0.4in top + 0.4in bottom = 0.8in.
+                    // Available height = 10.2in. Playwright uses 96 DPI.
+                    const maxAllowedHeight = 10.2 * 96;
+                    const bodyHeight = document.documentElement.scrollHeight;
+                    if (bodyHeight > maxAllowedHeight) {
+                        // Return the exact ratio to fit, minus 1% for safety padding
+                        return (maxAllowedHeight / bodyHeight) * 0.99;
+                    }
+                    return 1.0;
+                }
+            """)
+            print(f"  Calculated auto-scale factor: {scale:.3f}")
+
             await page.pdf(
                 path=pdf_out,
                 format="Letter",
                 print_background=True,
+                scale=scale,
                 margin={"top": "0", "right": "0", "bottom": "0", "left": "0"} 
                 # Note: Margins are 0 here because they are defined in the HTML @page CSS
             )
