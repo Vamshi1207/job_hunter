@@ -100,8 +100,14 @@ class Config:
         return " ".join(parts[1:]) if len(parts) > 1 else ""
 
     @property
-    def cv_stem(self) -> str:
-        return re.sub(r"[^A-Za-z0-9]+", "_", self.full_name).strip("_") + "_CV"
+    def cv_pages(self) -> int:
+        """Target PDF page count from config.yaml. Minimum 1; any integer is allowed."""
+        raw = self.get("cv_format.pages", 2)
+        try:
+            pages = int(raw)
+        except (TypeError, ValueError):
+            pages = 2
+        return max(1, pages)
 
     @property
     def applications_dir(self) -> Path:

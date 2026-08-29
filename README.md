@@ -1,6 +1,6 @@
 # Job Hunter pipeline
 
-Tailor a 1-page HTML/PDF CV, cover letter, LinkedIn DM, and a paste-by-field playbook for each job in `jobs.yaml`. An honesty-gated critic loop rewrites **existing** experience only. **You** click Submit.
+Tailor an HTML/PDF CV (page count from `config.yaml` `cv_format.pages`), cover letter, LinkedIn DM, and a paste-by-field playbook for each job in `jobs.yaml`. An honesty-gated critic loop rewrites **existing** experience only. **You** click Submit.
 
 ## What it does
 - Reads `config.yaml` for name, contact, visa, and paths (no hardcoded personal details in code).
@@ -21,6 +21,7 @@ cp jobs.example.yaml jobs.yaml       # then paste real JDs
 ```
 
 Fill in:
+- `config.yaml` — name, contact, visa, and `cv_format.pages` (1, 2, 3, …)
 - `memory/project.md` — profile and visa
 - `memory/feedback.md` — writing guardrails
 - `cv_master.md` — canonical resume

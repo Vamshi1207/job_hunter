@@ -5,24 +5,23 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{FULL_NAME}} CV</title>
     <style>
-        /* Exact Page Margins extracted from DOCX, tightened for real estate */
+        /* DOCX-equivalent Letter margins. Two-page senior CV — do not squeeze. */
         @page {
-            margin: 0.4in 0.5in 0.4in 0.5in;
+            margin: 0.53in 0.61in 0.56in 0.61in;
             size: letter;
         }
         
-        /* Base typography */
         body {
             font-family: Arial, Helvetica, sans-serif;
             color: #000000;
             margin: 0;
             padding: 0;
-            line-height: 1.1;
+            line-height: 1.18;
             -webkit-print-color-adjust: exact;
             print-color-adjust: exact;
         }
 
-        /* 
+        /*
            Styling rules extracted from python-docx analysis:
            - Name: 24.0pt, Bold, #404040, Centered
            - Title: 11.0pt, Bold, #000000, Centered
@@ -55,7 +54,7 @@
             font-weight: normal;
             color: #000000;
             text-align: center;
-            margin-bottom: 8px;
+            margin-bottom: 10px;
         }
 
         .header-contact a {
@@ -68,7 +67,7 @@
             font-weight: normal;
             color: #404040;
             text-align: justify;
-            margin-bottom: 12px;
+            margin-bottom: 10px;
         }
 
         .section-heading {
@@ -79,8 +78,20 @@
             text-transform: uppercase;
             border-bottom: 1pt solid #000000;
             margin-top: 12px;
-            margin-bottom: 6px;
+            margin-bottom: 8px;
             padding-bottom: 2px;
+            break-after: avoid;
+            page-break-after: avoid;
+        }
+
+        .job-block {
+            margin-bottom: 10px;
+        }
+
+        .project-block,
+        .school-block {
+            break-inside: avoid;
+            page-break-inside: avoid;
         }
 
         .job-header {
@@ -88,6 +99,8 @@
             justify-content: space-between;
             align-items: baseline;
             margin-bottom: 2px;
+            break-after: avoid;
+            page-break-after: avoid;
         }
 
         .company-name {
@@ -113,7 +126,7 @@
 
         ul {
             margin-top: 2px;
-            margin-bottom: 10px;
+            margin-bottom: 4px;
             padding-left: 20px;
         }
 
@@ -122,26 +135,35 @@
             font-weight: normal;
             color: #404040;
             text-align: justify;
-            margin-bottom: 3px;
-            list-style-type: disc; /* standard bullet point */
+            margin-bottom: 4px;
+            list-style-type: disc;
+            orphans: 2;
+            widows: 2;
         }
         
-        /* Skills section custom formatting */
         .skills-list {
             list-style-type: none;
             padding-left: 0;
         }
         .skills-list li {
             text-align: left;
+            margin-bottom: 3px;
         }
         .skills-list b {
             color: #000000;
         }
         
-        /* Projects section custom formatting */
+        .project-block {
+            margin-bottom: 10px;
+        }
+
         .project-header {
             font-size: 10.5pt;
-            margin-bottom: 2px;
+            margin-bottom: 4px;
+        }
+
+        .school-block {
+            margin-bottom: 8px;
         }
     </style>
 </head>
@@ -157,7 +179,7 @@
 
     <div class="section-heading">Work Experience</div>
 
-    <!-- Jeppesen -->
+    <div class="job-block">
     <div class="job-header">
         <span class="company-name">Jeppesen Foreflight – Montreal, Canada</span>
     </div>
@@ -174,8 +196,9 @@
         <li>{{JEPPESEN_B6}}</li>
         <li>{{JEPPESEN_B7}}</li>
     </ul>
+    </div>
 
-    <!-- Randstad -->
+    <div class="job-block">
     <div class="job-header">
         <span class="company-name">Randstad – Montreal, Canada</span>
     </div>
@@ -189,8 +212,9 @@
         <li>{{RANDSTAD_B3}}</li>
         <li>{{RANDSTAD_B4}}</li>
     </ul>
+    </div>
 
-    <!-- Uber -->
+    <div class="job-block">
     <div class="job-header">
         <span class="company-name">Uber Technologies – Hyderabad, India</span>
     </div>
@@ -206,6 +230,7 @@
         <li>{{UBER_B5}}</li>
         <li>{{UBER_B6}}</li>
     </ul>
+    </div>
 
     <div class="section-heading">Key Skills</div>
     <ul class="skills-list">
@@ -217,41 +242,49 @@
     </ul>
 
     <div class="section-heading">Education</div>
+    <div class="school-block">
     <div class="job-header">
         <span class="company-name">Bishop's University – Sherbrooke, Canada</span>
         <span class="job-dates">September 2021 – January 2023</span>
     </div>
     <div class="job-title" style="font-style: normal; font-weight: normal; margin-bottom: 2px;">Master of Science in Computer Science</div>
     <div class="job-title" style="font-style: normal; font-weight: bold; margin-bottom: 10px;">Focus: Machine Learning, Distributed systems, data engineering, and scalable computing</div>
+    </div>
 
+    <div class="school-block">
     <div class="job-header">
         <span class="company-name">Jawaharlal Nehru Technological University – Hyderabad, India</span>
         <span class="job-dates">October 2013 – June 2017</span>
     </div>
     <div class="job-title" style="font-style: normal; font-weight: normal;">Bachelor of Technology in Computer Science and Engineering</div>
+    </div>
 
     <div class="section-heading">Projects</div>
 
+    <div class="project-block">
     <div class="project-header">
         <b>Containerised Media Streaming Platform</b> | <i>Node.js, Docker, Docker Compose, REST APIs, Cloudflare Tunnels, GHCR</i> | <a href="https://github.com/Vamshi1207/Media_Streaming_Lab">GitHub</a>
     </div>
     <ul>
-        <li>Designed and built a fully containerised media streaming platform orchestrating 9 Docker services including a custom Node.js aggregation backend, Jellyfin streaming server, automated media acquisition pipeline, and a request management layer.</li>
-        <li>Architected a static IP subnet (172.20.0.0/16) with deterministic per-service addressing, selecting fixed IPs over DNS-based service discovery to eliminate lookup overhead.</li>
-        <li>Built and published 8 custom Docker images to GitHub Container Registry (GHCR), establishing versioned, reproducible deployments.</li>
-        <li>Integrated Cloudflare Tunnel to enable zero-port-exposure remote access over HTTP/2, decoupling remote connectivity from core platform operation.</li>
-        <li>Built a custom OpenSubtitles web scraper sidecar service to replace the paid API dependency, demonstrating deliberate cost vs complexity tradeoff analysis.</li>
+        <li>Designed and built a fully containerised media streaming platform orchestrating 9 Docker services including a custom Node.js aggregation backend, Jellyfin streaming server, automated media acquisition pipeline (Radarr, Sonarr, Prowlarr), and a request management layer deployed via a single Docker Compose configuration.</li>
+        <li>Architected a static IP subnet (172.20.0.0/16) with deterministic per-service addressing, selecting fixed IPs over DNS-based service discovery to eliminate lookup overhead and ensure predictable inter-service routing at runtime.</li>
+        <li>Built and published 8 custom Docker images to GitHub Container Registry (GHCR), establishing versioned, reproducible deployments and a self-owned image registry for the entire platform.</li>
+        <li>Integrated Cloudflare Tunnel as an optional Docker Compose profile to enable zero-port-exposure remote access over HTTP/2, decoupling remote connectivity from core platform operation and eliminating the need for inbound firewall rules.</li>
+        <li>Built a custom OpenSubtitles web scraper sidecar service to replace the paid API dependency, demonstrating deliberate cost vs complexity tradeoff analysis in system design decisions.</li>
     </ul>
+    </div>
 
+    <div class="project-block">
     <div class="project-header">
         <b>Real-Time Streaming Trading Analytics Platform</b> | <i>Python, Flask, WebSockets, REST API, Pandas, NumPy</i> | <a href="https://github.com/Vamshi1207/Crypto-analysis">GitHub</a>
     </div>
     <ul>
         <li>Designed and built a real-time analytics platform with WebSocket-based data ingestion, a Python Flask backend, and a scalable streaming pipeline processing high-frequency event streams with sub-second throughput.</li>
         <li>Architected a time-series processing engine to ingest, normalise, and deduplicate multi-interval datasets, implementing in-memory retention and windowed aggregation for high-volume data.</li>
-        <li>Built a REST API layer and feature engineering pipeline to expose computed signals and persist structured datasets for downstream ML model training.</li>
+        <li>Built a REST API layer and feature engineering pipeline to expose computed signals and persist structured datasets for downstream ML model training and analytical workflows.</li>
         <li>Designed rule-based signal detection logic with pattern recognition and proximity heuristics, producing explainable, auditable outputs.</li>
     </ul>
+    </div>
 
 </body>
 </html>

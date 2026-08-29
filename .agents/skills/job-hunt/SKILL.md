@@ -64,7 +64,7 @@ If unsure which phase, ask. Don't auto-pick a phase that costs many tokens.
    - GitHub profile + repo metadata (`gh api repos/<user>/<repo>` if `gh` is installed)
    - Personal sites / live products
    - LinkedIn URL (user must provide; LinkedIn blocks scrapers)
-3. Write `cv_master.md` (1-page, ATS-friendly markdown; HTML template at `resumes/template.html` is the render target).
+3. Write `cv_master.md` (ATS-friendly markdown; page count from `config.yaml` `cv_format.pages`; HTML template at `resumes/template.html` is the render target).
 4. Build `experience-bank/<project>.md` files: at least 4–6 bullet variants per project, framed by role type (Growth / Engineering / Data / BizOps / Product / FDE / etc.).
 5. Build `templates/cover_letter.template.md`, `linkedin_dm.template.md`, `why_i_fit.template.md` (or copy from this skill's defaults).
 6. Save `memory/project.md` and `memory/feedback.md` with:
@@ -113,7 +113,7 @@ If unsure which phase, ask. Don't auto-pick a phase that costs many tokens.
 ```
 applications/<company>-<role>-<date>/
 ├── analysis.md              # JD analysis + tailoring decisions
-├── <Name>_CV.html / .pdf    # 1-page tailored CV
+├── <Name>_CV.html / .pdf    # Tailored CV (`cv_format.pages` in config.yaml)
 ├── cover_letter.md          # 250–400 word cover letter
 ├── linkedin_dm.txt          # ≤60-word cold DM
 ├── why_i_fit.txt            # 3 bullets ≤25 words for application form
@@ -135,7 +135,7 @@ After cv-tailor finishes, **always** proceed to Phase 3 before Phase 4.
 2. **Ask user to review and critique** before any submission. Do not push to submit.
 3. If user gives feedback:
    - Apply each edit verbatim where possible.
-   - Re-build PDF. Verify still 1 page.
+   - Re-build PDF. Verify page count matches `config.yaml` `cv_format.pages` (2 in this workspace).
    - **Mark the rule for backport in Phase 7.**
 
 **Common review-loop edits to apply preventively** (read user's `memory/feedback.md` for accumulated rules):
@@ -247,7 +247,7 @@ If you find yourself re-applying the same edit twice across applications, hard-s
 2. **Never invent metrics.** No churn rate, retention %, MRR, MAU unless user has confirmed.
 3. **Never overclaim measurement frameworks.** Don't say "cohort review", "funnel analysis", "retention model" unless user has actually built one.
 4. **Master CV is canonical.** Per-application work always copies + edits a copy in `applications/<x>/`. Never modify master directly via Phase 2 / 3.
-5. **1 page CV always** (or whatever convention `config.yaml`'s `cv_format.length` specifies — UK convention is 1 page; US allows 2 for non-junior; academic CV is multi-page). The pipeline scales HTML to one Letter page when rendering PDF.
+5. **Respect `config.yaml` `cv_format.pages`.** That integer is the target length for this user (1, 2, 3, …). Do not assume 1 or 2. Do not shrink type to force a shorter CV. If content overflows the configured length, drop the weakest bullet.
 6. **Cite something verifiable** for "why this company" — recent funding, blog post, talk, feature. Not generic praise.
 7. **Visa honesty.** Form questions about authorisation and future sponsorship are answered honestly per the user's status.
 8. **Tracker is source of truth.** Every submission goes in `_tracker.md`. Pipeline runs land as ✏️ draft until the user says they submitted.

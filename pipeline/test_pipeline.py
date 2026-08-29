@@ -17,6 +17,7 @@ from pipeline.tailor import (
     escape_html,
     normalize_parsed,
     parse_tagged_output,
+    pdf_scale,
     resume_plain_text,
     strip_skill_prefix,
     strip_title_dates,
@@ -61,6 +62,12 @@ class ParseTests(unittest.TestCase):
         self.assertEqual(strip_skill_prefix("ML & AI: MCP, NLP", "ML & AI"), "MCP, NLP")
         self.assertEqual(strip_title_dates("Data Engineer    April 2022"), "Data Engineer")
 
+    def test_two_page_pdf_is_not_shrunk(self):
+        one_and_a_half = 11 * 96 * 1.5
+        self.assertEqual(pdf_scale(one_and_a_half, max_pages=2), 1.0)
+        self.assertEqual(pdf_scale(one_and_a_half * 2, max_pages=3), 1.0)
+        self.assertLess(pdf_scale(one_and_a_half, max_pages=1), 1.0)
+
 
 class HonestyPromptTests(unittest.TestCase):
     def test_critic_forbids_invention(self):
@@ -81,6 +88,7 @@ class HonestyPromptTests(unittest.TestCase):
         self.assertIn("Experience bank", prompt)
         self.assertIn("MUST NOT invent", prompt)
         self.assertIn("Need Python agents", prompt)
+        self.assertIn(f"Target length is {cfg.cv_pages}", prompt)
 
 
 class JobsAndPlaybookTests(unittest.TestCase):
@@ -106,6 +114,19 @@ class JobsAndPlaybookTests(unittest.TestCase):
             self.assertEqual(len(jobs), 1)
             self.assertEqual(jobs[0]["company"], "Acme")
             self.assertEqual(jobs[0]["jd"], "Python Kafka")
+        finally:
+            os.environ.pop("JOB_SEARCH_ROOT", None)
+            tmp.cleanup()
+            load_config(force=True)
+
+    def test_cv_pages_comes_from_config(self):
+        tmp = tempfile.TemporaryDirectory()
+        root = Path(tmp.name)
+        (root / "config.yaml").write_text("cv_format:\n  pages: 4\n")
+        os.environ["JOB_SEARCH_ROOT"] = str(root)
+        try:
+            cfg = load_config(force=True)
+            self.assertEqual(cfg.cv_pages, 4)
         finally:
             os.environ.pop("JOB_SEARCH_ROOT", None)
             tmp.cleanup()

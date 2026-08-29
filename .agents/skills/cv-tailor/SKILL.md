@@ -1,6 +1,6 @@
 ---
 name: cv-tailor
-description: Tactical sub-skill that takes one job description and produces a complete tailored application package — 1-page CV PDF, 250-400 word cover letter PDF, ≤60-word LinkedIn cold DM, 3-bullet "why I fit" summary. Triggered by user pasting a JD URL/text or saying "apply to this", or invoked by the job-hunt orchestrator skill in Phase 2. All outputs land under applications/<company>-<role>-<date>/. Reads writing rules from memory/feedback.md before generating.
+description: Tactical sub-skill that takes one job description and produces a complete tailored application package — CV PDF (`config.yaml` cv_format.pages), 250-400 word cover letter, ≤60-word LinkedIn cold DM, 3-bullet "why I fit" summary. Triggered by user pasting a JD URL/text or saying "apply to this", or invoked by the job-hunt orchestrator skill in Phase 2. All outputs land under applications/<company>-<role>-<date>/. Reads writing rules from memory/feedback.md before generating.
 ---
 
 # CV-Tailor (Generic)
@@ -15,7 +15,7 @@ These encode hard rules that override your defaults.
 ## Workspace expectations
 
 ```
-${WORKSPACE}/cv_master.md              ← canonical 1-page CV (never modified by this skill)
+${WORKSPACE}/cv_master.md              ← canonical CV (never modified by this skill; length from config.yaml)
 ${WORKSPACE}/resumes/template.html     ← HTML render template
 ${WORKSPACE}/jobs.yaml                 ← add the JD, then run the pipeline
 ${WORKSPACE}/experience-bank/*.md      ← per-project bullet variants by role type
@@ -103,7 +103,7 @@ Write to `applications/<company>-<role>-<date>/analysis.md`:
    - **Job bullets**: for each employer, swap in bullets from `experience-bank/<employer>.md` that match the JD. Keep the template's bullet counts. Fill leftover slots from `cv_master.md`. Never invent.
    - **Skills section**: reorder so technologies most relevant to the JD appear first. Do not add skills absent from the master CV.
 3. Ask the user to render with the pipeline, or leave HTML for them to export.
-4. **Verify 1 page** after PDF render. If overflowing, drop the weakest bullet, not the strongest.
+4. **Verify page count** against `config.yaml` `cv_format.pages`. If an extra page appears, drop the weakest bullet — do not shrink fonts.
 
 ### Step 3 — Cover letter
 
@@ -139,7 +139,7 @@ Save to `applications/<company>-<role>-<date>/why_i_fit.txt`.
 
 Print to user:
 - Output directory path
-- 1-page CV preview command (`open <pdf>`)
+- CV preview command (`open <pdf>`)
 - One-paragraph summary of choices made: which bullets selected, which About variant, what cover letter angle
 - Anything ambiguous in the JD that needs user confirmation before sending
 
@@ -149,7 +149,7 @@ Print to user:
 
 1. **Never invent metrics.** If a JD asks for "experience scaling X to Y users" and user only has Z, say Z — do not inflate.
 2. **Master CV is canonical** — never modify it directly. Always work in a per-application copy.
-3. **1 page always** for the CV (default; respect `config.yaml` if it overrides). If overflowing, drop the weakest bullet, not the strongest.
+3. **Page count is `config.yaml` `cv_format.pages`** (any positive integer). Do not hardcode 1 or 2. Do not shrink fonts to force a shorter CV. If content overflows, drop the weakest bullet.
 4. **Cover letter must cite something verifiable** about the company. If you cannot find anything specific, use WebFetch on the company's homepage / blog before writing — do not write generic praise.
 5. **Visa line stays in About** if user's `memory/project.md` says they need it (e.g., "UK Graduate Visa eligible — no sponsorship required"). Drop it only if the JD explicitly invites either path.
 6. **Tone:** terse, factual, builder voice. No "passionate", "thrive", "fast-paced environment", "leverage synergies". Cut these on sight.
@@ -160,7 +160,7 @@ Print to user:
 ```
 ${WORKSPACE}/applications/<company>-<role>-<YYYY-MM-DD>/
 ├── analysis.md             # JD analysis
-├── <Name>_CV.html / .pdf   # Tailored 1-page CV
+├── <Name>_CV.html / .pdf   # Tailored CV
 ├── cover_letter.md         # 250-400 word cover letter
 ├── linkedin_dm.txt         # ≤60-word DM
 ├── why_i_fit.txt           # 3 bullets for application form

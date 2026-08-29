@@ -73,8 +73,12 @@ visa:
 
 # ---------- CV format ----------
 cv_format:
-  # Page length. UK / startup convention: 1. US / academic: 2 or more.
-  pages: 1
+  # Target PDF length. Any positive integer.
+  # 1 = intern / new-grad / some UK junior CVs
+  # 2 = typical mid/senior North American tech (this example)
+  # 3+ = academic or long-form CVs
+  # The renderer does not shrink type to fit. If content overflows, trim a bullet.
+  pages: 2
 
   # Build engine used by the Python pipeline
   engine: html-playwright

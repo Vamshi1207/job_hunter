@@ -1,4 +1,4 @@
-"""Tailor a 1-page HTML CV from the master CV + experience bank. Never invent."""
+"""Tailor an HTML CV from the master CV + experience bank. Never invent."""
 
 from __future__ import annotations
 
@@ -137,6 +137,7 @@ def build_tailor_prompt(cfg: Config, company: str, role: str, jd_text: str, feed
     visa = cfg.get("visa.description") or cfg.get("visa.status") or ""
     signoff = cfg.get("outreach.signoff") or f"— {cfg.preferred_name}"
     dm_words = cfg.get("outreach.linkedin_dm_max_words", 60)
+    pages = cfg.cv_pages
 
     return f"""
 You are tailoring application materials for {cfg.full_name} applying to '{role}' at {company}.
@@ -173,6 +174,7 @@ LinkedIn DM max words: {dm_words}
 {_retry_section(feedback_history)}
 
 ### INSTRUCTIONS
+- Target length is {pages} page{"s" if pages != 1 else ""} (`config.yaml` cv_format.pages). Fill that length; do not drop bullets to squeeze onto fewer pages. If content would exceed {pages} page{"s" if pages != 1 else ""}, drop the weakest bullet rather than inventing or shrinking type.
 - Classify the JD into a role type, then SELECT bullets from the experience bank whose target matches. Keep the exact bullet counts: Jeppesen 7, Randstad 4, Uber 6.
 - If the bank has fewer bullets than required, fill the rest from the master CV. Never pad with invented work.
 - You MUST NOT invent technologies, domains, employers, job titles, metrics, or responsibilities.
@@ -409,30 +411,47 @@ def write_changes_file(path: Path, changes: list[dict], eval_result: dict | None
     log.info("Saved changes diff: %s", path)
 
 
-async def html_to_pdf(html_path: Path, pdf_path: Path, letter_height_in: float = 11.0, margin_in: float = 0.8) -> None:
+LETTER_HEIGHT_PX = 11 * 96
+
+
+def pdf_scale(content_height_px: float, max_pages: int) -> float:
+    """Never shrink type to hit a multi-page target. Only shrink when pages == 1 and content overflows."""
+    max_pages = max(1, int(max_pages))
+    if max_pages > 1:
+        return 1.0
+    limit = LETTER_HEIGHT_PX
+    if content_height_px <= limit:
+        return 1.0
+    return min(1.0, (limit / content_height_px) * 0.99)
+
+
+async def html_to_pdf(html_path: Path, pdf_path: Path, max_pages: int | None = None) -> None:
     from playwright.async_api import async_playwright
 
+    cfg = load_config()
+    max_pages = int(max_pages) if max_pages is not None else cfg.cv_pages
+    max_pages = max(1, max_pages)
     file_url = "file://" + os.path.abspath(html_path)
     async with async_playwright() as playwright:
         browser = await playwright.chromium.launch(headless=True)
         page = await browser.new_page()
         await page.goto(file_url, wait_until="networkidle")
-        max_height = (letter_height_in - margin_in) * 96
-        scale = await page.evaluate(
-            """(maxAllowedHeight) => {
-                const bodyHeight = document.documentElement.scrollHeight;
-                if (bodyHeight > maxAllowedHeight) {
-                    return (maxAllowedHeight / bodyHeight) * 0.99;
-                }
-                return 1.0;
-            }""",
-            max_height,
-        )
-        log.info("PDF scale factor: %.3f", scale)
+        body_height = await page.evaluate("() => document.documentElement.scrollHeight")
+        scale = pdf_scale(float(body_height), max_pages)
+        page_budget = LETTER_HEIGHT_PX * max_pages
+        if body_height > page_budget and max_pages > 1:
+            log.warning(
+                "HTML height %.0fpx exceeds cv_format.pages=%s (%.0fpx). Not shrinking — trim a bullet.",
+                body_height,
+                max_pages,
+                page_budget,
+            )
+        log.info("PDF scale factor: %.3f (cv_format.pages=%s)", scale, max_pages)
         await page.pdf(
             path=str(pdf_path),
             format="Letter",
             print_background=True,
+            prefer_css_page_size=True,
             scale=scale,
             margin={"top": "0", "right": "0", "bottom": "0", "left": "0"},
         )
