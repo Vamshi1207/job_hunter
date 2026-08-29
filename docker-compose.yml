@@ -1,0 +1,10 @@
+version: "3.8"
+services:
+  pipeline:
+    build: .
+    volumes:
+      - .:/app
+      - ~/.gemini:/root/.gemini
+    environment:
+      - PYTHONUNBUFFERED=1
+      - GEMINI_API_KEY=${GEMINI_API_KEY}

@@ -1,0 +1,6 @@
+requests
+beautifulsoup4
+duckduckgo-search
+python-docx
+playwright
+camoufox[playwright]

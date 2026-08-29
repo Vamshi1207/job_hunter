@@ -1,0 +1,17 @@
+version: '3.8'
+
+services:
+  job_pipeline:
+    build: .
+    container_name: job_pipeline_bot
+    volumes:
+      # Mount the entire job_search directory so the bot can read config.yaml, 
+      # experience-bank, templates, and write to applications/
+      - ../:/app
+      # Mount the host's .gemini directory to provide Antigravity authentication to the SDK
+      - ~/.gemini:/root/.gemini
+    environment:
+      # Antigravity requires this for LLM operations
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/credentials.json # (If needed, else rely on IDE token/ADC)
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+    network_mode: host

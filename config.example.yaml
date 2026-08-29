@@ -1,0 +1,90 @@
+# Workspace configuration for job-hunt-skill
+# Edit each section to match your context. The skill reads this to behave correctly.
+
+# ---------- Workspace paths ----------
+workspace:
+  # Absolute path to this workspace directory.
+  # The skills resolve all other paths relative to this.
+  root: /Users/vamshi/Projects/job_search
+
+  # Relative paths (don't change unless you renamed directories)
+  master_cv: cv_master.md
+  build_script: build.sh
+  experience_bank: experience-bank/
+  templates: templates/
+  applications: applications/
+  tracker: applications/_tracker.md
+
+# ---------- User context (drives Phase 0 / 4 defaults) ----------
+user:
+  # Your name as it should appear on CV / cover letters
+  full_name: "Jane Doe"             # e.g. "Alex Chen"
+  preferred_name: "Jane"        # e.g. "Alex"
+
+  # Contact (used when filling application forms in Phase 4)
+  email: "jane.doe@example.com"
+  phone: "1234567890"                 # in local format
+  city: "San Francisco"                  # e.g. "London"
+  country: "USA"               # e.g. "UK"
+  linkedin: "https://www.linkedin.com/in/jane-doe/"              # full URL
+  github: "https://github.com/janedoe/"                # full URL
+  website: ""               # optional
+
+# ---------- Career context ----------
+career:
+  # Career stage drives cover-letter angle, CV length conventions, role expectations
+  # Options: junior | mid | senior | career-changer | academic
+  stage: senior
+
+  # Industry hint — drives template tone + Phase 1 research targets
+  # Examples: ai-startup | tech-startup | consulting | banking | academic | media
+  industry: tech
+
+  # Target geographic markets (for Phase 1 research scope)
+  target_markets:
+    - "Canada"
+    # - "US"
+    # - "EU"
+
+  # Roles you'd take (used for tailoring About + Skills variants)
+  target_roles:
+    - "Software Engineer"
+    - "Forward Deployed Engineer"
+    # add yours
+
+# ---------- Visa / work authorisation ----------
+# Drives Phase 4 form-question handling. BE HONEST.
+visa:
+  # Options: citizen | permanent-resident | graduate-visa | h1b | opt | tn | none
+  status: "permanent-resident"
+
+  # Free-text description used in cover letters when relevant.
+  # Examples:
+  # "UK Graduate Visa eligible — no sponsorship required"
+  # "US OPT (STEM extension) eligible through Aug 2026; H1B sponsorship needed thereafter"
+  # "EU citizen, full work rights"
+  description: "Permanent Resident of Canada, no sponsorship required"
+
+  # Will you eventually need sponsorship?
+  # Used in Phase 4 when forms ask "Will you require sponsorship in the future?"
+  # Recommended answer: "May require in the future" if your status has an end date.
+  may_need_future_sponsorship: false
+
+# ---------- CV format ----------
+cv_format:
+  # Page length. UK / startup convention: 1. US / academic: 2 or more.
+  pages: 1
+
+  # Build engine. tectonic (default), pdflatex, xelatex, pandoc-tectonic
+  engine: pandoc-tectonic
+
+# ---------- Output format ----------
+output:
+  cover_letter_format: md   # tex | md (md uses pandoc)
+  date_format: "YYYY-MM-DD"  # for application folder naming
+
+# ---------- Phase 6 outreach defaults ----------
+outreach:
+  linkedin_dm_max_words: 60
+  cold_email_max_words: 200
+  signoff: "— Vamshi"                # e.g. "— Alex"

@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "camofox-browser": {
+      "command": "node",
+      "args": ["/Users/vamshi/.gemini/antigravity-ide/brain/1caecbe0-b786-4d30-bbce-ba5a4296ecee/scratch/camofox-browser/mcp/server.mjs"]
+    }
+  }
+}

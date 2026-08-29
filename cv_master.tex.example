@@ -1,0 +1,98 @@
+% =========================================================
+%  Master CV — Sample fictional persona "Alex Chen"
+%
+%  This is a TEMPLATE showing the expected structure.
+%  Replace ALL "Alex Chen" content with your own.
+%
+%  Sections (do not reorder for AI-startup junior CVs):
+%    About → Projects → Skills → Education → Experience
+%
+%  Compile:  ./build.sh   (uses Tectonic)
+%  ATS-friendly: no tables, no images, plain section headings
+% =========================================================
+\documentclass[10.5pt,a4paper]{article}
+\usepackage[top=0.4in,bottom=0.4in,left=0.55in,right=0.55in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{enumitem}
+\usepackage{hyperref}
+\usepackage{xcolor}
+
+\hypersetup{colorlinks=true, urlcolor=black, linkcolor=black, pdftitle={Alex Chen CV}}
+\pagestyle{empty}
+\setlist[itemize]{leftmargin=1.1em, itemsep=0pt, topsep=1pt, parsep=0pt}
+\renewcommand{\baselinestretch}{1.0}
+
+% ATS-friendly section heading
+\newcommand{\cvsection}[1]{%
+  \vspace{3pt}%
+  {\normalsize\bfseries\MakeUppercase{#1}}\\[-6pt]%
+  \rule{\linewidth}{0.4pt}\\[0pt]%
+}
+
+\begin{document}
+
+% ---------- Header ----------
+\begin{center}
+  {\LARGE\bfseries ALEX CHEN}\\[2pt]
+  {\small\itshape AI Builder \,\textbar\, ML Engineering / Data / Distribution \,\textbar\, MS Data Science, University of Edinburgh}\\[3pt]
+  Edinburgh, UK \ \textbar\ \ +44 7700 900000 \ \textbar\ \ alex.chen@example.com\\[1pt]
+  \href{https://github.com/alexchen-example}{github.com/alexchen-example} \ \textbar\ \
+  \href{https://www.linkedin.com/in/alexchen-example/}{linkedin.com/in/alexchen-example} \ \textbar\ \
+  \href{https://alexchen.example}{alexchen.example}
+\end{center}
+\vspace{-4pt}
+
+% ---------- About ----------
+\cvsection{About}
+AI builder and MS Data Science candidate at the University of Edinburgh. Solo-shipped \textbf{LingoTrack}, an iOS vocabulary trainer for Mandarin learners with \textbf{800+ paying subscribers}, acquired through a self-built \textbf{8K-subscriber} newsletter on computational linguistics. Open-sourced an MLOps experiment-tracking library (\textbf{1.2K GitHub stars}). Seeking ML Engineer or Data-leaning Founder Associate roles at UK AI startups; UK Graduate Visa eligible, no sponsorship required.
+
+% ---------- Projects ----------
+\cvsection{Projects}
+
+\noindent\textbf{LingoTrack — iOS vocabulary trainer} \,---\, Founder \& Sole Developer \hfill \textit{2025 -- Present}\\
+\href{https://example.com/lingotrack}{Live on UK App Store} \,\textbar\, iOS / Swift, SwiftUI, Core Data, OpenAI API
+\begin{itemize}
+  \item Built and launched an iOS app for spaced-repetition vocabulary practice with adaptive AI-generated example sentences for Mandarin learners.
+  \item Grew to \textbf{800+ paying subscribers} ($\pounds$3.99 / mo) through an \textbf{8K-subscriber newsletter} on computational linguistics; owned product, growth, support, and App Store operations.
+  \item Designed difficulty progression around forgetting curves rather than fixed schedules, differentiating from Anki / Quizlet on adaptive scheduling.
+\end{itemize}
+
+\noindent\textbf{mlops-track — Open Source experiment tracking, MIT} \hfill \textit{2025}\\
+\href{https://github.com/alexchen-example/mlops-track}{github.com/alexchen-example/mlops-track} \,\textbar\, Python, FastAPI, PostgreSQL, Docker
+\begin{itemize}
+  \item \textbf{1.2K GitHub stars}, used by 40+ research labs and small ML teams; lightweight alternative to MLflow / Weights\&Biases for solo researchers.
+  \item Designed for offline-first workflows: SQLite local storage, optional Postgres sync, no cloud dependency. Documentation, examples, CI / CD all maintained solo.
+\end{itemize}
+
+\noindent\textbf{compling.dev — Newsletter on computational linguistics} \,---\, Founder \hfill \textit{2024 -- Present}\\
+\href{https://compling.dev}{compling.dev} \,\textbar\, Substack, weekly cadence
+\begin{itemize}
+  \item Grew from zero to \textbf{8{,}000 subscribers} in 18 months through long-form writing on tokenization, embedding intuitions, and small-team ML practice.
+  \item Primary acquisition channel for LingoTrack; converted $\sim$10\% of newsletter readers to paid app subscribers (verified via UTM-tagged in-app links).
+\end{itemize}
+
+% ---------- Skills ----------
+\cvsection{Skills}
+
+\noindent\textbf{Building:} Python, Swift / SwiftUI, TypeScript / Next.js, FastAPI, PostgreSQL, Docker; OpenAI \& Anthropic APIs; Cursor, Claude Code, OpenAI Codex.\\
+\textbf{Data \& ML:} PyTorch, scikit-learn, pandas, transformers; tokenization, embeddings, retrieval; experiment tracking, evals.\\
+\textbf{Growth \& distribution:} Long-form writing (8K-subscriber newsletter), conversion-attributed funnels, SEO, App Store deployment.\\
+\textbf{Languages:} English (fluent), Mandarin (native).
+
+% ---------- Education ----------
+\cvsection{Education}
+
+\noindent\textbf{MSc Data Science, The University of Edinburgh} \hfill \textit{Sep 2024 -- Sep 2025}\\
+Modules: Machine Learning, Probabilistic Modelling, Natural Language Processing, Distributed Systems.
+
+\noindent\textbf{BSc Linguistics, [Your Undergraduate Institution]} \hfill \textit{Sep 2020 -- Jun 2024}\\
+First Class Honours (or local equivalent). Dissertation: pretrained transformers for low-resource morphological tagging.
+
+% ---------- Experience ----------
+\cvsection{Experience}
+
+\noindent\textbf{ML Research Intern, Example Research Lab} \hfill \textit{Jun -- Aug 2024, Edinburgh}\\
+Replicated and extended a published paper on parameter-efficient fine-tuning across 3 low-resource languages; results reproducible from public datasets and shipped as a public benchmark notebook.
+
+\end{document}

@@ -1,5 +1,16 @@
-applications/
+config.yaml
 __pycache__/
 *.pyc
 .env
 .DS_Store
+
+# Personal Info
+memory/*
+!memory/.gitkeep
+resumes/*
+!resumes/.gitkeep
+!resumes/template.html
+applications/*
+!applications/.gitkeep
+experience-bank/*
+!experience-bank/.gitkeep
