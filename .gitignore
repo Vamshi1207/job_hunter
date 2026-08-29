@@ -1,11 +1,14 @@
+# Personal copies — start from the matching *.example / *.template files (see README).
 config.yaml
 cv_master.md
 cv_master.tex
 jobs.yaml
+.env
+.camoufox-profile/
+.cursor/mcp.json
+.DS_Store
 __pycache__/
 *.pyc
-.env
-.DS_Store
 
 # Personal Info
 memory/*
@@ -16,7 +19,9 @@ resumes/*
 !resumes/template.example.html
 applications/*
 !applications/.gitkeep
+!applications/_tracker.example.md
 experience-bank/*
 !experience-bank/.gitkeep
 !experience-bank/README.md
 !experience-bank/example-project.md
+!experience-bank/about-variants.example.md

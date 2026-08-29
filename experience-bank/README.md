@@ -15,17 +15,24 @@ A senior engineer reading your CV cares about the engineering frame. A growth le
 
 ## File structure
 
-One `.md` file per project. See `example-project.md` for the recommended layout.
+One `.md` file per employer or project. Copy the examples, then add your own files (gitignored).
+
+```bash
+cp experience-bank/example-project.md experience-bank/<your-project>.md
+cp experience-bank/about-variants.example.md experience-bank/about-variants.md
+```
 
 ```
 experience-bank/
-├── README.md                     ← this file
-├── example-project.md            ← reference template (replace)
-├── about-variants.md             ← short About paragraph variants for the CV header
-├── <your-project-1>.md
-├── <your-project-2>.md
+├── README.md                        ← this file (tracked)
+├── example-project.md               ← bullet-variant layout (tracked)
+├── about-variants.example.md        ← summary variants (tracked)
+├── about-variants.md                ← your summaries (gitignored)
+├── <your-employer-or-project>.md    ← gitignored
 └── ...
 ```
+
+The tailor skips `README.md` and any filename containing `example`.
 
 ## Naming convention
 

@@ -1,5 +1,9 @@
-# Copy to jobs.yaml and replace with real postings.
-# Paste JD text — do not rely on LinkedIn URLs being scrapeable.
+# Copy to jobs.yaml (gitignored). The desk UI also appends jobs here when you run tailor.
+#
+#   cp jobs.example.yaml jobs.yaml
+#
+# CLI: paste the full JD under `jd`. LinkedIn pages are often not scrapeable without Camoufox.
+# Desk: paste URL(s) and optionally the job description; with one URL the pasted text is used.
 
 jobs:
   - company: ExampleCorp

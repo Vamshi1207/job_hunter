@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 
@@ -59,13 +60,28 @@ def _parse_folder_name(name: str) -> tuple[str, str, str]:
     return company, role, date
 
 
+def as_host_path(cfg: Config, path: Path | None) -> str:
+    """Path on the machine running the browser (host), even when the app is in Docker."""
+    if path is None:
+        return ""
+    resolved = path.resolve()
+    host_root = (os.environ.get("HOST_PROJECT_ROOT") or "").strip()
+    if host_root:
+        try:
+            rel = resolved.relative_to(cfg.root.resolve())
+            return str(Path(host_root) / rel)
+        except ValueError:
+            pass
+    return str(resolved)
+
+
 def list_packages(cfg: Config) -> list[dict]:
     root = cfg.applications_dir
     if not root.exists():
         return []
     packages = []
     for folder in sorted(root.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
-        if not folder.is_dir() or folder.name.startswith("."):
+        if not folder.is_dir() or folder.name.startswith(".") or folder.name.startswith("_"):
             continue
         packages.append(package_summary(cfg, folder))
     return packages
@@ -85,6 +101,20 @@ def package_summary(cfg: Config, folder: Path) -> dict:
                 eval_data = loaded
         except json.JSONDecodeError:
             eval_data = {}
+    job_meta = _job_meta(folder)
+    if job_meta.get("company"):
+        company = job_meta["company"]
+    if job_meta.get("role"):
+        role = job_meta["role"]
+    from pipeline.jobs import is_placeholder_company
+
+    if is_placeholder_company(company):
+        analysis = folder / "analysis.md"
+        if analysis.exists():
+            named = re.search(r"\*\*Company:\*\*\s*(.+)", analysis.read_text())
+            if named and not is_placeholder_company(named.group(1)):
+                company = named.group(1).strip()
+    url = (job_meta.get("url") or "").strip()
     if not eval_data.get("score"):
         changes = next(iter(sorted(folder.glob("*_changes.md"))), None)
         if changes and changes.exists():
@@ -94,10 +124,14 @@ def package_summary(cfg: Config, folder: Path) -> dict:
         "id": folder.name,
         "company": company,
         "role": role,
+        "url": url,
+        "location": job_meta.get("location") or "",
+        "source": job_meta.get("source") or "",
         "date": date,
         "modified": folder.stat().st_mtime,
         "has_pdf": bool(pdf),
         "pdf_name": pdf.name if pdf else None,
+        "pdf_path": as_host_path(cfg, pdf) if pdf else "",
         "html_name": html.name if html else None,
         "score": eval_data.get("score"),
         "honesty": eval_data.get("honesty"),
@@ -129,6 +163,23 @@ def package_detail(cfg: Config, folder_id: str) -> dict | None:
     summary["files"] = texts
     summary["changes"] = changes_text
     return summary
+
+
+def _job_meta(folder: Path) -> dict:
+    path = folder / "job.json"
+    if path.exists():
+        try:
+            loaded = json.loads(path.read_text())
+            if isinstance(loaded, dict):
+                return loaded
+        except json.JSONDecodeError:
+            pass
+    playbook = folder / "playbook.md"
+    if playbook.exists():
+        match = re.search(r"JD URL:\s*(https?://\S+)", playbook.read_text())
+        if match:
+            return {"url": match.group(1).strip()}
+    return {}
 
 
 def _safe_folder(cfg: Config, folder_id: str) -> Path | None:

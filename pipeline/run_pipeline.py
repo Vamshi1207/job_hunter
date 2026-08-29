@@ -44,6 +44,18 @@ def append_tracker(tracker_path: Path, row: str) -> None:
 
 async def process_job(job: dict, fill_form: bool) -> Path | None:
     cfg = load_config()
+    from pipeline.search import find_existing_package
+
+    existing = find_existing_package(cfg, job)
+    if existing is not None:
+        log.info(
+            "Already processed %s — %s (%s). Skipping.",
+            job.get("company"),
+            job.get("role"),
+            existing.name,
+        )
+        return existing
+
     company, role, jd_text = job["company"], job["role"], job["jd"]
     max_attempts = int(cfg.get("pipeline.max_attempts", 3))
     threshold = int(cfg.get("pipeline.ats_threshold", 80))
@@ -102,6 +114,7 @@ async def process_job(job: dict, fill_form: bool) -> Path | None:
         best_output,
         eval_result=best_eval,
         feedback_history=feedback_history,
+        job=job,
     )
 
     pdf_path = output_dir / f"{cfg.cv_stem}.pdf"
@@ -110,9 +123,10 @@ async def process_job(job: dict, fill_form: bool) -> Path | None:
     playbook = render_playbook(cfg, job, output_dir, pdf_path, cl_path, why_path)
     (output_dir / "playbook.md").write_text(playbook)
 
+    channel = job.get("channel") or "jobs.yaml"
     append_tracker(
         cfg.tracker_path,
-        f"| {date.today().isoformat()} | {company} | {role} | jobs.yaml | ✏️ draft | {output_dir} | |",
+        f"| {date.today().isoformat()} | {company} | {role} | {channel} | ✏️ draft | {output_dir} | |",
     )
 
     log.info("[REVIEW] Materials ready for %s", company)
@@ -130,9 +144,20 @@ async def process_job(job: dict, fill_form: bool) -> Path | None:
 
 async def async_main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Tailor CV + cover letter for jobs listed in jobs.yaml. Never submits."
+        description="Search public boards and/or tailor CV + cover letter. Never submits."
     )
     parser.add_argument("--job", help="Only process jobs whose company contains this string")
+    parser.add_argument(
+        "--hunt",
+        action="store_true",
+        help="Search public boards for roles that match config.yaml, then tailor each one.",
+    )
+    parser.add_argument(
+        "--max-jobs",
+        type=int,
+        default=None,
+        help="Cap for --hunt (default hunt.max_jobs in config, usually 5).",
+    )
     parser.add_argument(
         "--fill-form",
         action="store_true",
@@ -141,6 +166,12 @@ async def async_main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     cfg = load_config()
+    if args.hunt:
+        from pipeline.hunt import hunt_and_tailor
+
+        results = await hunt_and_tailor(cfg, fill_form=args.fill_form, max_jobs=args.max_jobs)
+        return 0 if results else 1
+
     try:
         jobs = load_jobs(cfg, company_filter=args.job)
     except FileNotFoundError as exc:
@@ -148,7 +179,7 @@ async def async_main(argv: list[str] | None = None) -> int:
         return 1
 
     if not jobs:
-        log.error("No jobs to process. Add entries under `jobs:` in %s", cfg.jobs_path)
+        log.error("No jobs to process. Add entries under `jobs:` in %s, or pass --hunt.", cfg.jobs_path)
         return 1
 
     log.info("Loaded %s job(s) from %s", len(jobs), cfg.jobs_path)

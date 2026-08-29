@@ -2,5 +2,6 @@ PyYAML
 requests
 beautifulsoup4
 playwright
+camoufox
 fastapi
 uvicorn[standard]

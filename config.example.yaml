@@ -1,11 +1,23 @@
-# Workspace configuration for job-hunt-skill
-# Edit each section to match your context. The skill reads this to behave correctly.
+# =============================================================================
+# EXAMPLE CONFIG — copy to config.yaml and edit. Never commit config.yaml.
+#
+#   cp config.example.yaml config.yaml
+#
+# How loading works:
+#   1. The pipeline reads this file first (defaults).
+#   2. Then it overlays your private config.yaml (deep merge).
+#   3. A list or scalar you set in config.yaml REPLACES the example value
+#      (lists are not appended).
+#
+# Required personal files (all gitignored) are listed in the README.
+# LinkedIn password belongs only in gitignored config.yaml. Never log it.
+# =============================================================================
 
 # ---------- Workspace paths ----------
 workspace:
-  # Absolute path to this workspace directory.
-  # The skills resolve all other paths relative to this.
-  root: /Users/vamshi/Projects/job_search
+  # Absolute path for Cursor skills (${WORKSPACE}). The Python pipeline ignores
+  # this and uses JOB_SEARCH_ROOT (Docker sets /app) or the repo directory.
+  root: /absolute/path/to/this/repo
 
   # Relative paths (don't change unless you renamed directories)
   master_cv: cv_master.md
@@ -36,6 +48,10 @@ career:
   # Career stage drives cover-letter angle, CV length conventions, role expectations
   # Options: junior | mid | senior | career-changer | academic
   stage: senior
+
+  # Honest years in relevant roles. Hunt skips postings that require more than
+  # years_experience + hunt.years_buffer.
+  years_experience: 5
 
   # Industry hint — drives template tone + Phase 1 research targets
   # Examples: ai-startup | tech-startup | consulting | banking | academic | media
@@ -128,7 +144,7 @@ cv_format:
 
 # ---------- Experience (template job slots) ----------
 # Prefixes must match placeholders in resumes/template.html ({{JOB1_TITLE}}, …).
-# Keep personal employers in your private config.yaml, not in git.
+# Copy those employer names into your HTML template. Keep real employers only in config.yaml.
 experience:
   jobs:
     - prefix: JOB1
@@ -154,6 +170,131 @@ pipeline:
   llm_timeout_seconds: 600
   # Form fill is off unless you pass --fill-form. Submit is never clicked.
   auto_apply: false
+
+# Public job hunt (desk "Hunt from profile" and `python3 -m pipeline.run_pipeline --hunt`)
+# Fit rules are config, not code. Browser hunt uses Camoufox; it never clicks Apply/Submit.
+hunt:
+  max_jobs: 5
+  api_sources: false
+  greenhouse_boards: []
+    # Example: the Greenhouse board token from boards.greenhouse.io/<token>
+  ats_boards: []
+    # Direct ATS board URLs, used by the `ats` source below
+    # - https://boards.greenhouse.io/acme
+    # - https://jobs.lever.co/acme
+    # - https://jobs.ashbyhq.com/acme
+  years_buffer: 2            # skip if JD requires more than years_experience + this
+  # Title seniority you will not apply to (unless the same phrase is in target_roles)
+  exclude_levels:
+    - intern
+    - internship
+    - junior
+    - new grad
+    - new-grad
+    - entry level
+    - principal
+    - staff
+    - distinguished
+    - fellow
+  # Other title tokens to skip unless they appear in target_roles
+  exclude_title_tokens:
+    - manager
+    - director
+    - head of
+    - vp of
+    - vice president
+    - qa
+    - quality assurance
+    - quality engineer
+  # After the JD is loaded: keep the posting only if at least one of these appears
+  require_any: []
+  # Boost ranking when these appear in the title or JD
+  preferred_skills:
+    - python
+    - kafka
+    - aws
+  # Drop if the title names the skill, or the JD requires it (years/must/proficient)
+  reject_skills:
+    - java
+  # Never tailor these employers (company name or job URL). Applies to search and saved jobs.
+  exclude_companies:
+    - Example Current Employer
+  # Jobs you saved on LinkedIn/Indeed are treated as matches (fit gates skipped).
+  saved_jobs:
+    enabled: true
+    max: 5                   # how many saved postings to tailor per hunt
+    extra: false             # true = tailor saved jobs in addition to hunt.max_jobs
+    urls: []                 # empty = LinkedIn my-items/saved-jobs + Indeed saved
+  # Official Indeed MCP (https://mcp.indeed.com/claude/mcp) uses OAuth in Cursor.
+  # Desk Hunt also tries it; if OAuth is missing it continues with Camoufox.
+  mcp:
+    indeed:
+      enabled: true
+      url: "https://mcp.indeed.com/claude/mcp"
+      timeout_seconds: 12
+      headers: {}            # optional, e.g. HasData x-api-key
+  browser:
+    enabled: true
+    engine: camoufox
+    # Docker runs Camoufox on Xvfb (no Mac window). Keep false so LinkedIn login works.
+    headless: false
+    persistent: true         # keep cookies in gitignored .camoufox-profile/
+    user_data_dir: .camoufox-profile
+    humanize: true
+    os: linux                # fingerprint OS: linux inside Docker; macos | windows on a host
+    page_delay_ms: 1500
+    login_wait_seconds: 120  # pause if a sign-in wall or 2FA appears
+    max_per_source: 12
+    queries: []              # empty = career.target_roles
+    # Put real credentials only in gitignored config.yaml. Never commit or log them.
+    logins:
+      linkedin:
+        email: ""            # empty = user.email
+        password: ""         # LinkedIn password; leave empty to sign in manually in Camoufox
+  sources:
+    - id: linkedin
+      enabled: true
+      kind: search
+      url: "https://www.linkedin.com/jobs/search/?keywords={query}&location={location}&f_TPR=r604800"
+      link_contains:
+        - /jobs/view/
+    - id: indeed
+      enabled: true
+      kind: search
+      url: "https://ca.indeed.com/jobs?q={query}&l={location}&fromage=7"
+      link_contains:
+        - /viewjob
+        - jk=
+    - id: google_ats
+      enabled: true
+      kind: google_ats
+      # Camoufox searches Google: "Software Engineer" site:boards.greenhouse.io Montreal, Canada
+      url: "https://www.google.com/search?q={dork}&hl=en&num=10"
+      max_queries: 1          # how many target_roles to dork (1 keeps CAPTCHA risk down)
+      group_size: 1           # 1 = one search per ATS; 3 = OR-clump several site: operators
+      max_results: 4          # job URLs to open per Google results page
+      ats:
+        - site:boards.greenhouse.io
+        - site:job-boards.greenhouse.io
+        - site:jobs.lever.co
+        - site:jobs.ashbyhq.com
+        - site:myworkdayjobs.com
+        # - site:jobs.workable.com
+        # - site:ats.rippling.com
+        # - site:smartrecruiters.com
+      link_contains:
+        - boards.greenhouse.io/
+        - job-boards.greenhouse.io/
+        - jobs.lever.co/
+        - jobs.ashbyhq.com/
+        - myworkdayjobs.com/
+        - jobs.workable.com/
+        - ats.rippling.com/
+        - smartrecruiters.com/
+    - id: ats
+      enabled: true
+      kind: boards
+      boards: []             # filled from hunt.ats_boards if empty
 
 # ---------- Output format ----------
 output:

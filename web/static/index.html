@@ -14,45 +14,54 @@
     <div>
       <p class="eyebrow">Application desk</p>
       <h1 id="who">Job search</h1>
+      <p class="hunt-line" id="hunt-line">Hunt uses your target roles and markets.</p>
     </div>
     <p class="mast-note">You click Submit. This desk only writes packages.</p>
   </header>
 
   <main class="desk">
-    <aside class="rail" aria-label="Packages">
-      <div class="rail-head">
-        <h2>Packages</h2>
-        <button type="button" id="refresh" class="ghost">Refresh</button>
+    <section class="board-panel">
+      <div class="board-head">
+        <h2>Ready packages</h2>
+        <div class="board-actions">
+          <button type="button" id="refresh" class="ghost">Refresh</button>
+          <button type="button" id="hunt">Hunt from profile</button>
+        </div>
       </div>
-      <ul id="package-list" class="dockets"></ul>
-    </aside>
+      <div class="table-wrap">
+        <table class="board" id="board">
+          <thead>
+            <tr>
+              <th scope="col">Job name</th>
+              <th scope="col">Company</th>
+              <th scope="col">Resume</th>
+              <th scope="col">Job link</th>
+            </tr>
+          </thead>
+          <tbody id="package-list"></tbody>
+        </table>
+      </div>
+    </section>
 
     <section class="stage">
-      <form id="intake" class="intake" autocomplete="off">
-        <label>
-          Job URL
-          <input id="url" name="url" type="url" placeholder="https://boards.greenhouse.io/… or a LinkedIn job link">
-        </label>
-        <div class="row">
+      <details class="intake-wrap" id="intake-wrap">
+        <summary>Add postings by URL</summary>
+        <form id="intake" class="intake" autocomplete="off">
           <label>
-            Company
-            <input id="company" name="company" type="text" placeholder="Filled from the posting when possible">
+            Job URLs
+            <textarea id="urls" name="urls" rows="4" placeholder="One URL per line. Company and role are read from the page."></textarea>
           </label>
           <label>
-            Role
-            <input id="role" name="role" type="text" placeholder="e.g. Forward Deployed Engineer">
+            Job description
+            <textarea id="jd" name="jd" rows="8" placeholder="Optional. Paste the posting text to tailor from it. Use with a single URL."></textarea>
           </label>
-        </div>
-        <label>
-          Job description
-          <textarea id="jd" name="jd" rows="8" placeholder="LinkedIn cannot be scraped. Paste the posting here, then run."></textarea>
-        </label>
-        <p id="inspect-note" class="hint" hidden></p>
-        <div class="actions">
-          <button type="button" id="inspect" class="ghost">Read URL</button>
-          <button type="submit" id="run">Run tailor</button>
-        </div>
-      </form>
+          <p class="field-note">If you paste a description, that text is used instead of scraping the page. Company and role still come from the URL when needed.</p>
+          <p id="inspect-note" class="hint" hidden></p>
+          <div class="actions">
+            <button type="submit" id="run">Run tailor</button>
+          </div>
+        </form>
+      </details>
 
       <div class="strip-wrap">
         <div class="strip-head">
@@ -60,7 +69,7 @@
           <h2>Live strip</h2>
           <span id="run-state">idle</span>
         </div>
-        <pre id="strip" class="strip" tabindex="0">Waiting for a run. Paste a URL, or open a package on the left.</pre>
+        <pre id="strip" class="strip" tabindex="0">Waiting. Hunt from your profile, or paste job URLs.</pre>
       </div>
 
       <article id="report" class="report" hidden>

@@ -529,6 +529,7 @@ async def save_materials(
     eval_result: dict | None = None,
     feedback_history: str = "",
     date_str: str | None = None,
+    job: dict | None = None,
 ) -> Path:
     cfg = load_config()
     date_str = date_str or datetime.date.today().isoformat()
@@ -552,6 +553,15 @@ async def save_materials(
         if feedback_history:
             payload["retry_history"] = feedback_history.strip()
         (output_dir / "evaluation.json").write_text(json.dumps(payload, indent=2))
+
+    meta = {
+        "company": company,
+        "role": role,
+        "url": (job or {}).get("url") or "",
+        "location": (job or {}).get("location") or "",
+        "source": (job or {}).get("source") or (job or {}).get("channel") or "",
+    }
+    (output_dir / "job.json").write_text(json.dumps(meta, indent=2))
 
     (output_dir / "cover_letter.md").write_text(parsed.get("COVER_LETTER") or "")
     (output_dir / "linkedin_dm.txt").write_text(parsed.get("LINKEDIN_DM") or "")

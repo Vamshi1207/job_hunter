@@ -14,7 +14,7 @@ from pipeline.cv_format import (
     style_tokens,
     tailor_layout_instructions,
 )
-from pipeline.jobs import fetch_jd, infer_company_role, load_jobs, slug
+from pipeline.jobs import apply_pasted_job_text, fetch_jd, infer_company_role, listing_has_identity, load_jobs, parse_job_urls, parse_posting_meta, slug
 from pipeline.playbook import render_playbook, visa_answers
 from pipeline.reports import parse_evaluation
 from pipeline.tailor import (
@@ -45,6 +45,52 @@ class SlugTests(unittest.TestCase):
         )
         self.assertEqual(company, "Cohere")
         self.assertIn("Forward Deployed", role)
+
+    def test_parse_job_urls_and_linkedin_company_from_html(self):
+        from pipeline.browser_hunt import _company_from_host
+        from pipeline.jobs import company_role_from_title, is_placeholder_company
+
+        urls = parse_job_urls(
+            "https://www.linkedin.com/jobs/view/123\n"
+            "https://boards.greenhouse.io/acme/jobs/9\n"
+            "not a url\n"
+            "www.linkedin.com/jobs/view/456\n"
+        )
+        self.assertEqual(len(urls), 3)
+        self.assertTrue(urls[1].endswith("/jobs/9"))
+        html = """
+        <title>Software Engineer | Northstar | LinkedIn</title>
+        <script type="application/ld+json">
+        {"@type":"JobPosting","title":"Software Engineer",
+         "hiringOrganization":{"name":"Northstar"},
+         "description":"<p>Python Kafka</p>"}
+        </script>
+        """
+        meta = parse_posting_meta(html, "https://www.linkedin.com/jobs/view/123")
+        self.assertEqual(meta["company"], "Northstar")
+        self.assertEqual(meta["role"], "Software Engineer")
+        self.assertIn("Python", meta["jd"])
+        self.assertEqual(company_role_from_title("Forward Deployed Engineer | Cohere | LinkedIn")[0], "Cohere")
+        self.assertTrue(is_placeholder_company("linkedin.com"))
+        self.assertTrue(is_placeholder_company("www.linkedin.com"))
+        self.assertEqual(_company_from_host("https://www.linkedin.com/jobs/view/123"), "")
+        self.assertEqual(_company_from_host("https://boards.greenhouse.io/cohere/jobs/1"), "Cohere")
+
+    def test_pasted_jd_overrides_scraped_text(self):
+        listings = apply_pasted_job_text(
+            [{"company": "linkedin.com", "role": "Role", "url": "https://www.linkedin.com/jobs/view/1", "jd": "scraped stub"}],
+            ["https://www.linkedin.com/jobs/view/1"],
+            "Software Engineer at Northstar\n\nBuild Python Kafka services in Montreal.",
+        )
+        self.assertEqual(len(listings), 1)
+        self.assertEqual(listings[0]["company"], "Northstar")
+        self.assertIn("Software Engineer", listings[0]["role"])
+        self.assertIn("Python Kafka", listings[0]["jd"])
+        self.assertNotIn("scraped stub", listings[0]["jd"])
+        self.assertTrue(listing_has_identity(listings[0]))
+        empty = apply_pasted_job_text([], ["https://boards.greenhouse.io/acme/jobs/9"], "Staff Platform Engineer at Acme")
+        self.assertEqual(empty[0]["company"], "Acme")
+        self.assertIn("Staff Platform", empty[0]["role"])
 
 
 class EvalParseTests(unittest.TestCase):
@@ -256,6 +302,471 @@ class CvFormatTests(unittest.TestCase):
             )
             self.assertTrue(out.startswith("H"))
             self.assertTrue(out.endswith("T"))
+        finally:
+            os.environ.pop("JOB_SEARCH_ROOT", None)
+            tmp.cleanup()
+            load_config(force=True)
+
+
+class HuntTests(unittest.TestCase):
+    def _cfg(self, root: Path, extra: str = ""):
+        (root / "config.yaml").write_text(
+            "user:\n"
+            "  full_name: Test User\n"
+            "  city: Montreal\n"
+            "  country: Canada\n"
+            "career:\n"
+            "  stage: senior\n"
+            "  years_experience: 6\n"
+            "  target_markets:\n"
+            "    - Canada\n"
+            "  target_roles:\n"
+            "    - Software Engineer\n"
+            "    - Forward Deployed Engineer\n"
+            "hunt:\n"
+            "  max_jobs: 2\n"
+            + extra
+        )
+        os.environ["JOB_SEARCH_ROOT"] = str(root)
+        return load_config(force=True)
+
+    def test_score_skips_linkedin_and_interns(self):
+        from pipeline.search import score_listing
+
+        tmp = tempfile.TemporaryDirectory()
+        try:
+            cfg = self._cfg(Path(tmp.name))
+            self.assertEqual(
+                score_listing(
+                    {
+                        "role": "Software Engineer",
+                        "url": "https://www.linkedin.com/jobs/view/1",
+                        "location": "Montreal, Canada",
+                    },
+                    cfg,
+                ),
+                0,
+            )
+            self.assertEqual(
+                score_listing(
+                    {
+                        "role": "Software Engineer Intern",
+                        "url": "https://boards.greenhouse.io/acme/jobs/1",
+                        "location": "Montreal, Canada",
+                    },
+                    cfg,
+                ),
+                0,
+            )
+            self.assertGreater(
+                score_listing(
+                    {
+                        "role": "Senior Software Engineer",
+                        "url": "https://boards.greenhouse.io/acme/jobs/1",
+                        "location": "Montreal, Canada",
+                    },
+                    cfg,
+                ),
+                0,
+            )
+            self.assertEqual(
+                score_listing(
+                    {
+                        "role": "Software QA Engineer - Automation",
+                        "url": "https://example.com/qa",
+                        "location": "Canada",
+                    },
+                    cfg,
+                ),
+                0,
+            )
+            self.assertGreater(
+                score_listing(
+                    {
+                        "role": "Software Engineer",
+                        "url": "https://www.linkedin.com/jobs/view/12345678",
+                        "location": "Montreal, Canada",
+                        "jd": "Python Kafka distributed systems. 5 years of experience.",
+                    },
+                    cfg,
+                ),
+                0,
+            )
+        finally:
+            os.environ.pop("JOB_SEARCH_ROOT", None)
+            tmp.cleanup()
+            load_config(force=True)
+
+    def test_score_skips_overlevel_and_stack_from_config(self):
+        from pipeline.search import parse_required_years, score_listing
+
+        self.assertEqual(parse_required_years("10-15 years of experience building platforms"), 10)
+        self.assertEqual(parse_required_years("6+ years of experience"), 6)
+        self.assertIsNone(parse_required_years("supporting 10000 users"))
+
+        tmp = tempfile.TemporaryDirectory()
+        extra = (
+            "  exclude_levels:\n"
+            "    - intern\n"
+            "    - principal\n"
+            "    - staff\n"
+            "  reject_skills:\n"
+            "    - java\n"
+            "  preferred_skills:\n"
+            "    - python\n"
+            "  years_buffer: 2\n"
+            "  exclude_companies:\n"
+            "    - Uber\n"
+            "    - Jeppesen ForeFlight\n"
+        )
+        try:
+            cfg = self._cfg(Path(tmp.name), extra)
+            self.assertEqual(
+                score_listing(
+                    {
+                        "role": "Principal Software Engineer",
+                        "url": "https://example.com/p",
+                        "location": "Montreal, Canada",
+                    },
+                    cfg,
+                ),
+                0,
+            )
+            self.assertEqual(
+                score_listing(
+                    {
+                        "role": "Staff Backend Software Engineer",
+                        "url": "https://example.com/s",
+                        "location": "Canada",
+                    },
+                    cfg,
+                ),
+                0,
+            )
+            self.assertEqual(
+                score_listing(
+                    {
+                        "role": "Java Software Engineer",
+                        "url": "https://example.com/j",
+                        "location": "Canada",
+                    },
+                    cfg,
+                ),
+                0,
+            )
+            self.assertEqual(
+                score_listing(
+                    {
+                        "role": "Software Engineer",
+                        "url": "https://example.com/y",
+                        "location": "Montreal, Canada",
+                        "jd": "10-15 years of experience. Python Kafka.",
+                    },
+                    cfg,
+                ),
+                0,
+            )
+            self.assertEqual(
+                score_listing(
+                    {
+                        "role": "Software Engineer",
+                        "url": "https://example.com/jv",
+                        "location": "Canada",
+                        "jd": "5+ years of Java required. Spring Boot.",
+                    },
+                    cfg,
+                ),
+                0,
+            )
+            self.assertGreater(
+                score_listing(
+                    {
+                        "role": "Senior Software Engineer",
+                        "url": "https://example.com/ok",
+                        "location": "Montreal, Canada",
+                        "jd": "5+ years of experience with Python and Kafka.",
+                    },
+                    cfg,
+                ),
+                0,
+            )
+            self.assertEqual(
+                score_listing(
+                    {
+                        "company": "Uber Technologies",
+                        "role": "Senior Software Engineer",
+                        "url": "https://www.uber.com/careers/list/1",
+                        "location": "Montreal, Canada",
+                        "jd": "5+ years of experience with Python and Kafka.",
+                    },
+                    cfg,
+                ),
+                0,
+            )
+            self.assertEqual(
+                score_listing(
+                    {
+                        "company": "ForeFlight",
+                        "role": "Software Engineer",
+                        "url": "https://boards.greenhouse.io/foreflight/jobs/1",
+                        "location": "Canada",
+                        "jd": "Python Kafka",
+                        "saved": True,
+                    },
+                    cfg,
+                ),
+                0,
+            )
+        finally:
+            os.environ.pop("JOB_SEARCH_ROOT", None)
+            tmp.cleanup()
+            load_config(force=True)
+
+    def test_camoufox_link_harvest_and_url_templates(self):
+        from pipeline.browser_hunt import canonicalize_job_url, collect_job_links, fill_search_url
+
+        html = """
+        <a href="/jobs/view/4423802476">Role</a>
+        <a href="https://ca.indeed.com/viewjob?jk=abc123&utm=x">Indeed</a>
+        <a href="https://boards.greenhouse.io/acme/jobs/9">GH</a>
+        <a href="/about">skip</a>
+        """
+        links = collect_job_links(html, "https://www.linkedin.com/jobs/search")
+        self.assertIn("https://www.linkedin.com/jobs/view/4423802476", links)
+        self.assertTrue(any("jk=abc123" in item for item in links))
+        self.assertTrue(any("greenhouse.io" in item for item in links))
+        google_html = """
+        <a href="/url?q=https://boards.greenhouse.io/northstar/jobs/99&amp;sa=U">GH via Google</a>
+        <a href="/url?q=https://www.google.com/search&amp;sa=U">skip google</a>
+        """
+        google_links = collect_job_links(google_html, "https://www.google.com/search")
+        self.assertEqual(google_links, ["https://boards.greenhouse.io/northstar/jobs/99"])
+        from pipeline.browser_hunt import build_google_dork, unwrap_result_url
+
+        self.assertEqual(
+            unwrap_result_url("https://www.google.com/url?q=https://jobs.lever.co/acme/abc&sa=U"),
+            "https://jobs.lever.co/acme/abc",
+        )
+        self.assertIn("site:boards.greenhouse.io", build_google_dork("Software Engineer", "site:boards.greenhouse.io", "Montreal, Canada"))
+        self.assertIn('"Software Engineer"', build_google_dork("Software Engineer", "greenhouse", "Canada"))
+        self.assertEqual(
+            canonicalize_job_url("https://www.linkedin.com/jobs/view/4423802476/?trk=flagship"),
+            "https://www.linkedin.com/jobs/view/4423802476",
+        )
+        tmp = tempfile.TemporaryDirectory()
+        try:
+            cfg = self._cfg(Path(tmp.name))
+            url = fill_search_url(
+                "https://www.linkedin.com/jobs/search/?keywords={query}&location={location}",
+                cfg,
+                "Software Engineer",
+            )
+            self.assertIn("Software+Engineer", url)
+            self.assertIn("Montreal", url)
+        finally:
+            os.environ.pop("JOB_SEARCH_ROOT", None)
+            tmp.cleanup()
+            load_config(force=True)
+
+    def test_linkedin_credentials_from_config(self):
+        from pipeline.browser_hunt import linkedin_credentials
+
+        tmp = tempfile.TemporaryDirectory()
+        extra = (
+            "  browser:\n"
+            "    logins:\n"
+            "      linkedin:\n"
+            "        email: hunter@example.com\n"
+            "        password: secret-pass\n"
+        )
+        try:
+            cfg = self._cfg(Path(tmp.name), extra)
+            email, password = linkedin_credentials(cfg)
+            self.assertEqual(email, "hunter@example.com")
+            self.assertEqual(password, "secret-pass")
+        finally:
+            os.environ.pop("JOB_SEARCH_ROOT", None)
+            tmp.cleanup()
+            load_config(force=True)
+
+    def test_search_jobs_ranks_and_caps(self):
+        from pipeline.search import html_to_text, search_jobs
+
+        self.assertIn("Python", html_to_text("<p>Need <b>Python</b></p>"))
+        tmp = tempfile.TemporaryDirectory()
+        root = Path(tmp.name)
+        apps = root / "applications"
+        apps.mkdir()
+        (apps / "OldCo-Software-Engineer-2026-01-01").mkdir()
+        try:
+            cfg = self._cfg(root)
+
+            def fake_fetch(url: str):
+                if "themuse" in url:
+                    return {
+                        "results": [
+                            {
+                                "name": "Software Engineer",
+                                "company": {"name": "Acme"},
+                                "refs": {"landing_page": "https://boards.greenhouse.io/acme/jobs/1"},
+                                "locations": [{"name": "Montreal, Canada"}],
+                                "contents": "<p>Python Kafka</p>",
+                            },
+                            {
+                                "name": "Software Engineer",
+                                "company": {"name": "OldCo"},
+                                "refs": {"landing_page": "https://example.com/old"},
+                                "locations": [{"name": "Canada"}],
+                                "contents": "<p>Python</p>",
+                            },
+                            {
+                                "name": "Forward Deployed Engineer",
+                                "company": {"name": "Northstar"},
+                                "refs": {"landing_page": "https://boards.greenhouse.io/northstar/jobs/2"},
+                                "locations": [{"name": "Toronto, Canada"}],
+                                "contents": "<p>Agents in production</p>",
+                            },
+                            {
+                                "name": "Barista",
+                                "company": {"name": "Cafe"},
+                                "refs": {"landing_page": "https://example.com/coffee"},
+                                "locations": [{"name": "Montreal, Canada"}],
+                                "contents": "<p>Coffee</p>",
+                            },
+                        ]
+                    }
+                if "remotive" in url:
+                    return {"jobs": []}
+                if "greenhouse" in url:
+                    return {"jobs": []}
+                return None
+
+            chosen = search_jobs(cfg, fetcher=fake_fetch, jd_fetcher=lambda url: None)
+            companies = [item["company"] for item in chosen]
+            self.assertIn("Acme", companies)
+            self.assertIn("Northstar", companies)
+            self.assertNotIn("OldCo", companies)
+            self.assertNotIn("Cafe", companies)
+            self.assertLessEqual(len(chosen), 2)
+            self.assertTrue(all(item["jd"] for item in chosen))
+            self.assertTrue(all(item["url"] for item in chosen))
+        finally:
+            os.environ.pop("JOB_SEARCH_ROOT", None)
+            tmp.cleanup()
+            load_config(force=True)
+
+    def test_saved_jobs_bypass_fit_gates(self):
+        from pipeline.browser_hunt import collect_job_links, saved_job_urls
+        from pipeline.mcp_hunt import listings_from_mcp_payload
+        from pipeline.search import rank_and_select, score_listing
+
+        tmp = tempfile.TemporaryDirectory()
+        extra = (
+            "  exclude_levels:\n"
+            "    - principal\n"
+            "  reject_skills:\n"
+            "    - java\n"
+            "  saved_jobs:\n"
+            "    max: 2\n"
+        )
+        try:
+            cfg = self._cfg(Path(tmp.name), extra)
+            saved = {
+                "company": "SavedCo",
+                "role": "Principal Java Engineer",
+                "url": "https://example.com/saved",
+                "location": "Montreal, Canada",
+                "jd": "10-15 years of Java required.",
+                "saved": True,
+            }
+            search = {
+                "company": "FitCo",
+                "role": "Senior Software Engineer",
+                "url": "https://example.com/fit",
+                "location": "Montreal, Canada",
+                "jd": "5+ years of experience with Python and Kafka.",
+            }
+            self.assertEqual(score_listing(saved, cfg), 50)
+            self.assertEqual(score_listing({**saved, "saved": False}, cfg), 0)
+            chosen = rank_and_select(cfg, [search, saved])
+            self.assertEqual(chosen[0]["company"], "SavedCo")
+            self.assertTrue(chosen[0]["saved"])
+            self.assertIn("FitCo", [item["company"] for item in chosen])
+            html = '<div data-jk="abc999"></div><a href="/jobs/view/4423802476">x</a>'
+            links = collect_job_links(html, "https://ca.indeed.com/saved")
+            self.assertTrue(any("jk=abc999" in item for item in links))
+            self.assertTrue(any("4423802476" in item for item in links))
+            urls = saved_job_urls(cfg)
+            self.assertTrue(any("linkedin.com/my-items/saved-jobs" in item for item in urls))
+            self.assertTrue(any("ca.indeed.com" in item for item in urls))
+            parsed = listings_from_mcp_payload(
+                {
+                    "jobs": [
+                        {
+                            "title": "Software Engineer",
+                            "company": "McpCo",
+                            "url": "https://ca.indeed.com/viewjob?jk=1",
+                            "location": "Montreal, QC",
+                            "description": "Python Kafka",
+                        }
+                    ]
+                }
+            )
+            self.assertEqual(parsed[0]["company"], "McpCo")
+            self.assertIn("Python", parsed[0]["jd"])
+        finally:
+            os.environ.pop("JOB_SEARCH_ROOT", None)
+            tmp.cleanup()
+            load_config(force=True)
+
+    def test_package_summary_includes_job_link(self):
+        from pipeline.reports import package_summary
+
+        tmp = tempfile.TemporaryDirectory()
+        root = Path(tmp.name)
+        folder = root / "applications" / "Acme-Software-Engineer-2026-08-29"
+        folder.mkdir(parents=True)
+        (folder / "job.json").write_text(
+            '{"company": "Acme", "role": "Software Engineer", "url": "https://example.com/job"}'
+        )
+        (folder / "Test_CV.pdf").write_text("pdf")
+        try:
+            cfg = self._cfg(root)
+            summary = package_summary(cfg, folder)
+            self.assertEqual(summary["company"], "Acme")
+            self.assertEqual(summary["role"], "Software Engineer")
+            self.assertEqual(summary["url"], "https://example.com/job")
+            self.assertTrue(summary["has_pdf"])
+            self.assertTrue(summary["pdf_path"])
+        finally:
+            os.environ.pop("JOB_SEARCH_ROOT", None)
+            tmp.cleanup()
+            load_config(force=True)
+
+    def test_skips_already_processed_role_and_url(self):
+        from pipeline.search import find_existing_package
+
+        tmp = tempfile.TemporaryDirectory()
+        root = Path(tmp.name)
+        folder = root / "applications" / "Acme-Software-Engineer-2026-08-29"
+        folder.mkdir(parents=True)
+        (folder / "job.json").write_text(
+            '{"company": "Acme", "role": "Software Engineer", "url": "https://example.com/job"}'
+        )
+        try:
+            cfg = self._cfg(root)
+            by_role = find_existing_package(
+                cfg, {"company": "Acme", "role": "Software Engineer", "url": "https://other.example/new"}
+            )
+            by_url = find_existing_package(
+                cfg, {"company": "Other", "role": "Other Role", "url": "https://example.com/job"}
+            )
+            miss = find_existing_package(
+                cfg, {"company": "Beta", "role": "Engineer", "url": "https://example.com/new"}
+            )
+            self.assertEqual(by_role.name, folder.name)
+            self.assertEqual(by_url.name, folder.name)
+            self.assertIsNone(miss)
         finally:
             os.environ.pop("JOB_SEARCH_ROOT", None)
             tmp.cleanup()

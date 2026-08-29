@@ -2,9 +2,11 @@ const $ = (id) => document.getElementById(id);
 
 const state = {
   packages: [],
+  pending: [],
   activeId: null,
   runId: null,
   events: null,
+  hunt: { max_jobs: 5, roles: [], markets: [] },
 };
 
 async function api(path, options) {
@@ -34,26 +36,92 @@ function setLamp(mode) {
 async function loadMe() {
   const me = await api("/api/me");
   $("who").textContent = me.name || "Job desk";
+  state.hunt = me.hunt || state.hunt;
+  const roles = (state.hunt.roles || []).join(", ") || "your target roles";
+  const markets = (state.hunt.markets || []).join(", ");
+  const where = [me.city, me.country].filter(Boolean).join(", ");
+  const years = state.hunt.years_experience;
+  const skip = (state.hunt.exclude_levels || []).filter((level) =>
+    ["principal", "staff"].includes(String(level).toLowerCase())
+  );
+  const reject = (state.hunt.reject_skills || []).join(", ");
+  $("hunt-line").textContent =
+    `Hunt looks for ${roles}` +
+    (markets || where ? ` in ${markets || where}` : "") +
+    ` (up to ${state.hunt.max_jobs} jobs)` +
+    (years ? `, ~${years} years experience` : "") +
+    (skip.length ? `, skipping ${skip.join("/")}` : "") +
+    (reject ? `, not ${reject}` : "") +
+    `. Camoufox opens for LinkedIn/Indeed/ATS. LinkedIn needs a one-time sign-in. Apply is never clicked.`;
+}
+
+function resumeCell(pkg) {
+  if (!pkg.pdf_name) return "—";
+  const href = `/api/packages/${encodeURIComponent(pkg.id)}/file/${encodeURIComponent(pkg.pdf_name)}`;
+  const title = pkg.pdf_path ? escapeAttr(pkg.pdf_path) : "Open PDF";
+  return `<a class="file-link" href="${href}" target="_blank" rel="noopener" title="${title}">Open PDF</a>`;
+}
+
+function jobLinkCell(pkg) {
+  if (!pkg.url) return "—";
+  return `<a class="file-link" href="${escapeAttr(pkg.url)}" target="_blank" rel="noopener">Posting</a>`;
+}
+
+function escapeAttr(value) {
+  return String(value || "")
+    .replaceAll("&", "&amp;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
 }
 
 async function loadPackages(selectId) {
   const data = await api("/api/packages");
   state.packages = data.packages || [];
-  const list = $("package-list");
-  list.innerHTML = "";
-  if (!state.packages.length) {
-    list.innerHTML = '<li class="empty">No packages yet. Run a tailor to create one.</li>';
+  renderBoard(selectId || state.activeId);
+}
+
+function renderBoard(active) {
+  const body = $("package-list");
+  body.innerHTML = "";
+  if (!state.packages.length && !state.pending.length) {
+    body.innerHTML =
+      '<tr class="empty-row"><td colspan="4">No packages yet. Hunt from your profile, or paste job URLs.</td></tr>';
     return;
   }
+  for (const row of state.pending) {
+    const tr = document.createElement("tr");
+    tr.className = "pending-row";
+    tr.innerHTML = `
+      <td>${escapeHtml(row.role || "Role")}</td>
+      <td>${escapeHtml(row.company || "")}</td>
+      <td>Working…</td>
+      <td>—</td>
+    `;
+    body.appendChild(tr);
+  }
   for (const pkg of state.packages) {
-    const li = document.createElement("li");
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "docket" + (pkg.id === (selectId || state.activeId) ? " active" : "");
-    btn.innerHTML = `<strong>${escapeHtml(pkg.company)}</strong><span>${escapeHtml(pkg.role || "Role")}${pkg.score != null ? " · " + pkg.score + "/100" : ""}</span>`;
-    btn.addEventListener("click", () => openPackage(pkg.id));
-    li.appendChild(btn);
-    list.appendChild(li);
+    const tr = document.createElement("tr");
+    tr.dataset.id = pkg.id;
+    if (pkg.id === active) tr.classList.add("active");
+    tr.innerHTML = `
+      <td>${escapeHtml(pkg.role || "Role")}</td>
+      <td>${escapeHtml(pkg.company)}</td>
+      <td>${resumeCell(pkg)}</td>
+      <td>${jobLinkCell(pkg)}</td>
+    `;
+    tr.tabIndex = 0;
+    tr.addEventListener("click", (ev) => {
+      if (ev.target.closest("a")) return;
+      openPackage(pkg.id);
+    });
+    tr.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter" || ev.key === " ") {
+        ev.preventDefault();
+        openPackage(pkg.id);
+      }
+    });
+    body.appendChild(tr);
   }
 }
 
@@ -70,7 +138,7 @@ async function openPackage(id) {
   const detail = await api("/api/packages/" + encodeURIComponent(id));
   $("report").hidden = false;
   $("report-title").textContent = `${detail.company} · ${detail.role}`;
-  $("report-meta").textContent = [detail.date, detail.has_pdf ? "PDF ready" : "No PDF"]
+  $("report-meta").textContent = [detail.date, detail.has_pdf ? "PDF ready" : "No PDF", detail.url ? "Posting saved" : ""]
     .filter(Boolean)
     .join(" · ");
   const ev = detail.evaluation || {};
@@ -98,6 +166,7 @@ async function openPackage(id) {
     nav.appendChild(btn);
   }
   showTab(detail, "feedback", nav.firstChild);
+  $("report").scrollIntoView({ block: "nearest" });
 }
 
 function metric(label, value) {
@@ -126,7 +195,8 @@ function showTab(detail, tabId, btn) {
       return;
     }
     const src = `/api/packages/${encodeURIComponent(detail.id)}/file/${encodeURIComponent(detail.pdf_name)}`;
-    body.innerHTML = `<p><a href="${src}" target="_blank" rel="noopener">Open PDF</a></p><iframe title="Resume PDF" src="${src}"></iframe>`;
+    const pathNote = detail.pdf_path ? `<p class="hint">${escapeHtml(detail.pdf_path)}</p>` : "";
+    body.innerHTML = `${pathNote}<iframe title="Resume PDF" src="${src}"></iframe>`;
     return;
   }
   const map = {
@@ -136,33 +206,6 @@ function showTab(detail, tabId, btn) {
     why: files.why_i_fit,
   };
   body.textContent = map[tabId] || "Nothing in this file yet.";
-}
-
-async function inspectUrl() {
-  const note = $("inspect-note");
-  note.hidden = true;
-  try {
-    const data = await api("/api/inspect", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url: $("url").value, jd: $("jd").value }),
-    });
-    if (data.company && !$("company").value) $("company").value = data.company;
-    if (data.role && !$("role").value) $("role").value = data.role;
-    if (data.jd && !$("jd").value) $("jd").value = data.jd;
-    if (data.blocked || data.needs_jd) {
-      note.hidden = false;
-      note.textContent = data.blocked
-        ? "This host blocks scrapers. Paste the job description, then run."
-        : "Could not read that page. Paste the job description, then run.";
-    } else {
-      note.hidden = false;
-      note.textContent = data.fetched ? "Posting loaded from the URL." : "Using the text you pasted.";
-    }
-  } catch (err) {
-    note.hidden = false;
-    note.textContent = err.message;
-  }
 }
 
 function watchRun(runId) {
@@ -176,36 +219,67 @@ function watchRun(runId) {
     try {
       const data = JSON.parse(ev.data);
       if (data.line) setStrip(data.line, true);
+      if (data.type === "processing" && (data.company || data.role)) {
+        const key = `${data.company}|${data.role}`;
+        if (!state.pending.some((row) => `${row.company}|${row.role}` === key)) {
+          state.pending.unshift({ company: data.company, role: data.role });
+        }
+        renderBoard(state.activeId);
+      }
+      if (data.type === "package" && data.package_id) {
+        state.pending = state.pending.filter(
+          (row) => row.company !== data.company || row.role !== data.role
+        );
+        loadPackages(data.package_id);
+      }
     } catch (_) {}
   };
   src.addEventListener("done", async (ev) => {
     src.close();
     state.events = null;
+    state.pending = [];
     let payload = {};
     try { payload = JSON.parse(ev.data); } catch (_) {}
     setLamp(payload.status === "done" ? "done" : "");
     $("run-state").textContent = payload.status || "done";
-    await loadPackages(payload.package_id);
-    if (payload.package_id) openPackage(payload.package_id);
+    const first = payload.package_id || (payload.packages && payload.packages[0]);
+    await loadPackages(first);
+    if (first) openPackage(first);
     if (payload.error) setStrip("ERROR: " + payload.error, true);
+    $("hunt").disabled = false;
+    $("run").disabled = false;
   });
   src.onerror = () => {
     $("run-state").textContent = "stream interrupted";
   };
 }
 
-$("inspect").addEventListener("click", inspectUrl);
 $("refresh").addEventListener("click", () => loadPackages());
+$("hunt").addEventListener("click", async () => {
+  const huntBtn = $("hunt");
+  huntBtn.disabled = true;
+  try {
+    const run = await api("/api/hunt", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ max_jobs: state.hunt.max_jobs }),
+    });
+    state.runId = run.id;
+    watchRun(run.id);
+  } catch (err) {
+    setStrip(err.message);
+    setLamp("");
+    huntBtn.disabled = false;
+  }
+});
 $("intake").addEventListener("submit", async (ev) => {
   ev.preventDefault();
   const runBtn = $("run");
   runBtn.disabled = true;
   try {
     const body = {
-      url: $("url").value.trim(),
-      company: $("company").value.trim(),
-      role: $("role").value.trim(),
-      jd: $("jd").value.trim(),
+      urls: $("urls").value,
+      jd: $("jd").value,
     };
     const run = await api("/api/runs", {
       method: "POST",
@@ -213,19 +287,16 @@ $("intake").addEventListener("submit", async (ev) => {
       body: JSON.stringify(body),
     });
     state.runId = run.id;
-    if (run.company) $("company").value = run.company;
-    if (run.role) $("role").value = run.role;
     watchRun(run.id);
   } catch (err) {
     $("inspect-note").hidden = false;
     $("inspect-note").textContent = err.message;
     setLamp("");
-  } finally {
     runBtn.disabled = false;
   }
 });
 
 loadMe().catch(() => {});
 loadPackages().catch((err) => {
-  $("package-list").innerHTML = `<li class="empty">${escapeHtml(err.message)}</li>`;
+  $("package-list").innerHTML = `<tr class="empty-row"><td colspan="4">${escapeHtml(err.message)}</td></tr>`;
 });

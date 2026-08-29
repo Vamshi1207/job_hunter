@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-SKIP_NAMES = {"readme.md", "example-project.md"}
+SKIP_NAMES = {"readme.md", "example-project.md", "about-variants.example.md"}
 
 
 def load_experience_bank(bank_dir: Path) -> str:
@@ -13,7 +13,8 @@ def load_experience_bank(bank_dir: Path) -> str:
 
     parts = []
     for path in sorted(bank_dir.glob("*.md")):
-        if path.name.lower() in SKIP_NAMES:
+        name = path.name.lower()
+        if name in SKIP_NAMES or "example" in name:
             continue
         text = path.read_text().strip()
         if not text:

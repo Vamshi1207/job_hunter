@@ -1,8 +1,10 @@
+> **Setup:** copy to `cv_master.md` (gitignored) and replace every line with your own resume. Job slots `JOB1`–`JOB3` must match `config.yaml` → `experience.jobs[].prefix` and the placeholders in `resumes/template.html`. Never invent metrics.
+
 **Jane Doe**
 **Software Engineer — Distributed Systems & AI**
 Sample City, USA | 555-123-4567 | jane.doe@example.com | [linkedin.com/in/jane-doe](https://www.linkedin.com/in/jane-doe/)
 
-Software Engineer with experience building production backend services, data pipelines, and internal developer tooling. Replace this file with your own master CV (`cp cv_master.example.md cv_master.md`).
+Software Engineer with experience building production backend services, data pipelines, and internal developer tooling. Replace this file with your own master CV.
 
 **WORK EXPERIENCE**
 
