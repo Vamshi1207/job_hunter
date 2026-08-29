@@ -1,0 +1,11 @@
+# Copy to jobs.yaml and replace with real postings.
+# Paste JD text — do not rely on LinkedIn URLs being scrapeable.
+
+jobs:
+  - company: ExampleCorp
+    role: Senior Software Engineer
+    location: Remote, Canada
+    url: https://boards.greenhouse.io/examplecorp/jobs/123
+    jd: |
+      Senior Software Engineer. 5+ years Python, Kafka, distributed systems.
+      Remote in Canada. Paste the full posting here.

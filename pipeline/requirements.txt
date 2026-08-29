@@ -1,7 +1,0 @@
-playwright
-google-antigravity
-beautifulsoup4
-googlesearch-python
-pydantic
-nest-asyncio
-python-docx

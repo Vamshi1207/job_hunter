@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Vamshi Shalapaati CV</title>
+    <title>{{FULL_NAME}} CV</title>
     <style>
         /* Exact Page Margins extracted from DOCX, tightened for real estate */
         @page {
@@ -19,6 +19,7 @@
             padding: 0;
             line-height: 1.1;
             -webkit-print-color-adjust: exact;
+            print-color-adjust: exact;
         }
 
         /* 
@@ -146,11 +147,9 @@
 </head>
 <body>
 
-    <div class="header-name">Vamshi Shalapaati</div>
+    <div class="header-name">{{FULL_NAME}}</div>
     <div class="header-title">{{TITLE}}</div>
-    <div class="header-contact">
-        Canada | 819-919-6294 | <a href="mailto:shalapaativamshi@gmail.com">shalapaativamshi@gmail.com</a> | <a href="https://linkedin.com/in/vamshi-shalapaati">linkedin.com/in/vamshi-shalapaati</a>
-    </div>
+    <div class="header-contact">{{CONTACT_LINE}}</div>
 
     <div class="summary">
         {{SUMMARY}}

@@ -14,6 +14,7 @@ workspace:
   templates: templates/
   applications: applications/
   tracker: applications/_tracker.md
+  html_template: resumes/template.html
 
 # ---------- User context (drives Phase 0 / 4 defaults) ----------
 user:
@@ -75,16 +76,27 @@ cv_format:
   # Page length. UK / startup convention: 1. US / academic: 2 or more.
   pages: 1
 
-  # Build engine. tectonic (default), pdflatex, xelatex, pandoc-tectonic
-  engine: pandoc-tectonic
+  # Build engine used by the Python pipeline
+  engine: html-playwright
+
+# ---------- Pipeline ----------
+pipeline:
+  jobs_file: jobs.yaml
+  html_template: resumes/template.html
+  ats_threshold: 80
+  max_attempts: 3
+  model: gemini-3.1-pro
+  llm_timeout_seconds: 600
+  # Form fill is off unless you pass --fill-form. Submit is never clicked.
+  auto_apply: false
 
 # ---------- Output format ----------
 output:
-  cover_letter_format: md   # tex | md (md uses pandoc)
+  cover_letter_format: md
   date_format: "YYYY-MM-DD"  # for application folder naming
 
 # ---------- Phase 6 outreach defaults ----------
 outreach:
   linkedin_dm_max_words: 60
   cold_email_max_words: 200
-  signoff: "— Vamshi"                # e.g. "— Alex"
+  signoff: "— Jane"                # e.g. "— Alex"

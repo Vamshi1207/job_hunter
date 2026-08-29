@@ -2,6 +2,7 @@ FROM python:3.10-slim
 
 ENV PYTHONUNBUFFERED=1
 ENV PATH="/root/.local/bin:${PATH}"
+ENV JOB_SEARCH_ROOT=/app
 
 RUN apt-get update && apt-get install -y \
     curl \
@@ -15,8 +16,6 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Install Playwright OS dependencies (covers both Chromium and Firefox/Camoufox)
-RUN playwright install --with-deps chromium firefox
-RUN python3 -m camoufox fetch
+RUN playwright install --with-deps chromium
 
-CMD ["python3", "pipeline/run_pipeline.py"]
+CMD ["python3", "-m", "pipeline.run_pipeline"]

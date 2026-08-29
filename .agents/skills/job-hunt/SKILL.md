@@ -13,12 +13,14 @@ The workspace path is set when the user installs this skill. Default expectation
 
 ```
 config.yaml at:           ${WORKSPACE}/config.yaml
-Master CV:                ${WORKSPACE}/cv_master.tex
-Build script:             ${WORKSPACE}/build.sh
+Master CV:                ${WORKSPACE}/cv_master.md
+HTML template:            ${WORKSPACE}/resumes/template.html
+Pipeline:                 python3 -m pipeline.run_pipeline
 Experience bank:          ${WORKSPACE}/experience-bank/
 Templates:                ${WORKSPACE}/templates/
 Applications:             ${WORKSPACE}/applications/<company>-<role>-<YYYY-MM-DD>/
 Tracker:                  ${WORKSPACE}/applications/_tracker.md
+Jobs queue:               ${WORKSPACE}/jobs.yaml
 Memory (per Claude Code session): in your project's memory directory, conventionally:
   - project.md             (user profile, target market, eligibility)
   - feedback.md            (writing rules — accumulates over time via Phase 7)
@@ -31,7 +33,7 @@ If `${WORKSPACE}` isn't set or `config.yaml` doesn't exist, ask the user where t
 
 | User intent | Trigger phrases | Phase |
 |---|---|---|
-| First-time setup | "build my CV", no `cv_master.tex` exists, "let's start" | **0. Bootstrap** |
+| First-time setup | "build my CV", no `cv_master.md` exists, "let's start" | **0. Bootstrap** |
 | "What should I apply to" | "find me jobs", "what roles fit me", "research target companies" | **1. Research** |
 | Specific role discussed | pasted JD URL or full JD text, "apply to this", "tailor for this" | **2. Tailor** |
 | Drafts ready, not yet submitted | follows Phase 2 automatically; or "review this" | **3. Pre-submission Review** |
@@ -47,7 +49,7 @@ If unsure which phase, ask. Don't auto-pick a phase that costs many tokens.
 
 ## Phase 0 — Bootstrap (one-time per user)
 
-**Run when:** no `cv_master.tex` exists, OR user explicitly asks to rebuild.
+**Run when:** no `cv_master.md` exists, OR user explicitly asks to rebuild.
 
 **Steps:**
 1. Get raw material from the user via conversation:
@@ -62,14 +64,14 @@ If unsure which phase, ask. Don't auto-pick a phase that costs many tokens.
    - GitHub profile + repo metadata (`gh api repos/<user>/<repo>` if `gh` is installed)
    - Personal sites / live products
    - LinkedIn URL (user must provide; LinkedIn blocks scrapers)
-3. Write `cv_master.tex` (1-page, ATS-friendly LaTeX, sections: About → Projects → Skills → Education → Experience).
-4. Build `experience-bank/<project>.md` files: at least 4–6 bullet variants per project, framed by role type (Growth / Engineering / Data / BizOps / Product / etc.).
+3. Write `cv_master.md` (1-page, ATS-friendly markdown; HTML template at `resumes/template.html` is the render target).
+4. Build `experience-bank/<project>.md` files: at least 4–6 bullet variants per project, framed by role type (Growth / Engineering / Data / BizOps / Product / FDE / etc.).
 5. Build `templates/cover_letter.template.md`, `linkedin_dm.template.md`, `why_i_fit.template.md` (or copy from this skill's defaults).
 6. Save `memory/project.md` and `memory/feedback.md` with:
    - Profile snapshot (verified, dated)
    - Default positioning ("AI Product Builder", "Founding Engineer-track", etc.)
    - Initial writing rules (start with the 9 generic rules in `feedback.template.md`)
-7. Verify build: `cd ${WORKSPACE} && ./build.sh` → 1-page PDF.
+7. Verify render: `python3 -m pipeline.run_pipeline --job <one company>` after adding that JD to `jobs.yaml`.
 
 **Output:** master CV + experience bank + templates + memory in place.
 
@@ -111,11 +113,14 @@ If unsure which phase, ask. Don't auto-pick a phase that costs many tokens.
 ```
 applications/<company>-<role>-<date>/
 ├── analysis.md              # JD analysis + tailoring decisions
-├── cv.tex / cv.pdf          # 1-page tailored CV
-├── cover_letter.tex / .pdf  # 250–400 word cover letter
+├── <Name>_CV.html / .pdf    # 1-page tailored CV
+├── cover_letter.md          # 250–400 word cover letter
 ├── linkedin_dm.txt          # ≤60-word cold DM
-└── why_i_fit.txt            # 3 bullets ≤25 words for application form
+├── why_i_fit.txt            # 3 bullets ≤25 words for application form
+└── playbook.md              # paste-by-field; user clicks Submit
 ```
+
+Prefer `python3 -m pipeline.run_pipeline --job <company>` after adding the JD to `jobs.yaml`. If you tailor in-chat, write the same folder layout and still pause for Phase 3 review.
 
 After cv-tailor finishes, **always** proceed to Phase 3 before Phase 4.
 
@@ -147,8 +152,9 @@ If you find yourself re-applying the same edit twice across applications, hard-s
 **Run when:** user says "ready to submit" / shows a form screenshot.
 
 **Branch on browser-automation availability:**
-- Connected (e.g., Claude in Chrome extension) → use browser tools to navigate, read form, paste field-by-field. **Never click final Submit** — user clicks.
-- Not connected → produce a paste-by-field playbook. User does the clicks.
+- Connected → navigate, read the form, paste field-by-field from `playbook.md`. **Never click final Submit** — user clicks.
+- Not connected → use `playbook.md`. User does the clicks.
+- Do not run Camoufox/auto-apply as the default path. `--fill-form` is optional and still never submits.
 
 **Field-by-field playbook template:**
 
@@ -226,7 +232,7 @@ If you find yourself re-applying the same edit twice across applications, hard-s
 1. Apply the edit to the **current application** files (Phase 3).
 2. **Backport** the rule to the right place so it persists:
    - Reusable writing rule → `memory/feedback.md`
-   - Master CV improvement (not application-specific) → `cv_master.tex`
+   - Master CV improvement (not application-specific) → `cv_master.md`
    - Project-bullet variant fix → `experience-bank/<project>.md`
    - Template improvement → `templates/*.md`
 3. After backport, the next Phase 2 invocation should produce drafts that already have the fix applied.
@@ -241,12 +247,13 @@ If you find yourself re-applying the same edit twice across applications, hard-s
 2. **Never invent metrics.** No churn rate, retention %, MRR, MAU unless user has confirmed.
 3. **Never overclaim measurement frameworks.** Don't say "cohort review", "funnel analysis", "retention model" unless user has actually built one.
 4. **Master CV is canonical.** Per-application work always copies + edits a copy in `applications/<x>/`. Never modify master directly via Phase 2 / 3.
-5. **1 page CV always** (or whatever convention `config.yaml`'s `cv_format.length` specifies — UK convention is 1 page; US allows 2 for non-junior; academic CV is multi-page). Verify with `pdftotext -bbox-layout cv.pdf - | grep -c '<page'`.
+5. **1 page CV always** (or whatever convention `config.yaml`'s `cv_format.length` specifies — UK convention is 1 page; US allows 2 for non-junior; academic CV is multi-page). The pipeline scales HTML to one Letter page when rendering PDF.
 6. **Cite something verifiable** for "why this company" — recent funding, blog post, talk, feature. Not generic praise.
 7. **Visa honesty.** Form questions about authorisation and future sponsorship are answered honestly per the user's status.
-8. **Tracker is source of truth.** Every submission goes in `_tracker.md`.
+8. **Tracker is source of truth.** Every submission goes in `_tracker.md`. Pipeline runs land as ✏️ draft until the user says they submitted.
 9. **Sub-agent for research, not WebFetch.** Glassdoor / LinkedIn block; multi-source triangulation is sub-agent work.
 10. **Phase order matters.** Don't skip Phase 3 (review) to go straight Phase 2 → 4. Always pause for user critique.
+11. **Never invent to chase an ATS score.** Gaps stay gaps. Reframe from the experience bank only.
 
 ---
 
@@ -257,7 +264,8 @@ User input → state detection
               │
               ├─ First time / no master CV ───────────────→ Phase 0 Bootstrap
               ├─ "what to apply to" ──────────────────────→ Phase 1 Research (sub-agent)
-              ├─ JD URL / text pasted ────────────────────→ Phase 2 Tailor (cv-tailor)
+              ├─ JD URL / text pasted ────────────────────→ add to jobs.yaml + pipeline
+              │                                            (or cv-tailor in-chat)
               │                                            └→ always Phase 3 Review
               │                                              └→ Phase 4 Submit walkthrough
               │                                                └→ user clicks Submit

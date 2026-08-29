@@ -7,4 +7,5 @@ services:
       - ~/.gemini:/root/.gemini
     environment:
       - PYTHONUNBUFFERED=1
+      - JOB_SEARCH_ROOT=/app
       - GEMINI_API_KEY=${GEMINI_API_KEY}

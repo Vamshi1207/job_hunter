@@ -15,8 +15,9 @@ These encode hard rules that override your defaults.
 ## Workspace expectations
 
 ```
-${WORKSPACE}/cv_master.tex             ← canonical 1-page CV (never modified by this skill)
-${WORKSPACE}/build.sh                  ← Tectonic-based build script
+${WORKSPACE}/cv_master.md              ← canonical 1-page CV (never modified by this skill)
+${WORKSPACE}/resumes/template.html     ← HTML render template
+${WORKSPACE}/jobs.yaml                 ← add the JD, then run the pipeline
 ${WORKSPACE}/experience-bank/*.md      ← per-project bullet variants by role type
 ${WORKSPACE}/templates/                ← cover_letter / linkedin_dm / why_i_fit templates
 ${WORKSPACE}/applications/<company>-<role>-<YYYY-MM-DD>/   ← output target
@@ -92,14 +93,17 @@ Write to `applications/<company>-<role>-<date>/analysis.md`:
 
 ### Step 2 — Tailor the CV
 
-1. Copy `cv_master.tex` → `applications/<company>-<role>-<date>/cv.tex`.
-2. **Edit ONLY these blocks** (do not restructure):
-   - **Tagline**: adjust to match the role (e.g. for Growth: `... | Content / Distribution / Growth | ...`).
-   - **About paragraph**: rewrite using the variant from `memory/project.md` defaults or `experience-bank/about-variants.md` matching the role type. Tweak final sentence to name the role / company. Keep ≤4 lines.
-   - **Project bullets**: for each project, swap in 1–3 bullets from `experience-bank/<project>.md` that match keywords from the JD. Keep total page = 1.
-   - **Skills section**: reorder so technologies most relevant to the JD appear first.
-3. Build with `cd ${WORKSPACE} && tectonic --chatter minimal applications/<company>-<role>-<date>/cv.tex` (or use `build.sh`).
-4. **Verify 1 page**: `pdftotext -bbox-layout cv.pdf - | grep -c '<page'` — must equal 1. If 2, trim one bullet from the longest project section.
+**Preferred:** append the JD to `jobs.yaml` and run `python3 -m pipeline.run_pipeline --job <company>`. That fills `resumes/template.html`, scores honesty, and writes PDF + playbook.
+
+**If tailoring in-chat instead:**
+1. Copy `resumes/template.html` → `applications/<company>-<role>-<date>/<Name>_CV.html`.
+2. **Edit ONLY placeholder content** (do not restructure):
+   - **Tagline**: adjust to match the role.
+   - **About / summary**: rewrite using `experience-bank/about-variants.md` matching the role type. Tweak the final sentence to name the role / company.
+   - **Job bullets**: for each employer, swap in bullets from `experience-bank/<employer>.md` that match the JD. Keep the template's bullet counts. Fill leftover slots from `cv_master.md`. Never invent.
+   - **Skills section**: reorder so technologies most relevant to the JD appear first. Do not add skills absent from the master CV.
+3. Ask the user to render with the pipeline, or leave HTML for them to export.
+4. **Verify 1 page** after PDF render. If overflowing, drop the weakest bullet, not the strongest.
 
 ### Step 3 — Cover letter
 
@@ -112,7 +116,7 @@ Use `templates/cover_letter.template.md` or write fresh. Fill placeholders:
 
 Length target: **250–400 words**. Cut ruthlessly.
 
-Save as `applications/<company>-<role>-<date>/cover_letter.tex` (matches CV style) or `.md` if using pandoc. Build PDF with Tectonic or pandoc.
+Save as `applications/<company>-<role>-<date>/cover_letter.md`.
 
 ### Step 4 — LinkedIn cold DM
 
@@ -156,15 +160,17 @@ Print to user:
 ```
 ${WORKSPACE}/applications/<company>-<role>-<YYYY-MM-DD>/
 ├── analysis.md             # JD analysis
-├── cv.tex / cv.pdf         # Tailored 1-page CV
-├── cover_letter.md or .tex / .pdf  # 250-400 word cover letter
+├── <Name>_CV.html / .pdf   # Tailored 1-page CV
+├── cover_letter.md         # 250-400 word cover letter
 ├── linkedin_dm.txt         # ≤60-word DM
-└── why_i_fit.txt           # 3 bullets for application form
+├── why_i_fit.txt           # 3 bullets for application form
+└── playbook.md             # paste-by-field; user clicks Submit
 ```
 
 ## Reference files
 
-- Master CV: `${WORKSPACE}/cv_master.tex`
+- Master CV: `${WORKSPACE}/cv_master.md`
+- HTML template: `${WORKSPACE}/resumes/template.html`
 - Experience bank: `${WORKSPACE}/experience-bank/*.md`
 - Templates: `${WORKSPACE}/templates/*.md`
-- Build: `${WORKSPACE}/build.sh` (Tectonic-based, ATS-friendly LaTeX)
+- Pipeline: `python3 -m pipeline.run_pipeline --job <company>`
