@@ -72,16 +72,77 @@ visa:
   may_need_future_sponsorship: false
 
 # ---------- CV format ----------
+# Every layout rule the renderer and tailor prompt share. Override any key in config.yaml.
 cv_format:
   # Target PDF length. Any positive integer.
   # 1 = intern / new-grad / some UK junior CVs
   # 2 = typical mid/senior North American tech (this example)
   # 3+ = academic or long-form CVs
-  # The renderer does not shrink type to fit. If content overflows, trim a bullet.
+  # Type is not shrunk to fit (except a 1-page target that overflows).
   pages: 2
+  page_size: letter          # letter | a4
+  density: compact           # compact | comfortable (sets type size, leading, margins)
+  page_margin: ""            # e.g. "0.5in 0.6in 0.45in 0.6in" — empty uses density default
 
-  # Build engine used by the Python pipeline
+  header_align: center       # left | center
+  body_align: justify        # left | justify
+  hyphenate: true
+  show_section_tick: true    # teal tick on section rules
+
+  contact_links: labels      # labels = "LinkedIn" / "GitHub" | urls = full host/path
+  phone_format: dashed       # dashed = 555-123-4567 | raw = as stored
+
+  # Sections that must not split across pages (heading stranded with one row = off).
+  # Allowed names: skills, education. Jobs/projects may still split.
+  keep_together:
+    - skills
+    - education
+
+  # Body order after the name/contact header.
+  section_order:
+    - summary
+    - experience
+    - skills
+    - education
+    - projects
+
+  bullets:
+    max_lines: 2             # tailor prompt: keep each bullet this short
+
+  color:
+    ink: "#1C1917"
+    accent: "#1B365D"        # name, headings, links
+    tick: "#0E7490"
+    muted: "#57534E"         # dates, location, contact
+
+  type:
+    name_font: Fraunces
+    body_font: "IBM Plex Sans"
+    name_size: ""            # empty = follow density
+    body_size: ""
+    line_height: ""
+    google_fonts: true
+    google_fonts_url: ""     # optional full CSS2 URL; empty = auto from known families
+
   engine: html-playwright
+
+# ---------- Experience (template job slots) ----------
+# Prefixes must match placeholders in resumes/template.html ({{JOB1_TITLE}}, …).
+# Keep personal employers in your private config.yaml, not in git.
+experience:
+  jobs:
+    - prefix: JOB1
+      employer: Example One
+      default_title: Software Engineer
+      bullets: 7
+    - prefix: JOB2
+      employer: Example Two
+      default_title: Data Engineer
+      bullets: 4
+    - prefix: JOB3
+      employer: Example Three
+      default_title: Software Engineer
+      bullets: 6
 
 # ---------- Pipeline ----------
 pipeline:

@@ -1,0 +1,447 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{FULL_NAME}} CV</title>
+    {{CV_FONT_LINKS}}
+    <style>
+        :root {
+            --ink: {{CV_COLOR_INK}};
+            --navy: {{CV_COLOR_ACCENT}};
+            --tick: {{CV_COLOR_TICK}};
+            --muted: {{CV_COLOR_MUTED}};
+            --rule: {{CV_COLOR_ACCENT}};
+            --meta: 11.4em;
+        }
+
+        @page {
+            margin: {{CV_PAGE_MARGIN}};
+            size: {{CV_PAGE_SIZE}};
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: {{CV_BODY_FONT}};
+            color: var(--ink);
+            margin: 0;
+            padding: 0;
+            line-height: {{CV_LINE_HEIGHT}};
+            font-size: {{CV_BODY_SIZE}};
+            hyphens: {{CV_HYPHENS}};
+            hyphenate-limit-chars: 8 3 3;
+            -webkit-print-color-adjust: exact;
+            print-color-adjust: exact;
+        }
+
+        a {
+            color: var(--navy);
+            text-decoration: none;
+        }
+
+        .header {
+            text-align: {{CV_HEADER_ALIGN}};
+            margin-bottom: 8px;
+        }
+
+        .header-name {
+            font-family: {{CV_NAME_FONT}};
+            font-optical-sizing: auto;
+            font-size: {{CV_NAME_SIZE}};
+            font-weight: 600;
+            color: var(--navy);
+            letter-spacing: -0.02em;
+            line-height: 1.05;
+            margin: 0 0 2px;
+        }
+
+        .header-title {
+            font-size: 10pt;
+            font-weight: 500;
+            color: var(--ink);
+            letter-spacing: 0.01em;
+            margin: 0 0 4px;
+        }
+
+        .header-contact {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: {{CV_CONTACT_JUSTIFY}};
+            align-items: baseline;
+            gap: 0.15em 0;
+            font-size: 9pt;
+            color: var(--muted);
+            line-height: 1.45;
+        }
+
+        .header-contact a {
+            color: var(--navy);
+            font-weight: 500;
+        }
+
+        .header-contact .dot {
+            display: inline-block;
+            margin: 0 0.45em;
+            color: #A8A29E;
+            font-weight: 400;
+        }
+
+        .summary {
+            font-size: 10pt;
+            font-weight: 400;
+            color: var(--ink);
+            text-align: {{CV_BODY_ALIGN}};
+            text-justify: inter-word;
+            text-align-last: left;
+            line-height: 1.3;
+            margin: 0 0 1px;
+        }
+
+        .section-heading {
+            font-size: 8.5pt;
+            font-weight: 600;
+            color: var(--navy);
+            text-align: left;
+            text-transform: uppercase;
+            letter-spacing: 0.16em;
+            border-bottom: 0.8pt solid var(--rule);
+            margin-top: 9px;
+            margin-bottom: 5px;
+            padding-bottom: 2px;
+            position: relative;
+            break-after: avoid;
+            page-break-after: avoid;
+        }
+
+        .section-heading::after {
+            content: "";
+            position: absolute;
+            left: 0;
+            bottom: -0.8pt;
+            width: 1.35rem;
+            height: 2.2pt;
+            background: var(--tick);
+            display: {{CV_TICK_DISPLAY}};
+        }
+
+        .keep-skills {
+            break-inside: {{CV_KEEP_SKILLS}};
+            page-break-inside: {{CV_KEEP_SKILLS}};
+        }
+
+        .keep-education {
+            break-inside: {{CV_KEEP_EDUCATION}};
+            page-break-inside: {{CV_KEEP_EDUCATION}};
+        }
+
+        .school-block {
+            break-inside: avoid;
+            page-break-inside: avoid;
+            margin-bottom: 7px;
+        }
+
+        .job-header {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) var(--meta);
+            column-gap: 14px;
+            align-items: baseline;
+            margin-bottom: 1px;
+            break-after: avoid;
+            page-break-after: avoid;
+        }
+
+        .job-main {
+            min-width: 0;
+        }
+
+        .company-name {
+            font-size: 10.5pt;
+            font-weight: 600;
+            color: var(--navy);
+        }
+
+        .job-place,
+        .job-dates,
+        .proj-link {
+            font-size: 9pt;
+            font-weight: 400;
+            color: var(--muted);
+            text-align: right;
+            white-space: nowrap;
+            font-variant-numeric: tabular-nums;
+            width: 100%;
+            justify-self: stretch;
+        }
+
+        .job-title {
+            font-size: 10pt;
+            font-weight: 400;
+            font-style: italic;
+            color: var(--ink);
+        }
+
+        .proj-link {
+            color: var(--navy);
+            font-weight: 500;
+            font-style: normal;
+            padding-top: 0.2em;
+        }
+
+        ul {
+            margin: 3px 0 0;
+            padding-left: 0;
+            list-style: none;
+        }
+
+        li {
+            display: grid;
+            grid-template-columns: 1.05em minmax(0, 1fr);
+            column-gap: 0.15em;
+            font-size: 10pt;
+            font-weight: 400;
+            color: var(--ink);
+            margin-bottom: 2px;
+            line-height: 1.26;
+            orphans: 2;
+            widows: 2;
+            break-inside: avoid;
+            page-break-inside: avoid;
+        }
+
+        li::before {
+            content: "•";
+            font-weight: 500;
+            line-height: 1.26;
+        }
+
+        li > .point {
+            min-width: 0;
+            text-align: {{CV_BODY_ALIGN}};
+            text-justify: inter-word;
+            text-align-last: left;
+        }
+
+        .skills-list {
+            display: grid;
+            grid-template-columns: max-content minmax(0, 1fr);
+            column-gap: 1.1em;
+            row-gap: 2px;
+            margin-top: 0;
+        }
+
+        .skill-label {
+            font-weight: 600;
+            color: var(--navy);
+            font-size: 9.5pt;
+            letter-spacing: 0.01em;
+            text-align: left;
+            line-height: 1.28;
+            white-space: nowrap;
+        }
+
+        .skill-label::after {
+            content: ":";
+        }
+
+        .skill-items {
+            font-size: 10pt;
+            font-weight: 400;
+            color: var(--ink);
+            text-align: {{CV_BODY_ALIGN}};
+            text-justify: inter-word;
+            text-align-last: left;
+            line-height: 1.28;
+        }
+
+        .project-block {
+            margin-bottom: 7px;
+        }
+
+        .project-stack {
+            font-size: 8.5pt;
+            font-style: italic;
+            color: var(--muted);
+            margin: 1px 0 0;
+            line-height: 1.3;
+        }
+
+        .job-header:has(.job-main) {
+            align-items: start;
+        }
+
+        .job-header:has(.edu-focus) {
+            margin-top: 1px;
+        }
+
+        .edu-focus {
+            font-size: 9.5pt;
+            color: var(--muted);
+            margin: 0;
+        }
+    </style>
+</head>
+<body>
+
+    <header class="header">
+        <div class="header-name">{{FULL_NAME}}</div>
+        <div class="header-title">{{TITLE}}</div>
+        <div class="header-contact">{{CONTACT_LINE}}</div>
+    </header>
+
+    <!--cv-section:summary-->
+    <div class="summary">
+        {{SUMMARY}}
+    </div>
+    <!--/cv-section:summary-->
+
+    <!--cv-section:experience-->
+    <div class="section-heading">Work Experience</div>
+
+    <div class="job-block">
+    <div class="job-header">
+        <span class="company-name">Example One</span>
+        <span class="job-place">Sample City</span>
+    </div>
+    <div class="job-header">
+        <span class="job-title">{{JOB1_TITLE}}</span>
+        <span class="job-dates">Jan 2022 – Present</span>
+    </div>
+    <ul>
+        <li><span class="point">{{JOB1_B1}}</span></li>
+        <li><span class="point">{{JOB1_B2}}</span></li>
+        <li><span class="point">{{JOB1_B3}}</span></li>
+        <li><span class="point">{{JOB1_B4}}</span></li>
+        <li><span class="point">{{JOB1_B5}}</span></li>
+        <li><span class="point">{{JOB1_B6}}</span></li>
+        <li><span class="point">{{JOB1_B7}}</span></li>
+    </ul>
+    </div>
+
+    <div class="job-block">
+    <div class="job-header">
+        <span class="company-name">Example Two</span>
+        <span class="job-place">Sample City</span>
+    </div>
+    <div class="job-header">
+        <span class="job-title">{{JOB2_TITLE}}</span>
+        <span class="job-dates">Jun 2020 – Dec 2021</span>
+    </div>
+    <ul>
+        <li><span class="point">{{JOB2_B1}}</span></li>
+        <li><span class="point">{{JOB2_B2}}</span></li>
+        <li><span class="point">{{JOB2_B3}}</span></li>
+        <li><span class="point">{{JOB2_B4}}</span></li>
+    </ul>
+    </div>
+
+    <div class="job-block">
+    <div class="job-header">
+        <span class="company-name">Example Three</span>
+        <span class="job-place">Sample City</span>
+    </div>
+    <div class="job-header">
+        <span class="job-title">{{JOB3_TITLE}}</span>
+        <span class="job-dates">Jan 2018 – May 2020</span>
+    </div>
+    <ul>
+        <li><span class="point">{{JOB3_B1}}</span></li>
+        <li><span class="point">{{JOB3_B2}}</span></li>
+        <li><span class="point">{{JOB3_B3}}</span></li>
+        <li><span class="point">{{JOB3_B4}}</span></li>
+        <li><span class="point">{{JOB3_B5}}</span></li>
+        <li><span class="point">{{JOB3_B6}}</span></li>
+    </ul>
+    </div>
+    <!--/cv-section:experience-->
+
+    <!--cv-section:skills-->
+    <div class="keep-skills">
+    <div class="section-heading">Key Skills</div>
+    <div class="skills-list">
+        <span class="skill-label">Programming languages</span>
+        <span class="skill-items">{{SKILL_LANG}}</span>
+        <span class="skill-label">ML &amp; AI</span>
+        <span class="skill-items">{{SKILL_ML}}</span>
+        <span class="skill-label">Distributed systems &amp; data</span>
+        <span class="skill-items">{{SKILL_DATA}}</span>
+        <span class="skill-label">Backend &amp; APIs</span>
+        <span class="skill-items">{{SKILL_BACKEND}}</span>
+        <span class="skill-label">Cloud &amp; DevOps</span>
+        <span class="skill-items">{{SKILL_CLOUD}}</span>
+    </div>
+    </div>
+    <!--/cv-section:skills-->
+
+    <!--cv-section:education-->
+    <div class="keep-education">
+    <div class="section-heading">Education</div>
+    <div class="school-block">
+    <div class="job-header">
+        <span class="company-name">Master of Science in Computer Science</span>
+        <span class="job-dates">2020 – 2022</span>
+    </div>
+    <div class="job-header">
+        <span class="job-title">Example University</span>
+        <span class="job-place">Sample City</span>
+    </div>
+    <div class="job-header">
+        <div class="edu-focus">Replace with your degree focus, or delete this line</div>
+        <span></span>
+    </div>
+    </div>
+
+    <div class="school-block">
+    <div class="job-header">
+        <span class="company-name">Bachelor of Science in Computer Science</span>
+        <span class="job-dates">2014 – 2018</span>
+    </div>
+    <div class="job-header">
+        <span class="job-title">Example College</span>
+        <span class="job-place">Sample City</span>
+    </div>
+    </div>
+    </div>
+    <!--/cv-section:education-->
+
+    <!--cv-section:projects-->
+    <div class="section-heading">Projects</div>
+
+    <div class="project-block">
+    <div class="job-header">
+        <div class="job-main">
+            <span class="company-name">Example Project One</span>
+            <div class="project-stack">Python, Docker, REST APIs</div>
+        </div>
+        <a class="proj-link" href="https://github.com/example/project-one">GitHub</a>
+    </div>
+    <ul>
+        <li><span class="point">Describe a system you actually designed and ran.</span></li>
+        <li><span class="point">Call out one concrete architecture choice and why you made it.</span></li>
+        <li><span class="point">Mention packaging, deployment, or reliability work you can defend in interview.</span></li>
+        <li><span class="point">Add another bullet from your own project, or delete this row.</span></li>
+        <li><span class="point">Add another bullet from your own project, or delete this row.</span></li>
+    </ul>
+    </div>
+
+    <div class="project-block">
+    <div class="job-header">
+        <div class="job-main">
+            <span class="company-name">Example Project Two</span>
+            <div class="project-stack">Python, Flask, REST API</div>
+        </div>
+        <a class="proj-link" href="https://github.com/example/project-two">GitHub</a>
+    </div>
+    <ul>
+        <li><span class="point">Describe a second project you actually built.</span></li>
+        <li><span class="point">Call out data or backend design you can walk through.</span></li>
+        <li><span class="point">Add another bullet from your own project, or delete this row.</span></li>
+        <li><span class="point">Add another bullet from your own project, or delete this row.</span></li>
+    </ul>
+    </div>
+    <!--/cv-section:projects-->
+
+</body>
+</html>

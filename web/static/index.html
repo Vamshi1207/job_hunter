@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Job desk</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Newsreader:opsz,wght@6..72,500;6..72,600&family=Figtree:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <header class="mast">
+    <div>
+      <p class="eyebrow">Application desk</p>
+      <h1 id="who">Job search</h1>
+    </div>
+    <p class="mast-note">You click Submit. This desk only writes packages.</p>
+  </header>
+
+  <main class="desk">
+    <aside class="rail" aria-label="Packages">
+      <div class="rail-head">
+        <h2>Packages</h2>
+        <button type="button" id="refresh" class="ghost">Refresh</button>
+      </div>
+      <ul id="package-list" class="dockets"></ul>
+    </aside>
+
+    <section class="stage">
+      <form id="intake" class="intake" autocomplete="off">
+        <label>
+          Job URL
+          <input id="url" name="url" type="url" placeholder="https://boards.greenhouse.io/… or a LinkedIn job link">
+        </label>
+        <div class="row">
+          <label>
+            Company
+            <input id="company" name="company" type="text" placeholder="Filled from the posting when possible">
+          </label>
+          <label>
+            Role
+            <input id="role" name="role" type="text" placeholder="e.g. Forward Deployed Engineer">
+          </label>
+        </div>
+        <label>
+          Job description
+          <textarea id="jd" name="jd" rows="8" placeholder="LinkedIn cannot be scraped. Paste the posting here, then run."></textarea>
+        </label>
+        <p id="inspect-note" class="hint" hidden></p>
+        <div class="actions">
+          <button type="button" id="inspect" class="ghost">Read URL</button>
+          <button type="submit" id="run">Run tailor</button>
+        </div>
+      </form>
+
+      <div class="strip-wrap">
+        <div class="strip-head">
+          <span class="lamp" id="lamp" aria-hidden="true"></span>
+          <h2>Live strip</h2>
+          <span id="run-state">idle</span>
+        </div>
+        <pre id="strip" class="strip" tabindex="0">Waiting for a run. Paste a URL, or open a package on the left.</pre>
+      </div>
+
+      <article id="report" class="report" hidden>
+        <header class="report-head">
+          <div>
+            <p class="eyebrow" id="report-meta"></p>
+            <h2 id="report-title"></h2>
+          </div>
+          <div class="scores" id="scores"></div>
+        </header>
+        <nav class="tabs" id="tabs"></nav>
+        <div id="report-body" class="report-body"></div>
+      </article>
+    </section>
+  </main>
+  <script src="/static/app.js"></script>
+</body>
+</html>

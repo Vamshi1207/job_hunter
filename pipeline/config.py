@@ -110,6 +110,10 @@ class Config:
         return max(1, pages)
 
     @property
+    def cv_stem(self) -> str:
+        return f"{self.full_name.replace(' ', '_')}_CV"
+
+    @property
     def applications_dir(self) -> Path:
         return self.path("workspace.applications", "applications")
 

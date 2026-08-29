@@ -1,6 +1,7 @@
 version: "3.8"
 services:
   pipeline:
+    profiles: ["batch"]
     build: .
     volumes:
       - .:/app
@@ -9,3 +10,16 @@ services:
       - PYTHONUNBUFFERED=1
       - JOB_SEARCH_ROOT=/app
       - GEMINI_API_KEY=${GEMINI_API_KEY}
+
+  ui:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/app
+      - ~/.gemini:/root/.gemini
+    environment:
+      - PYTHONUNBUFFERED=1
+      - JOB_SEARCH_ROOT=/app
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+    command: python3 -m uvicorn web.app:app --host 0.0.0.0 --port 8000

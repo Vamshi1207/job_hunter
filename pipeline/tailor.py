@@ -13,30 +13,58 @@ from pathlib import Path
 
 from pipeline.bank import load_experience_bank, load_optional
 from pipeline.config import Config, load_config
+from pipeline.cv_format import apply_cv_format, page_height_px, page_size, tailor_layout_instructions
 from pipeline.jobs import slug
 
 log = logging.getLogger(__name__)
 
-JOB_BLOCKS = [
+DEFAULT_JOB_BLOCKS = [
     {
-        "prefix": "JEPPESEN",
-        "employer": "Jeppesen ForeFlight",
+        "prefix": "JOB1",
+        "employer": "Example One",
         "default_title": "Software Engineer",
         "bullets": 7,
     },
     {
-        "prefix": "RANDSTAD",
-        "employer": "Randstad",
+        "prefix": "JOB2",
+        "employer": "Example Two",
         "default_title": "Data Engineer",
         "bullets": 4,
     },
     {
-        "prefix": "UBER",
-        "employer": "Uber Technologies",
+        "prefix": "JOB3",
+        "employer": "Example Three",
         "default_title": "Software Engineer",
         "bullets": 6,
     },
 ]
+
+
+def job_blocks(cfg: Config | None = None) -> list[dict]:
+    """Employer blocks come from config.yaml `experience.jobs` so personal employers stay local."""
+    cfg = cfg or load_config()
+    raw = cfg.get("experience.jobs")
+    if isinstance(raw, list):
+        out = []
+        for item in raw:
+            if not isinstance(item, dict) or not item.get("prefix"):
+                continue
+            try:
+                bullets = max(1, int(item.get("bullets") or 4))
+            except (TypeError, ValueError):
+                bullets = 4
+            out.append(
+                {
+                    "prefix": str(item["prefix"]).upper().replace(" ", ""),
+                    "employer": str(item.get("employer") or item["prefix"]),
+                    "default_title": str(item.get("default_title") or "Software Engineer"),
+                    "bullets": bullets,
+                }
+            )
+        if out:
+            return out
+    return [dict(block) for block in DEFAULT_JOB_BLOCKS]
+
 
 SKILL_BLOCKS = [
     ("SKILL_LANG", "Programming languages"),
@@ -49,17 +77,17 @@ SKILL_BLOCKS = [
 EXTRA_TAGS = ["COVER_LETTER", "LINKEDIN_DM", "WHY_I_FIT", "ROLE_TYPE", "ANALYSIS"]
 
 
-def resume_tags() -> list[str]:
+def resume_tags(cfg: Config | None = None) -> list[str]:
     tags = ["TITLE", "SUMMARY"]
-    for job in JOB_BLOCKS:
+    for job in job_blocks(cfg):
         tags.append(f"{job['prefix']}_TITLE")
         tags.extend(f"{job['prefix']}_B{i}" for i in range(1, job["bullets"] + 1))
     tags.extend(name for name, _ in SKILL_BLOCKS)
     return tags
 
 
-def all_tags() -> list[str]:
-    return resume_tags() + EXTRA_TAGS
+def all_tags(cfg: Config | None = None) -> list[str]:
+    return resume_tags(cfg) + EXTRA_TAGS
 
 
 def call_agy(prompt: str, effort: str = "high") -> str:
@@ -76,7 +104,7 @@ def call_agy(prompt: str, effort: str = "high") -> str:
     return result.stdout
 
 
-def _tag_schema() -> str:
+def _tag_schema(cfg: Config | None = None) -> str:
     lines = [
         "<R_TITLE>why this tagline</R_TITLE>",
         "<TITLE>one-line tagline matching the role (no name, no location, no inflated seniority)</TITLE>",
@@ -84,7 +112,7 @@ def _tag_schema() -> str:
         "<SUMMARY>2-3 sentence summary grounded in the master CV</SUMMARY>",
         "",
     ]
-    for job in JOB_BLOCKS:
+    for job in job_blocks(cfg):
         prefix = job["prefix"]
         lines.append(f"<R_{prefix}_TITLE>why this title wording</R_{prefix}_TITLE>")
         lines.append(
@@ -137,7 +165,6 @@ def build_tailor_prompt(cfg: Config, company: str, role: str, jd_text: str, feed
     visa = cfg.get("visa.description") or cfg.get("visa.status") or ""
     signoff = cfg.get("outreach.signoff") or f"— {cfg.preferred_name}"
     dm_words = cfg.get("outreach.linkedin_dm_max_words", 60)
-    pages = cfg.cv_pages
 
     return f"""
 You are tailoring application materials for {cfg.full_name} applying to '{role}' at {company}.
@@ -174,8 +201,8 @@ LinkedIn DM max words: {dm_words}
 {_retry_section(feedback_history)}
 
 ### INSTRUCTIONS
-- Target length is {pages} page{"s" if pages != 1 else ""} (`config.yaml` cv_format.pages). Fill that length; do not drop bullets to squeeze onto fewer pages. If content would exceed {pages} page{"s" if pages != 1 else ""}, drop the weakest bullet rather than inventing or shrinking type.
-- Classify the JD into a role type, then SELECT bullets from the experience bank whose target matches. Keep the exact bullet counts: Jeppesen 7, Randstad 4, Uber 6.
+{tailor_layout_instructions(cfg)}
+- Classify the JD into a role type, then SELECT bullets from the experience bank whose target matches. Keep the exact bullet counts: {", ".join(f"{j['employer']} {j['bullets']}" for j in job_blocks(cfg))}.
 - If the bank has fewer bullets than required, fill the rest from the master CV. Never pad with invented work.
 - You MUST NOT invent technologies, domains, employers, job titles, metrics, or responsibilities.
 - Text changes only. Do not add/remove jobs, projects, education, or employers.
@@ -191,7 +218,7 @@ LinkedIn DM max words: {dm_words}
 ### OUTPUT FORMAT
 Return ONLY these tagged blocks. For every content tag except ROLE_TYPE and ANALYSIS, put <R_TAG> immediately before it.
 
-{_tag_schema()}
+{_tag_schema(cfg)}
 """.strip()
 
 
@@ -237,21 +264,21 @@ def strip_title_dates(text: str) -> str:
     return re.split(r"[\t]| {2,}", text, maxsplit=1)[0].strip()
 
 
-def normalize_parsed(parsed: dict) -> dict:
+def normalize_parsed(parsed: dict, cfg: Config | None = None) -> dict:
     out = dict(parsed)
     for name, label in SKILL_BLOCKS:
         if out.get(name):
             out[name] = strip_skill_prefix(out[name], label)
-    for job in JOB_BLOCKS:
+    for job in job_blocks(cfg):
         key = f"{job['prefix']}_TITLE"
         if out.get(key):
             out[key] = strip_title_dates(out[key])
     return out
 
 
-def resume_plain_text(parsed: dict) -> str:
+def resume_plain_text(parsed: dict, cfg: Config | None = None) -> str:
     lines = [parsed.get("TITLE", ""), parsed.get("SUMMARY", ""), ""]
-    for job in JOB_BLOCKS:
+    for job in job_blocks(cfg):
         lines.append(job["employer"])
         lines.append(parsed.get(f"{job['prefix']}_TITLE", ""))
         for i in range(1, job["bullets"] + 1):
@@ -332,37 +359,56 @@ def escape_html(text: str) -> str:
     )
 
 
+def format_phone(raw: str, dashed: bool = True) -> str:
+    digits = re.sub(r"\D", "", str(raw or ""))
+    if len(digits) == 11 and digits.startswith("1"):
+        digits = digits[1:]
+    if dashed and len(digits) == 10:
+        return f"{digits[0:3]}-{digits[3:6]}-{digits[6:]}"
+    return str(raw or "").strip()
+
+
 def contact_line_html(cfg: Config) -> str:
     city = cfg.get("user.city") or ""
     country = cfg.get("user.country") or ""
     location = ", ".join(p for p in (city, country) if p)
-    phone = escape_html(str(cfg.get("user.phone") or ""))
+    raw_phone = str(cfg.get("user.phone") or "")
+    dashed = str(cfg.get("cv_format.phone_format", "dashed")).lower() != "raw"
+    phone = format_phone(raw_phone, dashed=dashed)
     email = cfg.get("user.email") or ""
     linkedin = cfg.get("user.linkedin") or ""
     github = cfg.get("user.github") or ""
+    link_style = str(cfg.get("cv_format.contact_links", "labels")).lower()
 
     def display_url(url: str) -> str:
         return re.sub(r"^https?://(www\.)?", "", url).rstrip("/")
 
-    bits = [escape_html(location), phone]
+    bits = []
+    if location:
+        bits.append(f'<span>{escape_html(location)}</span>')
+    if phone:
+        bits.append(f'<span>{escape_html(phone)}</span>')
     if email:
         bits.append(f'<a href="mailto:{escape_html(email)}">{escape_html(email)}</a>')
     if linkedin:
-        bits.append(f'<a href="{escape_html(linkedin)}">{escape_html(display_url(linkedin))}</a>')
+        label = "LinkedIn" if link_style != "urls" else display_url(linkedin)
+        bits.append(f'<a href="{escape_html(linkedin)}">{escape_html(label)}</a>')
     if github:
-        bits.append(f'<a href="{escape_html(github)}">{escape_html(display_url(github))}</a>')
-    return " | ".join(b for b in bits if b)
+        label = "GitHub" if link_style != "urls" else display_url(github)
+        bits.append(f'<a href="{escape_html(github)}">{escape_html(label)}</a>')
+    return '<span class="dot" aria-hidden="true">·</span>'.join(bits)
 
 
 def apply_changes_to_html(parsed: dict, output_path: Path, cfg: Config | None = None) -> list[dict]:
     cfg = cfg or load_config()
     html_content = cfg.html_template_path.read_text()
+    html_content = apply_cv_format(html_content, cfg)
     html_content = html_content.replace("{{FULL_NAME}}", escape_html(cfg.full_name))
     html_content = html_content.replace("{{CONTACT_LINE}}", contact_line_html(cfg))
 
     changes = []
-    parsed = normalize_parsed(parsed)
-    for tag in resume_tags():
+    parsed = normalize_parsed(parsed, cfg)
+    for tag in resume_tags(cfg):
         new_text = (parsed.get(tag) or "").strip()
         if not new_text:
             log.warning("No content for tag <%s> — leaving placeholder", tag)
@@ -414,12 +460,12 @@ def write_changes_file(path: Path, changes: list[dict], eval_result: dict | None
 LETTER_HEIGHT_PX = 11 * 96
 
 
-def pdf_scale(content_height_px: float, max_pages: int) -> float:
+def pdf_scale(content_height_px: float, max_pages: int, page_h_px: float = LETTER_HEIGHT_PX) -> float:
     """Never shrink type to hit a multi-page target. Only shrink when pages == 1 and content overflows."""
     max_pages = max(1, int(max_pages))
     if max_pages > 1:
         return 1.0
-    limit = LETTER_HEIGHT_PX
+    limit = page_h_px
     if content_height_px <= limit:
         return 1.0
     return min(1.0, (limit / content_height_px) * 0.99)
@@ -436,9 +482,12 @@ async def html_to_pdf(html_path: Path, pdf_path: Path, max_pages: int | None = N
         browser = await playwright.chromium.launch(headless=True)
         page = await browser.new_page()
         await page.goto(file_url, wait_until="networkidle")
+        await page.emulate_media(media="print")
+        await page.evaluate("() => document.fonts.ready")
         body_height = await page.evaluate("() => document.documentElement.scrollHeight")
-        scale = pdf_scale(float(body_height), max_pages)
-        page_budget = LETTER_HEIGHT_PX * max_pages
+        height = page_height_px(cfg)
+        scale = pdf_scale(float(body_height), max_pages, height)
+        page_budget = height * max_pages
         if body_height > page_budget and max_pages > 1:
             log.warning(
                 "HTML height %.0fpx exceeds cv_format.pages=%s (%.0fpx). Not shrinking — trim a bullet.",
@@ -449,13 +498,28 @@ async def html_to_pdf(html_path: Path, pdf_path: Path, max_pages: int | None = N
         log.info("PDF scale factor: %.3f (cv_format.pages=%s)", scale, max_pages)
         await page.pdf(
             path=str(pdf_path),
-            format="Letter",
+            format=page_size(cfg),
             print_background=True,
             prefer_css_page_size=True,
             scale=scale,
             margin={"top": "0", "right": "0", "bottom": "0", "left": "0"},
         )
         await browser.close()
+
+    try:
+        from pypdf import PdfReader
+
+        page_count = len(PdfReader(str(pdf_path)).pages)
+    except Exception:
+        page_count = None
+    if page_count is not None and page_count > max_pages:
+        log.warning(
+            "PDF is %s pages; cv_format.pages=%s. Tighten spacing or drop a bullet — not shrinking type.",
+            page_count,
+            max_pages,
+        )
+    elif page_count is not None:
+        log.info("PDF page count: %s (cv_format.pages=%s)", page_count, max_pages)
 
 
 async def save_materials(
@@ -483,6 +547,11 @@ async def save_materials(
         eval_result=eval_result,
         feedback_history=feedback_history,
     )
+    if eval_result:
+        payload = dict(eval_result)
+        if feedback_history:
+            payload["retry_history"] = feedback_history.strip()
+        (output_dir / "evaluation.json").write_text(json.dumps(payload, indent=2))
 
     (output_dir / "cover_letter.md").write_text(parsed.get("COVER_LETTER") or "")
     (output_dir / "linkedin_dm.txt").write_text(parsed.get("LINKEDIN_DM") or "")

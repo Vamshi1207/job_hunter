@@ -1,4 +1,7 @@
 config.yaml
+cv_master.md
+cv_master.tex
+jobs.yaml
 __pycache__/
 *.pyc
 .env
@@ -7,10 +10,13 @@ __pycache__/
 # Personal Info
 memory/*
 !memory/.gitkeep
+!memory/*.template.md
 resumes/*
 !resumes/.gitkeep
-!resumes/template.html
+!resumes/template.example.html
 applications/*
 !applications/.gitkeep
 experience-bank/*
 !experience-bank/.gitkeep
+!experience-bank/README.md
+!experience-bank/example-project.md

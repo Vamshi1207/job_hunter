@@ -89,3 +89,62 @@ def load_jobs(cfg: Config, company_filter: Optional[str] = None) -> list[dict]:
             }
         )
     return jobs
+
+
+def infer_company_role(url: str = "", jd: str = "") -> tuple[str, str]:
+    """Best-effort company and role from a URL and/or JD first line."""
+    company = ""
+    role = ""
+    host_path = re.sub(r"^https?://", "", url or "").split("?")[0]
+    patterns = [
+        r"(?:boards\.)?greenhouse\.io/([^/]+)",
+        r"lever\.co/([^/]+)",
+        r"jobs\.ashbyhq\.com/([^/]+)",
+        r"ats\.rippling\.com/([^/]+)",
+        r"jobs\.workable\.com/([^/]+)",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, host_path, re.I)
+        if match:
+            company = match.group(1).replace("-", " ").strip().title()
+            break
+
+    first = ""
+    for line in (jd or "").splitlines():
+        if line.strip():
+            first = line.strip()
+            break
+    at_match = re.match(r"(.+?)\s+at\s+(.+?)(?:\s+\(|$)", first, re.I)
+    if at_match:
+        role = role or at_match.group(1).strip(" -–—")
+        guessed = at_match.group(2).strip(" -–—")
+        if not company or company.lower() in {"www", "jobs", "linkedin"}:
+            company = guessed
+
+    if not role and first and " at " not in first.lower():
+        role = first[:80]
+
+    return company, role
+
+
+def append_job(cfg: Config, job: dict) -> None:
+    """Add a job to jobs.yaml so CLI and UI share the same queue."""
+    import yaml
+
+    path = cfg.jobs_path
+    data = {}
+    if path.exists():
+        data = yaml.safe_load(path.read_text()) or {}
+    jobs = list(data.get("jobs") or [])
+    jobs.append(
+        {
+            "company": job["company"],
+            "role": job["role"],
+            "location": job.get("location") or "",
+            "url": job.get("url") or "",
+            "jd": job["jd"],
+        }
+    )
+    data["jobs"] = jobs
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(yaml.safe_dump(data, sort_keys=False, allow_unicode=True, width=1000))
