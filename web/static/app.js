@@ -8,6 +8,7 @@ const state = {
   events: null,
   hunt: { max_jobs: 0, roles: [], markets: [] },
   huntStage: "",
+  camoufoxUrl: "http://127.0.0.1:6080/vnc.html?autoconnect=1&resize=scale",
 };
 
 async function api(path, options) {
@@ -42,6 +43,28 @@ function setControls(mode) {
   $("stop").hidden = idle;
   $("stop").disabled = !running;
   $("stop").textContent = running || idle ? "Stop" : "Stopping…";
+  if (idle) hideCamoufox();
+}
+
+function showCamoufox(expand) {
+  const panel = $("camoufox-panel");
+  const wrap = $("camoufox-wrap");
+  const frame = $("camoufox-frame");
+  if (!panel || !wrap || !frame) return;
+  panel.hidden = false;
+  if (expand) wrap.open = true;
+  if (state.camoufoxUrl && frame.getAttribute("src") !== state.camoufoxUrl) {
+    frame.src = state.camoufoxUrl;
+  }
+}
+
+function hideCamoufox() {
+  const panel = $("camoufox-panel");
+  const wrap = $("camoufox-wrap");
+  const frame = $("camoufox-frame");
+  if (wrap) wrap.open = false;
+  if (panel) panel.hidden = true;
+  if (frame) frame.removeAttribute("src");
 }
 
 async function loadMe() {
@@ -65,7 +88,8 @@ async function loadMe() {
     (years ? `, ~${years} years experience` : "") +
     (skip.length ? `, skipping ${skip.join("/")}` : "") +
     (reject ? `, not ${reject}` : "") +
-    `. Camoufox opens for LinkedIn/Indeed/ATS. LinkedIn needs a one-time sign-in. Apply is never clicked.`;
+    `. Camoufox opens for LinkedIn/Indeed/ATS. Sign in or 2FA uses the Camoufox panel. Apply is never clicked.`;
+  if (me.camoufox && me.camoufox.vnc) state.camoufoxUrl = me.camoufox.vnc;
 }
 
 function jobKey(row) {
@@ -468,14 +492,15 @@ function showTab(detail, tabId, btn) {
   body.textContent = map[tabId] || "Nothing in this file yet.";
 }
 
-function watchRun(runId) {
+function watchRun(runId, mode) {
   if (state.events) state.events.close();
   state.jobs = [];
   state.huntStage = "";
   renderProgress("");
   setLamp("on");
-  setControls("running");
-  $("run-state").textContent = "running";
+  setControls(mode === "stopping" ? "stopping" : "running");
+  showCamoufox(mode !== "stopping");
+  $("run-state").textContent = mode === "stopping" ? "stopping" : "running";
   setStrip("— strip open —\n");
   const src = new EventSource("/api/runs/" + runId + "/stream");
   state.events = src;
@@ -499,6 +524,7 @@ function watchRun(runId) {
         const busy = state.jobs.some((row) => row.status === "working" || row.status === "queued");
         if (state.huntStage && !busy) $("run-state").textContent = state.huntStage;
         if (!state.jobs.length && state.huntStage) renderProgress(state.huntStage);
+        if (data.browser) showCamoufox(true);
       }
       if (data.type === "processing" && (data.company || data.role)) {
         upsertJob({ ...data, status: data.status || "working" });
@@ -541,6 +567,7 @@ function watchRun(runId) {
     if (payload.error && payload.status !== "stopped") setStrip("ERROR: " + payload.error, true);
     $("hunt").disabled = false;
     $("run").disabled = false;
+    hideCamoufox();
   });
   src.onerror = () => {
     $("run-state").textContent = "stream interrupted";
@@ -608,3 +635,12 @@ loadMe().catch(() => {});
 loadPackages().catch((err) => {
   $("package-list").innerHTML = `<tr class="empty-row"><td colspan="7">${escapeHtml(err.message)}</td></tr>`;
 });
+(async () => {
+  try {
+    const active = await api("/api/runs/active");
+    if (!active.id) return;
+    state.runId = active.id;
+    watchRun(active.id, active.status === "stopping" ? "stopping" : "running");
+    if (active.status === "stopping") setStrip("Hunt is stopping…", true);
+  } catch (_) {}
+})();

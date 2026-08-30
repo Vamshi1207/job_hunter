@@ -78,6 +78,46 @@ h2 { font-size: 1.15rem; }
   padding: 1rem 1.5rem 0;
 }
 
+.camoufox-panel {
+  padding: 0.85rem 1.5rem 0;
+}
+
+.camoufox-wrap {
+  background: var(--ink);
+  color: var(--card);
+  padding: 0.7rem 1.1rem 0.9rem;
+}
+
+.camoufox-wrap summary {
+  cursor: pointer;
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #c5d0da;
+}
+
+.camoufox-wrap summary span {
+  text-transform: none;
+  letter-spacing: 0;
+  margin-left: 0.65rem;
+  color: var(--amber);
+  font-family: var(--body);
+}
+
+.camoufox-wrap .field-note {
+  color: #c5d0da;
+  margin: 0.65rem 0 0.75rem;
+}
+
+.camoufox-wrap iframe {
+  display: block;
+  width: 100%;
+  height: min(62vh, 38rem);
+  border: 1px solid #3d4c5c;
+  background: #000;
+}
+
 .board-panel {
   padding: 1rem 1.5rem 0;
 }

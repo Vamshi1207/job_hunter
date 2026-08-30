@@ -100,7 +100,7 @@ Open `config.example.yaml` for every key and comment. Below is what people actua
 | `hunt.saved_jobs` | LinkedIn/Indeed saved | Treated as matches (fit gates skipped) unless the company is excluded. |
 | `hunt.sources` / `hunt.ats_boards` | Camoufox | LinkedIn, Indeed, Google ATS dorks, Greenhouse/Lever/Ashby boards. Hunt skips salary guides and search SERPs (Indeed needs `viewjob?jk=`, LinkedIn needs `/jobs/view/{id}`). |
 | `hunt.mcp.indeed` | Optional MCP | Same URL as `.cursor/mcp.example.json`. |
-| `hunt.browser.logins.linkedin` | Auto-fill LinkedIn | **Password only in gitignored `config.yaml`.** Empty password = sign in by hand in the Camoufox session. Docker has no Mac window; login is on the virtual display. Cookies persist in `.camoufox-profile/`. |
+| `hunt.browser.logins.linkedin` | Auto-fill LinkedIn | **Password only in gitignored `config.yaml`.** Empty password = sign in by hand in the Camoufox panel. Cookies persist in `.camoufox-profile/`. |
 
 ### CV layout — `cv_format`, `experience`
 
@@ -144,7 +144,7 @@ Open [http://127.0.0.1:8000](http://127.0.0.1:8000).
 
 1. **Add postings by URL** is at the top of the desk. Paste one or more job links (one per line). Paste the **job description** to tailor from that text (used with a single URL).
 2. Click **Hunt from profile**. Camoufox runs in the container. Each posting is tailored as soon as it matches; search keeps adding more. **Stop** cancels search and skips jobs not yet started. LinkedIn may need a one-time sign-in in that session (cookies live in `.camoufox-profile/`). Apply/Submit is never clicked.
-3. Status on each row is the current step (searching, Writing CV, Scoring ATS, Building PDF, Ready, Stopped, …), not a generic “working”. Already tailored company/role or job URL combinations are skipped.
+3. Status on each row is the current step (searching, Writing CV, Scoring ATS, Building PDF, Ready, Stopped, …), not a generic “working”. Already tailored company/role or job URL combinations are skipped. If LinkedIn asks for sign-in or extra verification, the **Camoufox** panel opens — click and type there. Hunt waits until you finish (default 5 minutes).
 4. The table lists job name, company, status, **PDF**, **Edit** (Word / HTML / Pages / **Rebuild PDF**), and the posting link. Edit the HTML in Cursor, then **Rebuild PDF**. **Delete** removes that `applications/<folder>/`. Click a row for score, cover letter, and playbook.
 
 Python pipeline changes need a container restart (`docker compose up -d ui` or `--build` after `requirements.txt` / Dockerfile changes). HTML/CSS/JS update from the bind mount without a rebuild.
@@ -159,12 +159,13 @@ That converts existing Word CVs and keeps listening so Docker hunts can save rea
 
 ### How hunt runs in Docker
 
-There is **no Mac window**. Firefox uses a virtual display inside the container.
+Firefox draws on a virtual display inside the container. The desk **Camoufox** panel (noVNC) is that display, so you can sign in and complete 2FA. There is no separate Mac Firefox window.
 
 | Piece | Role |
 |---|---|
-| `scripts/docker-entrypoint.sh` | Starts Xvfb on `DISPLAY=:99` with `setsid` so it survives `exec` into uvicorn. A plain `Xvfb &` is killed by SIGHUP and Camoufox then fails with `cannot open display: :99`. |
-| `headless: "virtual"` | Inside Docker, Camoufox starts its own Xvfb even if `config.yaml` has `headless: false`. |
+| `scripts/docker-entrypoint.sh` | Starts Xvfb on `DISPLAY=:99` with `setsid` so it survives `exec` into uvicorn. Then x11vnc + websockify so the desk can show it. |
+| Headed Camoufox on `:99` | Same display as noVNC. Do not use Camoufox `headless: "virtual"` — that starts a private Xvfb the panel cannot see. |
+| `127.0.0.1:6080` | noVNC. Bound to localhost only. Opened as an iframe on the desk during hunt. |
 | `security_opt: seccomp:unconfined` + `cap_add: SYS_ADMIN` | Firefox 138+ needs `unshare` for its sandbox. Docker’s default seccomp blocks it (`CanCreateUserNamespace() clone() failure: EPERM`). |
 | `MOZ_DISABLE_CONTENT_SANDBOX=1` | Extra sandbox bypass for the same EPERM. |
 | `.camoufox-profile/` | Persistent cookies (gitignored). Re-login if you delete it. |
@@ -211,13 +212,13 @@ applications/<company>-<role>-<YYYY-MM-DD>/
 From the host (Python 3.10+):
 
 ```bash
-python3 -m unittest pipeline.test_pipeline
+python3 -m unittest discover -p 'test_*.py'
 ```
 
 Or inside Docker:
 
 ```bash
-docker compose run --rm --profile batch pipeline python3 -m unittest pipeline.test_pipeline
+docker compose run --rm --profile batch pipeline python3 -m unittest discover -p 'test_*.py'
 ```
 
 ## Cursor skills
@@ -228,6 +229,7 @@ Skills `job-hunt` and `cv-tailor` use the same `config.yaml`, master CV, bank, a
 
 What landed since the last published `main`:
 
+- **Camoufox panel**: sign-in and 2FA on the desk (noVNC at localhost:6080). Hunt waits until you finish.
 - **Streamed hunt**: tailor starts as soon as a posting matches; search keeps adding jobs. **Stop** cancels the rest.
 - **Live step status**: Writing CV, Scoring ATS, Building PDF, Searching LinkedIn, Stopped — not a generic Working label.
 - **LLM chain**: NVIDIA Nemotron → `openai/gpt-oss-120b` → agy/Gemini. Put `NVIDIA_API_KEY` in `.env`.

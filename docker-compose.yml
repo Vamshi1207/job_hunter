@@ -27,6 +27,7 @@ services:
     build: .
     ports:
       - "8000:8000"
+      - "127.0.0.1:6080:6080"
     volumes:
       - .:/app
       - ~/.gemini:/root/.gemini

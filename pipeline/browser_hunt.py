@@ -6,6 +6,7 @@ import asyncio
 import logging
 import os
 import re
+import time
 from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
@@ -30,13 +31,19 @@ _on_stage: ContextVar = ContextVar("on_stage", default=None)
 _should_stop: ContextVar = ContextVar("should_stop", default=None)
 
 
+def _raise_if_cancelled(exc: BaseException) -> None:
+    if isinstance(exc, asyncio.CancelledError):
+        raise exc
+
+
 def _notify_listing(item: dict | None) -> None:
     callback = _on_listing.get()
     if not callback or not item:
         return
     try:
         callback(item)
-    except Exception:
+    except Exception as exc:
+        _raise_if_cancelled(exc)
         log.debug("on_listing failed", exc_info=True)
 
 
@@ -46,7 +53,8 @@ def _notify_stage(line: str) -> None:
         return
     try:
         callback(line.strip())
-    except Exception:
+    except Exception as exc:
+        _raise_if_cancelled(exc)
         log.debug("on_stage failed", exc_info=True)
 
 
@@ -54,8 +62,45 @@ def _stopped() -> bool:
     callback = _should_stop.get()
     try:
         return bool(callback and callback())
+    except asyncio.CancelledError:
+        raise
     except Exception:
         return False
+
+
+async def _pause_ms(ms: int) -> bool:
+    """Sleep in short chunks so Stop can take effect. True if stop was requested."""
+    remaining = max(0.0, (ms or 0) / 1000.0)
+    while remaining > 0:
+        if _stopped():
+            return True
+        step = min(0.4, remaining)
+        await asyncio.sleep(step)
+        remaining -= step
+    return _stopped()
+
+
+async def _wait_for_manual_auth(page, seconds: int, reason: str) -> bool:
+    """Pause hunt until the login wall is gone, Stop, or timeout. True if signed in."""
+    wait = max(0, int(seconds or 0))
+    if wait <= 0:
+        return not await _needs_login(page)
+    if not await _needs_login(page):
+        return True
+    log.warning("%s Waiting up to %ss. Use the Camoufox panel on the desk.", reason, wait)
+    _notify_stage(reason)
+    deadline = time.monotonic() + wait
+    while time.monotonic() < deadline:
+        if _stopped():
+            return False
+        if not await _needs_login(page):
+            _notify_stage("Signed in")
+            return True
+        await asyncio.sleep(1)
+    still_blocked = await _needs_login(page)
+    if still_blocked:
+        log.warning("Still on a sign-in or verification page after %ss.", wait)
+    return not still_blocked
 
 
 DEFAULT_LINK_HINTS = (
@@ -378,10 +423,12 @@ async def browse_jobs(cfg: Config, on_listing=None, on_stage=None, should_stop=N
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
+                    _raise_if_cancelled(exc)
                     log.warning("Camoufox source %s failed: %s", _source_name(source), exc)
     except asyncio.CancelledError:
         raise
     except Exception as exc:
+        _raise_if_cancelled(exc)
         log.error("Camoufox failed to start: %s. Run python3 -m camoufox fetch", exc)
         return []
     finally:
@@ -394,9 +441,10 @@ async def browse_jobs(cfg: Config, on_listing=None, on_stage=None, should_stop=N
 def _camoufox_launch(cfg: Config) -> dict[str, Any]:
     headless = cfg.get("hunt.browser.headless", False)
     if _in_docker() and headless is False:
-        # Headed Firefox needs a display. Camoufox "virtual" starts its own Xvfb
-        # (compose Xvfb is also started; a bare `Xvfb &` used to die on exec).
-        headless = "virtual"
+        # Headed on compose Xvfb (DISPLAY=:99) so the desk noVNC panel can show
+        # Firefox. Camoufox headless="virtual" starts a private Xvfb the desk
+        # cannot see.
+        headless = False
     launch: dict[str, Any] = {
         "headless": headless,
         "humanize": bool(cfg.get("hunt.browser.humanize", True)),
@@ -586,23 +634,21 @@ async def _collect_from_url(
         return []
     log.info("Camoufox open %s", url)
     await page.goto(url, wait_until="domcontentloaded", timeout=60000)
-    await page.wait_for_timeout(max(400, delay_ms))
+    if await _pause_ms(max(400, delay_ms)):
+        return []
     if await _needs_login(page):
         signed_in = await _try_configured_login(page, cfg, delay_ms)
-        if not signed_in:
-            wait = min(login_wait, 45) if login_wait else 0
-            if wait:
-                log.warning(
-                    "LinkedIn not signed in yet. You can finish Sign in in the Camoufox window. Waiting %ss.",
-                    wait,
-                )
-                _notify_stage("Waiting for LinkedIn sign-in")
-                for _ in range(wait):
-                    if _stopped():
-                        return []
-                    await page.wait_for_timeout(1000)
+        if not signed_in or await _needs_login(page):
+            await _wait_for_manual_auth(
+                page,
+                login_wait,
+                "Sign in or extra verification — use the Camoufox panel",
+            )
+        if _stopped():
+            return []
         await page.goto(url, wait_until="domcontentloaded", timeout=60000)
-        await page.wait_for_timeout(max(400, delay_ms))
+        if await _pause_ms(max(400, delay_ms)):
+            return []
 
     await _scroll_listings(page)
     html = await page.content()
@@ -644,6 +690,7 @@ async def _collect_saved_jobs(page, cfg: Config, delay_ms: int, login_wait: int,
         try:
             found = await _collect_from_url(page, cfg, source, url, delay_ms, login_wait, cap)
         except Exception as exc:
+            _raise_if_cancelled(exc)
             log.warning("Saved jobs page failed %s: %s", url, exc)
             continue
         for item in found:
@@ -660,11 +707,14 @@ async def _collect_saved_jobs(page, cfg: Config, delay_ms: int, login_wait: int,
 async def _scroll_listings(page) -> None:
     try:
         for _ in range(3):
+            if _stopped():
+                return
             await page.evaluate("window.scrollBy(0, 1400)")
-            await page.wait_for_timeout(500)
+            if await _pause_ms(500):
+                return
         await page.evaluate("window.scrollTo(0, 0)")
-    except Exception:
-        pass
+    except Exception as exc:
+        _raise_if_cancelled(exc)
 
 
 def linkedin_credentials(cfg: Config) -> tuple[str, str]:
@@ -689,9 +739,11 @@ async def _linkedin_login(page, cfg: Config, delay_ms: int) -> bool:
     try:
         if "linkedin.com/login" not in (page.url or "").lower():
             await page.goto("https://www.linkedin.com/login", wait_until="domcontentloaded", timeout=60000)
-        await page.wait_for_timeout(max(1200, delay_ms))
+        if await _pause_ms(max(1200, delay_ms)):
+            return False
         await _dismiss_login_overlays(page)
-        await page.wait_for_timeout(400)
+        if await _pause_ms(400):
+            return False
         # LinkedIn mounts a hidden SSR form and a visible React form. .first hits the hidden one.
         filled_user = await _type_linkedin_field(page, "username", email)
         filled_pass = await _type_linkedin_field(page, "password", password)
@@ -709,21 +761,28 @@ async def _linkedin_login(page, cfg: Config, delay_ms: int) -> bool:
                 "() => !location.pathname.includes('/login') || location.pathname.includes('/checkpoint')",
                 timeout=20000,
             )
-        except Exception:
-            await page.wait_for_timeout(max(2000, delay_ms * 2))
+        except Exception as exc:
+            _raise_if_cancelled(exc)
+            if await _pause_ms(max(2000, delay_ms * 2)):
+                return False
         url = (page.url or "").lower()
-        if any(token in url for token in ("/checkpoint", "/challenge", "captcha")):
-            log.warning("LinkedIn asked for extra verification. Complete it in the Camoufox window.")
-            wait = int(cfg.get("hunt.browser.login_wait_seconds", 120) or 0)
-            if wait:
-                await page.wait_for_timeout(wait * 1000)
+        wait = int(cfg.get("hunt.browser.login_wait_seconds", 300) or 0)
+        if any(token in url for token in ("/checkpoint", "/challenge", "captcha")) or await _needs_login(page):
+            ok = await _wait_for_manual_auth(
+                page,
+                wait,
+                "Complete extra verification — use the Camoufox panel",
+            )
+            if not ok:
+                return False
         still_login = "/login" in (page.url or "").lower() and "/checkpoint" not in (page.url or "").lower()
         if still_login:
-            log.warning("Still on LinkedIn login after submit. Complete sign-in in the window if a prompt remains.")
+            log.warning("Still on LinkedIn login after submit. Complete sign-in in the Camoufox panel.")
             return False
         log.info("LinkedIn session looks signed in.")
         return True
     except Exception as exc:
+        _raise_if_cancelled(exc)
         log.warning("LinkedIn auto-login failed: %s", exc)
         return False
 
@@ -917,13 +976,25 @@ async def _needs_login(page) -> bool:
 async def _extract_posting(page, cfg: Config, source: dict, url: str, delay_ms: int) -> dict | None:
     try:
         await page.goto(url, wait_until="domcontentloaded", timeout=60000)
-        await page.wait_for_timeout(max(400, delay_ms))
+        if await _pause_ms(max(400, delay_ms)):
+            return None
         if await _needs_login(page):
             await _try_configured_login(page, cfg, delay_ms)
+            wait = int(cfg.get("hunt.browser.login_wait_seconds", 300) or 0)
+            if await _needs_login(page):
+                await _wait_for_manual_auth(
+                    page,
+                    wait,
+                    "Sign in or extra verification — use the Camoufox panel",
+                )
+            if _stopped():
+                return None
             await page.goto(url, wait_until="domcontentloaded", timeout=60000)
-            await page.wait_for_timeout(max(400, delay_ms))
+            if await _pause_ms(max(400, delay_ms)):
+                return None
         html = await page.content()
     except Exception as exc:
+        _raise_if_cancelled(exc)
         log.info("Skip %s (%s)", url, exc)
         return None
 

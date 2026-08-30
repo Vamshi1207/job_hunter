@@ -38,6 +38,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxkbcommon0 \
     fonts-liberation \
     xauth \
+    x11vnc \
+    novnc \
+    websockify \
+    openbox \
     && rm -rf /var/lib/apt/lists/*
 
 RUN curl -fsSL https://antigravity.google/cli/install.sh | bash

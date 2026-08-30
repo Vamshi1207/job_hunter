@@ -665,7 +665,7 @@ class HuntTests(unittest.TestCase):
             tmp.cleanup()
             load_config(force=True)
 
-    def test_camoufox_launch_uses_virtual_display_in_docker(self):
+    def test_camoufox_launch_uses_compose_display_in_docker(self):
         from pipeline.browser_hunt import _camoufox_launch
 
         tmp = tempfile.TemporaryDirectory()
@@ -674,7 +674,7 @@ class HuntTests(unittest.TestCase):
             os.environ["IN_DOCKER"] = "1"
             os.environ["DISPLAY"] = ":99"
             launch = _camoufox_launch(cfg)
-            self.assertEqual(launch["headless"], "virtual")
+            self.assertFalse(launch["headless"])
             self.assertEqual(launch["env"]["MOZ_DISABLE_CONTENT_SANDBOX"], "1")
             self.assertEqual(launch["env"]["DISPLAY"], ":99")
             os.environ.pop("IN_DOCKER", None)
@@ -686,6 +686,73 @@ class HuntTests(unittest.TestCase):
             os.environ.pop("JOB_SEARCH_ROOT", None)
             tmp.cleanup()
             load_config(force=True)
+
+    def test_wait_for_manual_auth_returns_when_login_clears(self):
+        import asyncio
+        from unittest.mock import MagicMock, patch
+
+        from pipeline.browser_hunt import _wait_for_manual_auth
+
+        page = MagicMock()
+        checks = {"n": 0}
+
+        async def needs_login(_page):
+            checks["n"] += 1
+            return checks["n"] < 2
+
+        async def run():
+            from pipeline import browser_hunt as bh
+
+            token = bh._should_stop.set(lambda: False)
+            try:
+                with patch("pipeline.browser_hunt._needs_login", needs_login):
+                    return await _wait_for_manual_auth(page, 8, "Sign in — use the Camoufox panel")
+            finally:
+                bh._should_stop.reset(token)
+
+        self.assertTrue(asyncio.run(run()))
+        self.assertGreaterEqual(checks["n"], 2)
+
+    def test_wait_for_manual_auth_stops_without_waiting_out_the_timer(self):
+        import time
+        import asyncio
+        from unittest.mock import patch
+
+        from pipeline.browser_hunt import _wait_for_manual_auth
+
+        async def needs_login(_page):
+            return True
+
+        async def run():
+            from pipeline import browser_hunt as bh
+
+            token = bh._should_stop.set(lambda: True)
+            try:
+                started = time.monotonic()
+                with patch("pipeline.browser_hunt._needs_login", needs_login):
+                    ok = await _wait_for_manual_auth(object(), 60, "Sign in — use the Camoufox panel")
+                return ok, time.monotonic() - started
+            finally:
+                bh._should_stop.reset(token)
+
+        ok, elapsed = asyncio.run(run())
+        self.assertFalse(ok)
+        self.assertLess(elapsed, 1.5)
+
+    def test_needs_login_detects_checkpoint_and_authwall(self):
+        import asyncio
+        from unittest.mock import MagicMock, AsyncMock
+        from pipeline.browser_hunt import _needs_login
+
+        async def check(url, html=""):
+            page = MagicMock()
+            page.url = url
+            page.content = AsyncMock(return_value=html)
+            return await _needs_login(page)
+
+        self.assertTrue(asyncio.run(check("https://www.linkedin.com/checkpoint/challenge")))
+        self.assertTrue(asyncio.run(check("https://www.linkedin.com/login")))
+        self.assertFalse(asyncio.run(check("https://www.linkedin.com/jobs/view/123", "<p>Python Kafka</p>")))
 
     def test_search_jobs_keeps_every_match(self):
         from pipeline.search import html_to_text, search_jobs
@@ -1094,6 +1161,11 @@ class HuntTests(unittest.TestCase):
         board.stage("Searching LinkedIn")
         self.assertEqual(events[-1]["type"], "hunt_stage")
         self.assertEqual(events[-1]["line"], "Searching LinkedIn")
+        self.assertFalse(events[-1].get("browser"))
+        board.stage("Sign in or extra verification — use the Camoufox panel")
+        self.assertTrue(events[-1].get("browser"))
+        board.stage("Opening job boards")
+        self.assertTrue(events[-1].get("browser"))
         board.ready(first, "acme-software-engineer-2026-08-30")
         types = [item["type"] for item in events]
         self.assertEqual(types[0], "found")
@@ -1315,6 +1387,163 @@ class HuntTests(unittest.TestCase):
             os.environ.pop("JOB_SEARCH_ROOT", None)
             tmp.cleanup()
             load_config(force=True)
+
+
+class StopAndHuntLockTests(unittest.TestCase):
+    def setUp(self):
+        from web import app as desk
+
+        self.desk = desk
+        with desk._run_lock:
+            desk._runs.clear()
+        self._hold = None
+
+    def tearDown(self):
+        if self._hold is not None:
+            self._hold.set()
+        with self.desk._run_lock:
+            self.desk._runs.clear()
+
+    def _put_hunt(self, status, *, alive=True, stop=False):
+        import queue
+        import threading
+
+        sink = queue.Queue()
+        run = self.desk._new_run("hunt1", sink, kind="hunt")
+        run["status"] = status
+        if stop:
+            run["stop"].set()
+        if alive:
+            hold = threading.Event()
+            thread = threading.Thread(target=hold.wait, daemon=True)
+            thread.start()
+            run["thread"] = thread
+            self._hold = hold
+        else:
+            thread = threading.Thread(target=lambda: None)
+            thread.start()
+            thread.join()
+            run["thread"] = thread
+        with self.desk._run_lock:
+            self.desk._runs["hunt1"] = run
+        return run
+
+    def test_pause_ms_returns_immediately_when_stopped(self):
+        import time
+        import asyncio
+        from pipeline import browser_hunt as bh
+
+        async def run():
+            token = bh._should_stop.set(lambda: True)
+            try:
+                started = time.monotonic()
+                stopped = await bh._pause_ms(30_000)
+                elapsed = time.monotonic() - started
+                return stopped, elapsed
+            finally:
+                bh._should_stop.reset(token)
+
+        stopped, elapsed = asyncio.run(run())
+        self.assertTrue(stopped)
+        self.assertLess(elapsed, 1.5)
+
+    def test_linkedin_login_does_not_swallow_cancel(self):
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from pipeline.browser_hunt import _linkedin_login
+        from pipeline.config import Config
+
+        page = MagicMock()
+        page.url = "https://www.linkedin.com/jobs/"
+        page.goto = AsyncMock(side_effect=asyncio.CancelledError())
+        cfg = Config(
+            {"hunt": {"browser": {"logins": {"linkedin": {"email": "a@b.c", "password": "x"}}}}},
+            Path("."),
+        )
+
+        async def run():
+            await _linkedin_login(page, cfg, 400)
+
+        with self.assertRaises(asyncio.CancelledError):
+            asyncio.run(run())
+
+    def test_dead_stopping_hunt_is_not_busy(self):
+        self._put_hunt("stopping", alive=False, stop=True)
+        self.assertIsNone(self.desk._active_hunt())
+
+    def test_live_hunt_blocks_a_second_start(self):
+        from fastapi import HTTPException
+        from web.app import HuntRequest
+
+        self._put_hunt("running", alive=True)
+        with self.assertRaises(HTTPException) as ctx:
+            self.desk.start_hunt(HuntRequest())
+        self.assertEqual(ctx.exception.status_code, 409)
+        self.assertIn("already running", ctx.exception.detail)
+
+    def test_stale_stopping_hunt_allows_a_new_start(self):
+        from unittest.mock import patch
+        from web.app import HuntRequest
+
+        self._put_hunt("stopping", alive=False, stop=True)
+        with patch("web.app.threading.Thread") as thread_cls, patch("web.app.load_config"), patch(
+            "web.app.hunt_limit", return_value=0
+        ):
+            thread_cls.return_value.ident = None
+            thread_cls.return_value.is_alive.return_value = False
+            result = self.desk.start_hunt(HuntRequest())
+        self.assertTrue(result["id"])
+        self.assertNotEqual(result["id"], "hunt1")
+
+    def test_stop_sets_stopping_and_active_run_reconnects(self):
+        run = self._put_hunt("running", alive=True)
+        payload = self.desk.stop_run("hunt1")
+        self.assertEqual(payload["status"], "stopping")
+        self.assertTrue(run["stop"].is_set())
+        active = self.desk.active_run()
+        self.assertEqual(active["id"], "hunt1")
+        self.assertEqual(active["status"], "stopping")
+
+    def test_stop_unknown_run_is_404(self):
+        from fastapi import HTTPException
+
+        with self.assertRaises(HTTPException) as ctx:
+            self.desk.stop_run("missing")
+        self.assertEqual(ctx.exception.status_code, 404)
+
+
+class ConfigMergeTests(unittest.TestCase):
+    def test_overlay_replaces_lists_and_keeps_nested_defaults(self):
+        from pipeline.config import _deep_merge
+
+        merged = _deep_merge(
+            {
+                "pipeline": {
+                    "max_attempts": 3,
+                    "nvidia": {"fallback_model": "openai/gpt-oss-120b", "rpm": 40},
+                },
+                "hunt": {
+                    "exclude_levels": ["intern", "staff"],
+                    "preferred_skills": ["python"],
+                    "browser": {"login_wait_seconds": 300, "headless": False},
+                },
+            },
+            {
+                "pipeline": {"max_attempts": 2, "nvidia": {"rpm": 20}},
+                "hunt": {
+                    "preferred_skills": ["python", "kafka"],
+                    "browser": {"queries": ["python"]},
+                },
+            },
+        )
+        self.assertEqual(merged["pipeline"]["max_attempts"], 2)
+        self.assertEqual(merged["pipeline"]["nvidia"]["fallback_model"], "openai/gpt-oss-120b")
+        self.assertEqual(merged["pipeline"]["nvidia"]["rpm"], 20)
+        self.assertEqual(merged["hunt"]["exclude_levels"], ["intern", "staff"])
+        self.assertEqual(merged["hunt"]["preferred_skills"], ["python", "kafka"])
+        self.assertEqual(merged["hunt"]["browser"]["login_wait_seconds"], 300)
+        self.assertEqual(merged["hunt"]["browser"]["queries"], ["python"])
 
 
 if __name__ == "__main__":

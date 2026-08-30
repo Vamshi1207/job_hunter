@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import queue
 import threading
 import uuid
@@ -48,6 +49,7 @@ def _new_run(run_id: str, sink: queue.Queue, *, kind: str) -> dict:
         "stop": threading.Event(),
         "loop": None,
         "task": None,
+        "thread": None,
     }
 
 
@@ -58,12 +60,57 @@ def _stop_requested(run_id: str) -> bool:
 
 
 def _bind_run_task(run_id: str) -> None:
+    cancel_now = False
     with _run_lock:
         run = _runs.get(run_id)
         if not run:
             return
         run["loop"] = asyncio.get_running_loop()
         run["task"] = asyncio.current_task()
+        stop = run.get("stop")
+        cancel_now = bool(stop is not None and stop.is_set())
+    if cancel_now:
+        task = asyncio.current_task()
+        if task is not None:
+            task.cancel()
+
+
+def _thread_finished(run: dict) -> bool:
+    thread = run.get("thread")
+    return bool(thread is not None and thread.ident is not None and not thread.is_alive())
+
+
+def _reclaim_finished_runs_locked() -> None:
+    for run in _runs.values():
+        if run.get("status") not in {"running", "stopping"}:
+            continue
+        if not _thread_finished(run):
+            continue
+        if run.get("stop") is not None and run["stop"].is_set():
+            run["status"] = "stopped"
+            run["error"] = run.get("error") or "Stopped"
+        elif run.get("status") == "stopping":
+            run["status"] = "stopped"
+            run["error"] = run.get("error") or "Stopped"
+        else:
+            run["status"] = "error"
+            run["error"] = run.get("error") or "Hunt ended unexpectedly"
+
+
+def _active_run_locked(*, kind: str | None = None) -> dict | None:
+    _reclaim_finished_runs_locked()
+    for run in reversed(list(_runs.values())):
+        if run.get("status") not in {"running", "stopping"}:
+            continue
+        if kind and run.get("kind") != kind:
+            continue
+        return run
+    return None
+
+
+def _active_hunt() -> dict | None:
+    with _run_lock:
+        return _active_run_locked(kind="hunt")
 
 
 def _mark_stopped(run_id: str, packages: list[str] | None = None) -> None:
@@ -138,6 +185,13 @@ def me() -> dict:
             "years_buffer": cfg.get("hunt.years_buffer", 2),
             "exclude_levels": cfg.get("hunt.exclude_levels") or [],
             "reject_skills": cfg.get("hunt.reject_skills") or [],
+            "login_wait_seconds": int(cfg.get("hunt.browser.login_wait_seconds", 300) or 300),
+        },
+        "camoufox": {
+            "vnc": os.environ.get(
+                "CAMOUFOX_VNC_URL",
+                "http://127.0.0.1:6080/vnc.html?autoconnect=1&resize=scale",
+            ),
         },
     }
 
@@ -251,12 +305,22 @@ def start_run(body: RunRequest) -> dict:
         raise HTTPException(status_code=400, detail="Paste one or more job URLs, one per line.")
     run_id = uuid.uuid4().hex[:10]
     sink: queue.Queue = queue.Queue()
-    with _run_lock:
-        _runs[run_id] = _new_run(run_id, sink, kind="run")
-
     thread = threading.Thread(target=_execute_run, args=(run_id, urls, body, sink), daemon=True)
+    with _run_lock:
+        run = _new_run(run_id, sink, kind="run")
+        run["thread"] = thread
+        _runs[run_id] = run
     thread.start()
     return {"id": run_id, "count": len(urls)}
+
+
+@app.get("/api/runs/active")
+def active_run() -> dict:
+    with _run_lock:
+        run = _active_run_locked()
+        if not run:
+            return {"id": None, "kind": None, "status": None}
+        return {"id": run["id"], "kind": run["kind"], "status": run["status"]}
 
 
 @app.get("/api/runs/{run_id}")
@@ -334,19 +398,36 @@ def stop_run(run_id: str) -> dict:
 @app.post("/api/hunt")
 def start_hunt(body: HuntRequest) -> dict:
     with _run_lock:
-        busy = any(
-            run.get("kind") == "hunt" and run.get("status") in {"running", "stopping"}
-            for run in _runs.values()
+        busy = _active_run_locked(kind="hunt")
+        thread = (busy or {}).get("thread")
+        stopping = bool(
+            busy
+            and (
+                busy.get("status") == "stopping"
+                or (busy.get("stop") is not None and busy["stop"].is_set())
+            )
         )
-    if busy:
+    if busy and not stopping:
         raise HTTPException(status_code=409, detail="A hunt is already running.")
+    if busy and stopping:
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=8)
+        with _run_lock:
+            busy = _active_run_locked(kind="hunt")
+        if busy:
+            raise HTTPException(
+                status_code=409,
+                detail="Previous hunt is still closing the browser. Try Hunt again in a few seconds.",
+            )
     cfg = load_config(force=True)
     cap = hunt_limit(cfg, body.max_jobs)
     run_id = uuid.uuid4().hex[:10]
     sink: queue.Queue = queue.Queue()
-    with _run_lock:
-        _runs[run_id] = _new_run(run_id, sink, kind="hunt")
     thread = threading.Thread(target=_execute_hunt, args=(run_id, cap, sink), daemon=True)
+    with _run_lock:
+        run = _new_run(run_id, sink, kind="hunt")
+        run["thread"] = thread
+        _runs[run_id] = run
     thread.start()
     return {"id": run_id, "max_jobs": cap}
 

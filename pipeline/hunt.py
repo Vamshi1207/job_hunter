@@ -129,7 +129,26 @@ class JobProgress:
         text = (line or "").strip()
         if not text:
             return
-        self._emit({"type": "hunt_stage", "line": text, "detail": text})
+        lower = text.lower()
+        needs_browser = any(
+            token in lower
+            for token in (
+                "camoufox panel",
+                "sign-in",
+                "sign in",
+                "verification",
+                "opening job boards",
+                "opening camoufox",
+            )
+        )
+        self._emit(
+            {
+                "type": "hunt_stage",
+                "line": text,
+                "detail": text,
+                "browser": needs_browser,
+            }
+        )
 
     def found(self, listing: dict) -> None:
         company, role, _url = row_key(listing)
@@ -230,6 +249,8 @@ class JobProgress:
 def _is_stopped(should_stop) -> bool:
     try:
         return bool(should_stop and should_stop())
+    except asyncio.CancelledError:
+        raise
     except Exception:
         return False
 

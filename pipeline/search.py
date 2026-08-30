@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -701,6 +702,8 @@ def _notify_stage(on_stage, line: str) -> None:
 def _is_stopped(should_stop) -> bool:
     try:
         return bool(should_stop and should_stop())
+    except asyncio.CancelledError:
+        raise
     except Exception:
         return False
 

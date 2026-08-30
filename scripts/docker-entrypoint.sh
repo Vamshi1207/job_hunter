@@ -30,7 +30,31 @@ start_xvfb() {
   cat /tmp/xvfb.log >&2 || true
 }
 
+start_vnc() {
+  if command -v openbox >/dev/null 2>&1; then
+    setsid openbox >/tmp/openbox.log 2>&1 &
+  fi
+  if ! command -v x11vnc >/dev/null 2>&1; then
+    return 0
+  fi
+  setsid x11vnc -display "$DISPLAY" -forever -shared -nopw -localhost -rfbport 5900 \
+    -noxdamage -quiet >/tmp/x11vnc.log 2>&1 &
+  local web=""
+  for dir in /usr/share/novnc /usr/share/novnc/html; do
+    if [ -f "$dir/vnc.html" ]; then
+      web="$dir"
+      break
+    fi
+  done
+  if command -v websockify >/dev/null 2>&1 && [ -n "$web" ]; then
+    setsid websockify --web "$web" 0.0.0.0:6080 localhost:5900 >/tmp/websockify.log 2>&1 &
+  else
+    echo "WARNING: noVNC/websockify not available; Camoufox panel will be empty" >&2
+  fi
+}
+
 if command -v Xvfb >/dev/null 2>&1; then
   start_xvfb
+  start_vnc
 fi
 exec "$@"
