@@ -191,14 +191,14 @@ pipeline:
 # Salary guides, career-explorer, search result, and company-review URLs are skipped.
 hunt:
   max_jobs: 0                # 0 = tailor every match; >0 is a safety ceiling, not a ranking
-  api_sources: false
+  api_sources: true           # The Muse + Remotive public APIs (no extra keys). Fit gates still apply.
   greenhouse_boards: []
-    # Example: the Greenhouse board token from boards.greenhouse.io/<token>
+  # Example: the Greenhouse board token from boards.greenhouse.io/<token>
   ats_boards: []
-    # Direct ATS board URLs, used by the `ats` source below
-    - https://boards.greenhouse.io/acme
-    - https://jobs.lever.co/acme
-    - https://jobs.ashbyhq.com/acme
+  # Direct ATS board URLs for the `ats` source. Do not mix `[]` with list items.
+  # - https://boards.greenhouse.io/acme
+  # - https://jobs.lever.co/acme
+  # - https://jobs.ashbyhq.com/acme
   years_buffer: 2            # skip if JD requires more than years_experience + this
   # Title seniority you will not apply to (unless the same phrase is in target_roles).
   # "staff" skips Staff Engineer; Member of Technical Staff / MTS is still kept.
@@ -287,10 +287,10 @@ hunt:
     - id: google_ats
       enabled: true
       kind: google_ats
-      # Camoufox searches Google: "Software Engineer" site:boards.greenhouse.io Montreal, Canada
-      url: "https://www.google.com/search?q={dork}&hl=en&num=10"
-      max_queries: 1          # how many target_roles to dork (1 keeps CAPTCHA risk down)
-      group_size: 1           # 1 = one search per ATS; 3 = OR-clump several site: operators
+      # Camoufox searches Google: query + site:ATS + Montreal, Canada
+      url: "https://www.google.com/search?q={dork}&hl=en&num=20"
+      max_queries: 2          # how many hunt.browser.queries / roles to dork
+      group_size: 3           # OR-clump site: operators to keep Google searches down
       max_results: 20          # job URLs to open per Google results page
       ats:
         - site:boards.greenhouse.io
@@ -299,8 +299,22 @@ hunt:
         - site:jobs.ashbyhq.com
         - site:myworkdayjobs.com
         - site:jobs.workable.com
+        - site:apply.workable.com
         - site:ats.rippling.com
-        - site:smartrecruiters.com
+        - site:jobs.smartrecruiters.com
+        - site:jobs.jobvite.com
+        - site:icims.com
+        - site:taleo.net
+        - site:successfactors.com
+        - site:bamboohr.com
+        - site:recruitee.com
+        - site:pinpointhq.com
+        - site:breezy.hr
+        - site:teamtailor.com
+        - site:applytojob.com
+        - site:eightfold.ai
+        - site:wellfound.com
+        - site:otta.com
       link_contains:
         - boards.greenhouse.io/
         - job-boards.greenhouse.io/
@@ -308,8 +322,23 @@ hunt:
         - jobs.ashbyhq.com/
         - myworkdayjobs.com/
         - jobs.workable.com/
+        - apply.workable.com/
         - ats.rippling.com/
         - smartrecruiters.com/
+        - jobs.jobvite.com/
+        - icims.com/
+        - taleo.net/
+        - successfactors.com/
+        - bamboohr.com/
+        - recruitee.com/
+        - pinpointhq.com/
+        - breezy.hr/
+        - teamtailor.com/
+        - applytojob.com/
+        - eightfold.ai/
+        - wellfound.com/jobs/
+        - otta.com/
+        - themuse.com/jobs/
     - id: ats
       enabled: true
       kind: boards

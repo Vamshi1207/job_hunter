@@ -578,10 +578,14 @@ class HuntTests(unittest.TestCase):
         self.assertTrue(any("greenhouse.io" in item for item in links))
         google_html = """
         <a href="/url?q=https://boards.greenhouse.io/northstar/jobs/99&amp;sa=U">GH via Google</a>
+        <a href="/url?q=https://company.icims.com/jobs/12345/job&amp;sa=U">iCIMS</a>
+        <a href="/url?q=https://acme.wd1.myworkdayjobs.com/en-US/Careers/job/Montreal/SE_R1&amp;sa=U">Workday</a>
         <a href="/url?q=https://www.google.com/search&amp;sa=U">skip google</a>
         """
         google_links = collect_job_links(google_html, "https://www.google.com/search")
-        self.assertEqual(google_links, ["https://boards.greenhouse.io/northstar/jobs/99"])
+        self.assertIn("https://boards.greenhouse.io/northstar/jobs/99", google_links)
+        self.assertTrue(any("icims.com" in item for item in google_links))
+        self.assertTrue(any("myworkdayjobs.com" in item for item in google_links))
         from pipeline.browser_hunt import build_google_dork, unwrap_result_url
 
         self.assertEqual(
@@ -1544,6 +1548,26 @@ class ConfigMergeTests(unittest.TestCase):
         self.assertEqual(merged["hunt"]["preferred_skills"], ["python", "kafka"])
         self.assertEqual(merged["hunt"]["browser"]["login_wait_seconds"], 300)
         self.assertEqual(merged["hunt"]["browser"]["queries"], ["python"])
+
+    def test_example_config_is_valid_yaml(self):
+        import yaml
+
+        path = Path(__file__).resolve().parents[1] / "config.example.yaml"
+        data = yaml.safe_load(path.read_text())
+        self.assertIsInstance(data, dict)
+        self.assertIsInstance(data.get("hunt"), dict)
+        self.assertIsInstance(data["hunt"].get("ats_boards"), list)
+
+    def test_invalid_yaml_raises_value_error(self):
+        from pipeline.config import _read_yaml
+
+        tmp = tempfile.TemporaryDirectory()
+        path = Path(tmp.name) / "broken.yaml"
+        path.write_text("hunt:\n  ats_boards: []\n    - https://example.com\n")
+        with self.assertRaises(ValueError) as ctx:
+            _read_yaml(path)
+        self.assertIn("Invalid YAML", str(ctx.exception))
+        tmp.cleanup()
 
 
 if __name__ == "__main__":

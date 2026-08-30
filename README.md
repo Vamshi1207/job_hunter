@@ -24,7 +24,7 @@ Runtime map (Archify, pinned to commit `0ce6138`): open [`docs/architecture/job-
 
 1. `config.example.yaml` is the full default schema. It is tracked in git.
 2. `config.yaml` is **your** overlay. It is gitignored. Copy the example and edit it.
-3. The pipeline **deep-merges** example + overlay. A key you set in `config.yaml` wins. A **list** you set replaces the example list (it is not appended).
+3. The pipeline **deep-merges** example + overlay. A key you set in `config.yaml` wins. A **list** you set replaces the example list (it is not appended). Never write `ats_boards: []` and then list items under it — that is invalid YAML and Hunt will fail.
 4. Paths such as `cv_master.md` are resolved from `JOB_SEARCH_ROOT` (Docker sets `/app`) or the repo directory. `workspace.root` is for Cursor skills, not for Python inside Docker.
 
 Never commit `config.yaml`. It may contain your LinkedIn password.
@@ -98,7 +98,8 @@ Open `config.example.yaml` for every key and comment. Below is what people actua
 | `hunt.reject_skills` | JD filter | Drop roles that require a skill you will not use (example: `java`). |
 | `hunt.exclude_companies` | Search **and** saved jobs | Current/former employers you will not apply to. Add brand aliases if a board uses a shorter name. |
 | `hunt.saved_jobs` | LinkedIn/Indeed saved | Treated as matches (fit gates skipped) unless the company is excluded. |
-| `hunt.sources` / `hunt.ats_boards` | Camoufox | LinkedIn, Indeed, Google ATS dorks, Greenhouse/Lever/Ashby boards. Hunt skips salary guides and search SERPs (Indeed needs `viewjob?jk=`, LinkedIn needs `/jobs/view/{id}`). |
+| `hunt.sources` / `hunt.ats_boards` | Camoufox | LinkedIn, Indeed, Google ATS dorks (Greenhouse, Lever, Ashby, Workday, iCIMS, Taleo, …), optional company board URLs. Hunt skips salary guides and search SERPs. |
+| `hunt.api_sources` | Extra listings | `true` (default) adds The Muse and Remotive. No API key. Fit gates still apply. |
 | `hunt.mcp.indeed` | Optional MCP | Same URL as `.cursor/mcp.example.json`. |
 | `hunt.browser.logins.linkedin` | Auto-fill LinkedIn | **Password only in gitignored `config.yaml`.** Empty password = sign in by hand in the Camoufox panel. Cookies persist in `.camoufox-profile/`. |
 
@@ -177,6 +178,7 @@ Compose also sets `shm_size: 2gb` (browsers crash in the default 64MB `/dev/shm`
 | Live strip / log | What it means |
 |---|---|
 | `cannot open display: :99` | Xvfb died or `DISPLAY` was unset. Rebuild: `docker compose up ui --build`. |
+| `Invalid YAML in config.example.yaml` | Broken example or overlay (often `key: []` plus list items). Fix the YAML, then Hunt again. |
 | `CanCreateUserNamespace() clone() failure: EPERM` | Seccomp blocked Firefox. Confirm `docker-compose.yml` still has `seccomp:unconfined`. |
 | `Indeed MCP skipped` | Optional. Install the `mcp` package and complete Cursor OAuth, or ignore — hunt continues with Camoufox. |
 | `Hunt found no matching postings` | Camoufox started but fit filters / login / sources yielded nothing. Check LinkedIn login in `.camoufox-profile`, `hunt.exclude_*`, and `career.target_roles`. Salary/career-explorer URLs are skipped on purpose. |
@@ -229,6 +231,7 @@ Skills `job-hunt` and `cv-tailor` use the same `config.yaml`, master CV, bank, a
 
 What landed since the last published `main`:
 
+- **More ATS via Google**: Greenhouse, Lever, Ashby, Workday, iCIMS, Taleo, and others; two search queries; grouped `site:` dorks. Muse/Remotive APIs on by default.
 - **Camoufox panel**: sign-in and 2FA on the desk (noVNC at localhost:6080). Hunt waits until you finish.
 - **Streamed hunt**: tailor starts as soon as a posting matches; search keeps adding jobs. **Stop** cancels the rest.
 - **Live step status**: Writing CV, Scoring ATS, Building PDF, Searching LinkedIn, Stopped — not a generic Working label.

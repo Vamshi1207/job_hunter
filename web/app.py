@@ -35,6 +35,13 @@ _runs: dict[str, dict] = {}
 _run_lock = threading.Lock()
 
 
+def _load_cfg():
+    try:
+        return load_config(force=True)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 def _new_run(run_id: str, sink: queue.Queue, *, kind: str) -> dict:
     return {
         "id": run_id,
@@ -163,7 +170,7 @@ def index() -> HTMLResponse:
 
 @app.get("/api/me")
 def me() -> dict:
-    cfg = load_config(force=True)
+    cfg = _load_cfg()
     return {
         "name": cfg.full_name,
         "pages": cfg.cv_pages,
@@ -236,13 +243,13 @@ def inspect(body: InspectRequest) -> dict:
 
 @app.get("/api/packages")
 def packages() -> dict:
-    cfg = load_config(force=True)
+    cfg = _load_cfg()
     return {"packages": list_packages(cfg)}
 
 
 @app.get("/api/packages/{package_id}")
 def package(package_id: str) -> dict:
-    cfg = load_config(force=True)
+    cfg = _load_cfg()
     detail = package_detail(cfg, package_id)
     if detail is None:
         raise HTTPException(status_code=404, detail="Package not found")
@@ -251,7 +258,7 @@ def package(package_id: str) -> dict:
 
 @app.get("/api/packages/{package_id}/file/{filename}")
 def package_download(package_id: str, filename: str):
-    cfg = load_config(force=True)
+    cfg = _load_cfg()
     path = package_file(cfg, package_id, filename)
     if path is None:
         raise HTTPException(status_code=404, detail="File not found")
@@ -274,7 +281,7 @@ def package_download(package_id: str, filename: str):
 
 @app.post("/api/packages/{package_id}/rebuild-pdf")
 async def rebuild_pdf(package_id: str) -> dict:
-    cfg = load_config(force=True)
+    cfg = _load_cfg()
     folder = package_dir(cfg, package_id)
     if folder is None:
         raise HTTPException(status_code=404, detail="Package not found")
@@ -292,7 +299,7 @@ async def rebuild_pdf(package_id: str) -> dict:
 
 @app.delete("/api/packages/{package_id}")
 def delete_package(package_id: str) -> dict:
-    cfg = load_config(force=True)
+    cfg = _load_cfg()
     if not delete_package_dir(cfg, package_id):
         raise HTTPException(status_code=404, detail="Package not found")
     return {"ok": True, "id": package_id}
@@ -419,7 +426,7 @@ def start_hunt(body: HuntRequest) -> dict:
                 status_code=409,
                 detail="Previous hunt is still closing the browser. Try Hunt again in a few seconds.",
             )
-    cfg = load_config(force=True)
+    cfg = _load_cfg()
     cap = hunt_limit(cfg, body.max_jobs)
     run_id = uuid.uuid4().hex[:10]
     sink: queue.Queue = queue.Queue()

@@ -114,11 +114,22 @@ DEFAULT_LINK_HINTS = (
     "myworkdayjobs.com/",
     "smartrecruiters.com/",
     "jobs.workable.com/",
+    "apply.workable.com/",
     "ats.rippling.com/",
     "wellfound.com/jobs/",
     "themuse.com/jobs/",
     "jobs.jobvite.com/",
-    "apply.workable.com/",
+    "icims.com/",
+    "taleo.net/",
+    "successfactors.com/",
+    "bamboohr.com/",
+    "recruitee.com/",
+    "pinpointhq.com/",
+    "breezy.hr/",
+    "teamtailor.com/",
+    "applytojob.com/",
+    "eightfold.ai/",
+    "otta.com/",
 )
 
 DEFAULT_TITLE_SELECTORS = (
@@ -551,7 +562,7 @@ async def _crawl_source(page, cfg: Config, source: dict, delay_ms: int, login_wa
             log.info("No ATS board URLs in hunt.ats_boards — skipping ats source.")
             return []
         listings = []
-        for board_url in urls[:15]:
+        for board_url in urls[:40]:
             if _stopped():
                 break
             listings.extend(
@@ -589,7 +600,7 @@ async def _crawl_google_ats(page, cfg: Config, source: dict, delay_ms: int, logi
     if not ats_ops:
         log.warning("google_ats source has no hunt.sources[].ats / hunt.google_ats operators.")
         return []
-    max_queries = max(1, min(4, int(source.get("max_queries") or 1)))
+    max_queries = max(1, min(8, int(source.get("max_queries") or 1)))
     group_size = max(1, min(8, int(source.get("group_size") or 1)))
     queries = hunt_queries(cfg)[:max_queries]
     location = hunt_location(cfg)
@@ -677,7 +688,7 @@ async def _collect_saved_jobs(page, cfg: Config, delay_ms: int, login_wait: int,
         cap = int(cfg.get("hunt.saved_jobs.max") or max_per)
     except (TypeError, ValueError):
         cap = max_per
-    cap = max(1, min(20, cap))
+    cap = max(1, min(80, cap))
     source = {
         "id": "saved",
         "saved": True,

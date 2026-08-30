@@ -35,7 +35,10 @@ def detect_root() -> Path:
 def _read_yaml(path: Path) -> dict:
     if not path.exists():
         return {}
-    data = yaml.safe_load(path.read_text()) or {}
+    try:
+        data = yaml.safe_load(path.read_text()) or {}
+    except yaml.YAMLError as exc:
+        raise ValueError(f"Invalid YAML in {path.name}: {exc}") from exc
     if not isinstance(data, dict):
         return {}
     return data
