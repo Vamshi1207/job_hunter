@@ -172,7 +172,7 @@ pipeline:
   model: nvidia/nemotron-3-ultra-550b-a55b
   fallback_provider: agy
   fallback_model: gemini-3.1-pro
-  workers: 4                 # parallel tailor jobs (stay under nvidia.rpm)
+  workers: 5                 # parallel tailor jobs (stay under nvidia.rpm)
   llm_timeout_seconds: 600
   nvidia:
     base_url: https://integrate.api.nvidia.com/v1
@@ -196,9 +196,9 @@ hunt:
     # Example: the Greenhouse board token from boards.greenhouse.io/<token>
   ats_boards: []
     # Direct ATS board URLs, used by the `ats` source below
-    # - https://boards.greenhouse.io/acme
-    # - https://jobs.lever.co/acme
-    # - https://jobs.ashbyhq.com/acme
+    - https://boards.greenhouse.io/acme
+    - https://jobs.lever.co/acme
+    - https://jobs.ashbyhq.com/acme
   years_buffer: 2            # skip if JD requires more than years_experience + this
   # Title seniority you will not apply to (unless the same phrase is in target_roles).
   # "staff" skips Staff Engineer; Member of Technical Staff / MTS is still kept.
@@ -240,7 +240,7 @@ hunt:
   # Jobs you saved on LinkedIn/Indeed are treated as matches (fit gates skipped).
   saved_jobs:
     enabled: true
-    max: 5                   # how many saved postings to tailor per hunt
+    max: 50                   # how many saved postings to tailor per hunt
     extra: false             # true = tailor saved jobs in addition to hunt.max_jobs (when that cap is set)
     urls: []                 # empty = LinkedIn my-items/saved-jobs + Indeed saved
   # Official Indeed MCP (https://mcp.indeed.com/claude/mcp) uses OAuth in Cursor.
@@ -291,16 +291,16 @@ hunt:
       url: "https://www.google.com/search?q={dork}&hl=en&num=10"
       max_queries: 1          # how many target_roles to dork (1 keeps CAPTCHA risk down)
       group_size: 1           # 1 = one search per ATS; 3 = OR-clump several site: operators
-      max_results: 8          # job URLs to open per Google results page
+      max_results: 20          # job URLs to open per Google results page
       ats:
         - site:boards.greenhouse.io
         - site:job-boards.greenhouse.io
         - site:jobs.lever.co
         - site:jobs.ashbyhq.com
         - site:myworkdayjobs.com
-        # - site:jobs.workable.com
-        # - site:ats.rippling.com
-        # - site:smartrecruiters.com
+        - site:jobs.workable.com
+        - site:ats.rippling.com
+        - site:smartrecruiters.com
       link_contains:
         - boards.greenhouse.io/
         - job-boards.greenhouse.io/
