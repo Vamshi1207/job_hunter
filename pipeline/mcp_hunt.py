@@ -8,7 +8,7 @@ import re
 from typing import Any
 
 from pipeline.config import Config
-from pipeline.search import html_to_text, target_roles
+from pipeline.search import html_to_text, hunt_queries
 
 log = logging.getLogger(__name__)
 
@@ -193,7 +193,7 @@ async def harvest_mcp_listings(cfg: Config) -> list[dict]:
         log.info("Indeed MCP skipped — install the mcp package, or connect Indeed in Cursor Settings → MCP.")
         return []
 
-    queries = _as_list(cfg.get("hunt.browser.queries")) or (target_roles(cfg)[:1] or ["Software Engineer"])
+    queries = hunt_queries(cfg)
     city = (cfg.get("user.city") or "").strip()
     country = (cfg.get("user.country") or "").strip()
     location = f"{city}, {country}".strip(", ") or country or "Canada"

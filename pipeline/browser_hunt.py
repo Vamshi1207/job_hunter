@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import re
@@ -20,11 +21,13 @@ from pipeline.jobs import (
     is_placeholder_company,
     parse_posting_meta,
 )
-from pipeline.search import html_to_text, target_markets, target_roles
+from pipeline.search import html_to_text, hunt_queries, target_markets, target_roles
 
 log = logging.getLogger(__name__)
 
 _on_listing: ContextVar = ContextVar("on_listing", default=None)
+_on_stage: ContextVar = ContextVar("on_stage", default=None)
+_should_stop: ContextVar = ContextVar("should_stop", default=None)
 
 
 def _notify_listing(item: dict | None) -> None:
@@ -35,6 +38,24 @@ def _notify_listing(item: dict | None) -> None:
         callback(item)
     except Exception:
         log.debug("on_listing failed", exc_info=True)
+
+
+def _notify_stage(line: str) -> None:
+    callback = _on_stage.get()
+    if not callback or not (line or "").strip():
+        return
+    try:
+        callback(line.strip())
+    except Exception:
+        log.debug("on_stage failed", exc_info=True)
+
+
+def _stopped() -> bool:
+    callback = _should_stop.get()
+    try:
+        return bool(callback and callback())
+    except Exception:
+        return False
 
 
 DEFAULT_LINK_HINTS = (
@@ -104,14 +125,6 @@ def _as_list(raw) -> list[str]:
     if isinstance(raw, str):
         return [raw.strip()] if raw.strip() else []
     return [str(item).strip() for item in raw if str(item).strip()]
-
-
-def hunt_queries(cfg: Config) -> list[str]:
-    configured = _as_list(cfg.get("hunt.browser.queries"))
-    if configured:
-        return configured[:4]
-    roles = target_roles(cfg) or ["software engineer"]
-    return roles[:2]
 
 
 def hunt_location(cfg: Config) -> str:
@@ -269,6 +282,24 @@ def _source_name(source: dict) -> str:
     return str(source.get("id") or source.get("name") or "board")
 
 
+def source_label(source: dict) -> str:
+    raw = _source_name(source)
+    key = raw.lower().replace(" ", "_")
+    labels = {
+        "linkedin": "LinkedIn",
+        "indeed": "Indeed",
+        "google": "Google",
+        "google_ats": "Google",
+        "ats": "company boards",
+        "boards": "company boards",
+        "saved": "saved jobs",
+        "desk": "pasted URLs",
+        "greenhouse": "Greenhouse",
+        "lever": "Lever",
+    }
+    return labels.get(key, raw.replace("_", " "))
+
+
 def saved_jobs_enabled(cfg: Config) -> bool:
     raw = cfg.get("hunt.saved_jobs.enabled")
     if raw is None:
@@ -299,7 +330,7 @@ def saved_job_urls(cfg: Config) -> list[str]:
     return urls
 
 
-async def browse_jobs(cfg: Config, on_listing=None) -> list[dict]:
+async def browse_jobs(cfg: Config, on_listing=None, on_stage=None, should_stop=None) -> list[dict]:
     """Open Camoufox, walk saved jobs then configured search/ATS URLs, return listings with JD text."""
     sources = hunt_sources(cfg)
     if not sources and not saved_jobs_enabled(cfg):
@@ -313,35 +344,50 @@ async def browse_jobs(cfg: Config, on_listing=None) -> list[dict]:
 
     delay_ms = int(cfg.get("hunt.browser.page_delay_ms", 1500) or 1500)
     login_wait = int(cfg.get("hunt.browser.login_wait_seconds", 120) or 0)
-    max_per = int(cfg.get("hunt.browser.max_per_source", 12) or 12)
-    max_per = max(1, min(40, max_per))
+    max_per = int(cfg.get("hunt.browser.max_per_source", 40) or 40)
+    max_per = max(1, min(80, max_per))
     launch = _camoufox_launch(cfg)
     log.info(
         "Opening Camoufox (headless=%s, persistent=%s). Sign in if a board asks. Never clicking Apply.",
         launch.get("headless"),
         bool(launch.get("persistent_context")),
     )
-    token = _on_listing.set(on_listing)
+    listing_token = _on_listing.set(on_listing)
+    stage_token = _on_stage.set(on_stage)
+    stop_token = _should_stop.set(should_stop)
     listings: list[dict] = []
     try:
+        if _stopped():
+            return []
+        _notify_stage("Opening job boards")
         async with AsyncCamoufox(**launch) as session:
             page = await session.new_page()
-            if saved_jobs_enabled(cfg):
+            if saved_jobs_enabled(cfg) and not _stopped():
+                _notify_stage("Reading saved jobs")
                 saved = await _collect_saved_jobs(page, cfg, delay_ms, login_wait, max_per)
                 log.info("Saved jobs: %s posting(s)", len(saved))
                 listings.extend(saved)
             for source in sources:
+                if _stopped():
+                    break
                 try:
+                    _notify_stage(f"Searching {source_label(source)}")
                     found = await _crawl_source(page, cfg, source, delay_ms, login_wait, max_per)
                     log.info("Camoufox %s: %s posting(s)", _source_name(source), len(found))
                     listings.extend(found)
+                except asyncio.CancelledError:
+                    raise
                 except Exception as exc:
                     log.warning("Camoufox source %s failed: %s", _source_name(source), exc)
+    except asyncio.CancelledError:
+        raise
     except Exception as exc:
         log.error("Camoufox failed to start: %s. Run python3 -m camoufox fetch", exc)
         return []
     finally:
-        _on_listing.reset(token)
+        _on_listing.reset(listing_token)
+        _on_stage.reset(stage_token)
+        _should_stop.reset(stop_token)
     return listings
 
 
@@ -375,16 +421,21 @@ def _camoufox_launch(cfg: Config) -> dict[str, Any]:
     return launch
 
 
-async def hydrate_job_urls(cfg: Config, urls: list[str], on_listing=None) -> list[dict]:
+async def hydrate_job_urls(cfg: Config, urls: list[str], on_listing=None, on_stage=None, should_stop=None) -> list[dict]:
     """Read company, role, and JD for pasted URLs. LinkedIn/Indeed use Camoufox."""
     from pipeline.jobs import fetch_posting
 
-    token = _on_listing.set(on_listing)
+    listing_token = _on_listing.set(on_listing)
+    stage_token = _on_stage.set(on_stage)
+    stop_token = _should_stop.set(should_stop)
     listings: list[dict] = []
     pending: list[str] = []
     seen: set[str] = set()
     try:
+        _notify_stage(f"Reading {len(urls)} posting(s)")
         for url in urls:
+            if _stopped():
+                return listings
             url = (url or "").strip()
             if not url or url in seen:
                 continue
@@ -404,11 +455,14 @@ async def hydrate_job_urls(cfg: Config, urls: list[str], on_listing=None) -> lis
                 _notify_listing(posting)
             else:
                 pending.append(url)
-        if pending:
+        if pending and not _stopped():
+            _notify_stage("Opening job boards to read postings")
             listings.extend(await _hydrate_with_camoufox(cfg, pending))
         return listings
     finally:
-        _on_listing.reset(token)
+        _on_listing.reset(listing_token)
+        _on_stage.reset(stage_token)
+        _should_stop.reset(stop_token)
 
 
 async def _hydrate_with_camoufox(cfg: Config, urls: list[str]) -> list[dict]:
@@ -426,6 +480,8 @@ async def _hydrate_with_camoufox(cfg: Config, urls: list[str]) -> list[dict]:
         async with AsyncCamoufox(**launch) as session:
             page = await session.new_page()
             for url in urls:
+                if _stopped():
+                    break
                 item = await _extract_posting(page, cfg, source, url, delay_ms)
                 if item:
                     item["source"] = item.get("source") or "desk"
@@ -448,6 +504,8 @@ async def _crawl_source(page, cfg: Config, source: dict, delay_ms: int, login_wa
             return []
         listings = []
         for board_url in urls[:15]:
+            if _stopped():
+                break
             listings.extend(
                 await _collect_from_url(page, cfg, source, board_url, delay_ms, login_wait, max_per)
             )
@@ -464,6 +522,8 @@ async def _crawl_source(page, cfg: Config, source: dict, delay_ms: int, login_wa
     listings = []
     seen = set()
     for query in queries:
+        if _stopped():
+            break
         search_url = fill_search_url(template, cfg, query)
         for item in await _collect_from_url(page, cfg, source, search_url, delay_ms, login_wait, max_per):
             key = (item.get("url") or "").lower()
@@ -490,7 +550,11 @@ async def _crawl_google_ats(page, cfg: Config, source: dict, delay_ms: int, logi
     seen = set()
     per_page = max(1, min(max_per, int(source.get("max_results") or 4)))
     for query in queries:
+        if _stopped():
+            break
         for group in groups:
+            if _stopped():
+                break
             if group_size == 1:
                 dork = build_google_dork(query, group[0], location)
                 extra = {"ats": quote_plus(group[0]), "dork": quote_plus(dork)}
@@ -518,6 +582,8 @@ async def _collect_from_url(
     login_wait: int,
     max_per: int,
 ) -> list[dict]:
+    if _stopped():
+        return []
     log.info("Camoufox open %s", url)
     await page.goto(url, wait_until="domcontentloaded", timeout=60000)
     await page.wait_for_timeout(max(400, delay_ms))
@@ -530,7 +596,11 @@ async def _collect_from_url(
                     "LinkedIn not signed in yet. You can finish Sign in in the Camoufox window. Waiting %ss.",
                     wait,
                 )
-                await page.wait_for_timeout(wait * 1000)
+                _notify_stage("Waiting for LinkedIn sign-in")
+                for _ in range(wait):
+                    if _stopped():
+                        return []
+                    await page.wait_for_timeout(1000)
         await page.goto(url, wait_until="domcontentloaded", timeout=60000)
         await page.wait_for_timeout(max(400, delay_ms))
 
@@ -541,6 +611,8 @@ async def _collect_from_url(
     listings = []
     saved = bool(source.get("saved"))
     for link in links[:max_per]:
+        if _stopped():
+            break
         item = await _extract_posting(page, cfg, source, link, delay_ms)
         if item:
             if saved:

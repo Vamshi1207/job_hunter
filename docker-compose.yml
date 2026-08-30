@@ -10,9 +10,12 @@ services:
       - JOB_SEARCH_ROOT=/app
       - IN_DOCKER=1
       - HOST_PROJECT_ROOT=${PWD}
-      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - NVIDIA_API_KEY=${NVIDIA_API_KEY:-}
       - DISPLAY=:99
       - MOZ_DISABLE_CONTENT_SANDBOX=1
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     shm_size: "2gb"
     security_opt:
       - seccomp:unconfined
@@ -32,9 +35,12 @@ services:
       - JOB_SEARCH_ROOT=/app
       - IN_DOCKER=1
       - HOST_PROJECT_ROOT=${PWD}
-      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - NVIDIA_API_KEY=${NVIDIA_API_KEY:-}
       - DISPLAY=:99
       - MOZ_DISABLE_CONTENT_SANDBOX=1
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     shm_size: "2gb"
     security_opt:
       - seccomp:unconfined

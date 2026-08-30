@@ -42,9 +42,13 @@ def append_tracker(tracker_path: Path, row: str) -> None:
         handle.write(row + "\n")
 
 
-async def process_job(job: dict, fill_form: bool) -> Path | None:
+async def process_job(job: dict, fill_form: bool, on_progress=None) -> Path | None:
     cfg = load_config()
     from pipeline.search import find_existing_package
+
+    def note(msg: str) -> None:
+        if on_progress:
+            on_progress(msg)
 
     existing = find_existing_package(cfg, job)
     if existing is not None:
@@ -70,7 +74,13 @@ async def process_job(job: dict, fill_form: bool) -> Path | None:
 
     for attempt in range(1, max_attempts + 1):
         log.info("Tailor attempt %s/%s", attempt, max_attempts)
-        llm_output = generate_tailored_materials(company, role, jd_text, feedback_history)
+        writing = "Writing CV" if attempt == 1 else "Rewriting CV"
+        if max_attempts > 1:
+            writing = f"{writing} ({attempt}/{max_attempts})"
+        note(writing)
+        llm_output = await asyncio.to_thread(
+            generate_tailored_materials, company, role, jd_text, feedback_history
+        )
         if not llm_output.strip():
             log.error("Empty LLM output on attempt %s", attempt)
             continue
@@ -79,8 +89,12 @@ async def process_job(job: dict, fill_form: bool) -> Path | None:
         if not parsed.get("TITLE") and not parsed.get("SUMMARY"):
             log.error("Could not parse tagged resume output on attempt %s", attempt)
             continue
+        scoring = "Scoring ATS"
+        if max_attempts > 1:
+            scoring = f"{scoring} ({attempt}/{max_attempts})"
+        note(scoring)
         plain = resume_plain_text(parsed)
-        eval_result = evaluate_ats_score(jd_text, plain, source)
+        eval_result = await asyncio.to_thread(evaluate_ats_score, jd_text, plain, source)
         score = int(eval_result.get("score") or 0)
         honesty = int(eval_result.get("honesty") or 0)
         critique = eval_result.get("critique") or "No critique provided."
@@ -108,6 +122,7 @@ async def process_job(job: dict, fill_form: bool) -> Path | None:
         log.error("No usable output for %s — skipping save.", company)
         return None
 
+    note("Saving package")
     output_dir = await save_materials(
         company,
         role,
@@ -115,6 +130,7 @@ async def process_job(job: dict, fill_form: bool) -> Path | None:
         eval_result=best_eval,
         feedback_history=feedback_history,
         job=job,
+        on_progress=on_progress,
     )
 
     pdf_path = output_dir / f"{cfg.cv_stem}.pdf"
@@ -156,7 +172,7 @@ async def async_main(argv: list[str] | None = None) -> int:
         "--max-jobs",
         type=int,
         default=None,
-        help="Cap for --hunt (default hunt.max_jobs in config, usually 5).",
+        help="Safety ceiling for --hunt (default hunt.max_jobs; 0 = every match).",
     )
     parser.add_argument(
         "--fill-form",
@@ -183,8 +199,17 @@ async def async_main(argv: list[str] | None = None) -> int:
         return 1
 
     log.info("Loaded %s job(s) from %s", len(jobs), cfg.jobs_path)
-    for job in jobs:
-        await process_job(job, fill_form=args.fill_form)
+    from pipeline.llm import worker_count
+
+    workers = worker_count(cfg)
+    log.info("Tailoring with %s worker(s)", workers)
+    sem = asyncio.Semaphore(workers)
+
+    async def _one(job: dict) -> None:
+        async with sem:
+            await process_job(job, fill_form=args.fill_form)
+
+    await asyncio.gather(*(_one(job) for job in jobs))
     return 0
 
 

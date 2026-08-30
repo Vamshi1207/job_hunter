@@ -19,7 +19,6 @@ resumes/*
 !resumes/template.example.html
 applications/*
 !applications/.gitkeep
-!applications/_tracker.example.md
 experience-bank/*
 !experience-bank/.gitkeep
 !experience-bank/README.md

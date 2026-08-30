@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any, Callable
 
@@ -12,6 +13,7 @@ from pipeline.search import hunt_limit, search_jobs_async
 log = logging.getLogger(__name__)
 
 OnEvent = Callable[[dict], None]
+_ROW_FIELDS = frozenset({"package_id", "detail"})
 
 
 def row_key(listing: dict) -> tuple[str, str, str]:
@@ -33,31 +35,46 @@ def job_row_event(listing: dict, *, status: str, event_type: str, **extra: Any) 
     }
     payload.update(extra)
     if "line" not in payload:
-        payload["line"] = f"{status}: {company} — {role}"
+        detail = (extra.get("detail") or "").strip()
+        payload["line"] = f"{detail}: {company} — {role}" if detail else f"{status}: {company} — {role}"
     return payload
 
 
 def progress_snapshot(rows: list[dict]) -> dict:
-    ready = working = waiting = skipped = failed = 0
+    ready = working = waiting = skipped = failed = stopped = 0
+    working_details: list[str] = []
     for row in rows:
         status = row.get("status") or ""
         if status == "ready":
             ready += 1
         elif status == "working":
             working += 1
+            detail = (row.get("detail") or "").strip()
+            if detail and detail not in working_details:
+                working_details.append(detail)
         elif status in {"queued", "found"}:
             waiting += 1
         elif status == "skipped":
             skipped += 1
         elif status == "failed":
             failed += 1
-    processed = ready + skipped + failed
+        elif status == "stopped":
+            stopped += 1
+    processed = ready + skipped + failed + stopped
     total = len(rows)
-    line = f"Found {total} · {processed} processed · {working} working · {waiting} waiting"
+    parts = [f"Found {total}", f"{processed} processed"]
+    if working_details:
+        parts.append(" · ".join(working_details))
+    elif working:
+        parts.append(f"{working} tailoring")
+    if waiting:
+        parts.append(f"{waiting} waiting")
     if skipped:
-        line += f" · {skipped} skipped"
+        parts.append(f"{skipped} skipped")
     if failed:
-        line += f" · {failed} failed"
+        parts.append(f"{failed} failed")
+    if stopped:
+        parts.append(f"{stopped} stopped")
     return {
         "type": "progress",
         "found": total,
@@ -66,8 +83,9 @@ def progress_snapshot(rows: list[dict]) -> dict:
         "waiting": waiting,
         "skipped": skipped,
         "failed": failed,
+        "stopped": stopped,
         "processed": processed,
-        "line": line,
+        "line": " · ".join(parts),
     }
 
 
@@ -100,9 +118,18 @@ class JobProgress:
         return row
 
     def _push(self, listing: dict, *, status: str, event_type: str, **extra: Any) -> None:
-        self._upsert(listing, status, **{k: v for k, v in extra.items() if k in {"package_id"}})
+        fields = {k: v for k, v in extra.items() if k in _ROW_FIELDS}
+        if status != "working":
+            fields["detail"] = extra.get("detail") or ""
+        self._upsert(listing, status, **fields)
         self._emit(job_row_event(listing, status=status, event_type=event_type, **extra))
         self._emit(progress_snapshot(self.rows))
+
+    def stage(self, line: str) -> None:
+        text = (line or "").strip()
+        if not text:
+            return
+        self._emit({"type": "hunt_stage", "line": text, "detail": text})
 
     def found(self, listing: dict) -> None:
         company, role, _url = row_key(listing)
@@ -112,6 +139,20 @@ class JobProgress:
             listing,
             status="found",
             event_type="found",
+            line=f"Found {company} — {role}",
+        )
+
+    def enqueue(self, listing: dict) -> None:
+        company, role, _url = row_key(listing)
+        if not company and not role:
+            return
+        existing = next((row for row in self.rows if row_key(row) == row_key(listing)), None)
+        if existing and existing.get("status") not in {"found", "queued"}:
+            return
+        self._push(
+            listing,
+            status="queued",
+            event_type="queued",
             line=f"Found {company} — {role}",
         )
 
@@ -138,13 +179,17 @@ class JobProgress:
         )
         self._emit(progress_snapshot(self.rows))
 
-    def working(self, listing: dict) -> None:
+    def working(self, listing: dict, detail: str | None = None) -> None:
         company, role, _url = row_key(listing)
+        step = (detail or "Writing CV").strip() or "Writing CV"
+        existing = next((row for row in self.rows if row_key(row) == row_key(listing)), None)
+        first = not existing or existing.get("status") != "working"
         self._push(
             listing,
             status="working",
             event_type="processing",
-            line=f"Starting tailor for {company} — {role}",
+            detail=step,
+            line=f"{step}: {company} — {role}" if first else "",
         )
 
     def ready(self, listing: dict, package_id: str, *, skipped: bool = False) -> None:
@@ -166,6 +211,40 @@ class JobProgress:
     def failed(self, listing: dict, line: str) -> None:
         self._push(listing, status="failed", event_type="failed", line=line)
 
+    def stopped(self, listing: dict) -> None:
+        company, role, _url = row_key(listing)
+        self._push(
+            listing,
+            status="stopped",
+            event_type="stopped",
+            line=f"Stopped: {company} — {role}",
+            detail="",
+        )
+
+    def stop_unfinished(self) -> None:
+        for row in list(self.rows):
+            if row.get("status") in {"found", "queued", "working"}:
+                self.stopped(row)
+
+
+def _is_stopped(should_stop) -> bool:
+    try:
+        return bool(should_stop and should_stop())
+    except Exception:
+        return False
+
+
+def _job_from_listing(listing: dict) -> dict:
+    return {
+        "company": listing["company"],
+        "role": listing["role"],
+        "url": listing.get("url") or "",
+        "location": listing.get("location") or "",
+        "jd": listing["jd"],
+        "channel": "saved" if listing.get("saved") else "hunt",
+        "source": listing.get("source") or ("saved" if listing.get("saved") else "hunt"),
+    }
+
 
 async def hunt_and_tailor(
     cfg: Config,
@@ -173,39 +252,85 @@ async def hunt_and_tailor(
     fill_form: bool = False,
     max_jobs: int | None = None,
     on_event=None,
+    should_stop=None,
 ) -> list[dict]:
-    """Find matching postings and run the same tailor path used by the desk and CLI."""
+    """Search and tailor in parallel: each match is queued as soon as it passes fit gates."""
+    from pipeline.llm import worker_count
     from pipeline.run_pipeline import process_job
     from pipeline.search import find_existing_package
 
     board = JobProgress(on_event)
-
-    def on_listing(item: dict) -> None:
-        board.found(item)
-
-    listings = await search_jobs_async(cfg, limit=max_jobs, on_listing=on_listing if on_event else None)
-    cap = hunt_limit(cfg, max_jobs)
-    if not listings:
-        board.queue([])
-        log.warning(
-            "Hunt found no matching postings (cap %s). Check hunt.sources, Camoufox login, and fit filters.",
-            cap,
-        )
-        return []
-
-    log.info("Hunt selected %s posting(s) to tailor (cap %s).", len(listings), cap)
-    board.queue(listings)
     results: list[dict] = []
-    for listing in listings:
-        job = {
-            "company": listing["company"],
-            "role": listing["role"],
-            "url": listing.get("url") or "",
-            "location": listing.get("location") or "",
-            "jd": listing["jd"],
-            "channel": "saved" if listing.get("saved") else "hunt",
-            "source": listing.get("source") or ("saved" if listing.get("saved") else "hunt"),
+    work: asyncio.Queue = asyncio.Queue()
+    workers_n = worker_count(cfg)
+    sem = asyncio.Semaphore(workers_n)
+
+    def empty_result(job: dict) -> dict:
+        return {
+            "company": job["company"],
+            "role": job["role"],
+            "url": job["url"],
+            "package_id": None,
         }
+
+    async def _tailor(job: dict) -> dict:
+        async with sem:
+            if _is_stopped(should_stop):
+                board.stopped(job)
+                return empty_result(job)
+            board.working(job, "Writing CV")
+            try:
+                output_dir = await process_job(
+                    job,
+                    fill_form=fill_form,
+                    on_progress=lambda msg, current=job: board.working(current, msg),
+                )
+            except asyncio.CancelledError:
+                board.stopped(job)
+                return empty_result(job)
+            except Exception as exc:
+                log.exception("Tailor failed for %s — %s", job["company"], job["role"])
+                board.failed(job, str(exc))
+                return empty_result(job)
+            if output_dir:
+                try:
+                    append_job(cfg, job)
+                except Exception as exc:
+                    log.warning("Could not append jobs.yaml: %s", exc)
+                board.ready(job, output_dir.name)
+            else:
+                board.failed(job, f"No package for {job['company']} — {job['role']}")
+            return {
+                "company": job["company"],
+                "role": job["role"],
+                "url": job["url"],
+                "package_id": output_dir.name if output_dir else None,
+            }
+
+    async def _worker() -> None:
+        while True:
+            job = await work.get()
+            try:
+                if job is None:
+                    return
+                if _is_stopped(should_stop):
+                    board.stopped(job)
+                    results.append(empty_result(job))
+                    continue
+                results.append(await _tailor(job))
+            except asyncio.CancelledError:
+                if job:
+                    board.stopped(job)
+                raise
+            finally:
+                work.task_done()
+
+    def submit(listing: dict) -> None:
+        if _is_stopped(should_stop):
+            board.stopped(listing)
+            return
+        board.enqueue(listing)
+        job = _job_from_listing(listing)
         log.info("Hunt: %s — %s (%s)", job["company"], job["role"], job["url"] or "no url")
         prior = find_existing_package(cfg, job)
         if prior:
@@ -219,23 +344,55 @@ async def hunt_and_tailor(
                     "package_id": prior.name,
                 }
             )
-            continue
-        board.working(job)
-        output_dir = await process_job(job, fill_form=fill_form)
-        if output_dir:
-            try:
-                append_job(cfg, job)
-            except Exception as exc:
-                log.warning("Could not append jobs.yaml: %s", exc)
-            board.ready(job, output_dir.name)
-        else:
-            board.failed(job, f"No package for {job['company']} — {job['role']}")
-        results.append(
-            {
-                "company": job["company"],
-                "role": job["role"],
-                "url": job["url"],
-                "package_id": output_dir.name if output_dir else None,
-            }
+            return
+        work.put_nowait(job)
+
+    if _is_stopped(should_stop):
+        board.stage("Hunt stopped")
+        return []
+
+    worker_tasks = [asyncio.create_task(_worker()) for _ in range(workers_n)]
+    cancelled = False
+    try:
+        log.info("Tailoring matches as they are found (%s worker(s))", workers_n)
+        listings = await search_jobs_async(
+            cfg,
+            limit=max_jobs,
+            on_listing=submit,
+            on_stage=board.stage if on_event else None,
+            should_stop=should_stop,
         )
+        if not listings and not board.rows:
+            log.warning(
+                "Hunt found no matching postings. Check hunt.sources, Camoufox login, and fit filters."
+            )
+        elif hunt_limit(cfg, max_jobs):
+            log.info("Hunt queued %s matching posting(s).", len(listings))
+        else:
+            log.info("Hunt queued every matching posting (%s).", len(listings))
+        if _is_stopped(should_stop):
+            board.stage("Hunt stopped")
+            while True:
+                try:
+                    leftover = work.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+                if leftover:
+                    board.stopped(leftover)
+                work.task_done()
+            board.stop_unfinished()
+    except asyncio.CancelledError:
+        cancelled = True
+        board.stage("Hunt stopped")
+        board.stop_unfinished()
+        for task in worker_tasks:
+            task.cancel()
+        raise
+    finally:
+        if not cancelled:
+            for _ in range(workers_n):
+                await work.put(None)
+            await asyncio.gather(*worker_tasks, return_exceptions=True)
+        else:
+            await asyncio.gather(*worker_tasks, return_exceptions=True)
     return results

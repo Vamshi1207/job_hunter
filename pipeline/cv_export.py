@@ -2,7 +2,14 @@
 
 from __future__ import annotations
 
+import json
 import logging
+import os
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.request
 import zipfile
 from pathlib import Path
 
@@ -11,10 +18,13 @@ from bs4 import BeautifulSoup, Tag
 log = logging.getLogger(__name__)
 
 SKIP_TAGS = {"script", "style", "head", "meta", "link", "title"}
+PAGES_HELPER_DEFAULT = "http://host.docker.internal:8765"
+_HELPER_OK: bool | None = None
+_HELPER_OK_UNTIL = 0.0
 
 
 def write_editable_exports(html_path: Path, pdf_path: Path | None = None) -> dict[str, Path]:
-    """Write .docx and .pages next to the HTML resume. Returns paths that exist."""
+    """Write .docx and a native .pages file next to the HTML resume. Returns paths that exist."""
     html_path = Path(html_path)
     if not html_path.is_file():
         return {}
@@ -28,10 +38,11 @@ def write_editable_exports(html_path: Path, pdf_path: Path | None = None) -> dic
     except Exception as exc:
         log.warning("Word export failed for %s: %s", html_path.name, exc)
     try:
-        html_to_pages(html_path, pages_path, pdf_path=pdf_path)
-        written["pages"] = pages_path
+        html_to_pages(html_path, pages_path, pdf_path=pdf_path, docx_path=docx_path)
     except Exception as exc:
         log.warning("Pages export failed for %s: %s", html_path.name, exc)
+    if is_native_pages(pages_path):
+        written["pages"] = pages_path
     return written
 
 
@@ -39,23 +50,32 @@ def ensure_package_exports(folder: Path) -> dict[str, str | None]:
     """Create missing Word/Pages files for an application folder. Safe to call on list."""
     folder = Path(folder)
     html = next(iter(sorted(folder.glob("*_CV.html"))), None)
-    pdf = next(iter(sorted(folder.glob("*_CV.pdf"))), None)
     names = {
         "html_name": html.name if html else None,
         "docx_name": None,
         "pages_name": None,
     }
-    if html:
-        write_editable_exports(html, pdf if pdf and pdf.is_file() else None)
-        docx = html.with_suffix(".docx")
-        pages = Path(str(html.with_suffix("")) + ".pages")
-        names["docx_name"] = docx.name if docx.is_file() else None
-        names["pages_name"] = pages.name if pages.is_file() else None
-    else:
-        docx = next(iter(sorted(folder.glob("*_CV.docx"))), None)
-        pages = next(iter(sorted(folder.glob("*_CV.pages"))), None)
-        names["docx_name"] = docx.name if docx else None
-        names["pages_name"] = pages.name if pages else None
+    docx = html.with_suffix(".docx") if html else next(iter(sorted(folder.glob("*_CV.docx"))), None)
+    pages = Path(str(html.with_suffix("")) + ".pages") if html else next(iter(sorted(folder.glob("*_CV.pages"))), None)
+    if is_fake_pages(pages):
+        try:
+            Path(pages).unlink()
+        except OSError:
+            pass
+    if html and (not docx or not Path(docx).is_file()):
+        try:
+            html_to_docx(html, Path(docx))
+        except Exception as exc:
+            log.warning("Word export failed for %s: %s", html.name, exc)
+    if html and docx and Path(docx).is_file() and not is_native_pages(pages):
+        try:
+            html_to_pages(html, Path(pages), docx_path=Path(docx))
+        except Exception as exc:
+            log.warning("Pages export failed for %s: %s", html.name, exc)
+    if docx and Path(docx).is_file():
+        names["docx_name"] = Path(docx).name
+    if is_native_pages(pages):
+        names["pages_name"] = Path(pages).name
     return names
 
 
@@ -160,29 +180,162 @@ def html_to_docx(html_path: Path, docx_path: Path) -> None:
     doc.save(str(docx_path))
 
 
-def html_to_pages(html_path: Path, pages_path: Path, pdf_path: Path | None = None) -> None:
-    """Write a .pages zip Pages on macOS can open (HTML + preview PDF + Word inside)."""
-    html = html_path.read_text(encoding="utf-8")
+def html_to_pages(
+    html_path: Path,
+    pages_path: Path,
+    pdf_path: Path | None = None,
+    docx_path: Path | None = None,
+) -> None:
+    """Write a native Pages document by asking Pages.app to save the Word copy."""
+    del pdf_path  # preview lives inside the Word file; Pages.app builds its own
+    pages_path = Path(pages_path)
+    if is_native_pages(pages_path):
+        return
+    if is_fake_pages(pages_path):
+        pages_path.unlink()
+    docx_path = Path(docx_path) if docx_path else Path(html_path).with_suffix(".docx")
+    if not docx_path.is_file():
+        html_to_docx(Path(html_path), docx_path)
+    docx_to_pages(docx_path, pages_path)
+
+
+def is_native_pages(path: Path | None) -> bool:
+    """True when the file is a real Pages document (IWA), not a renamed zip of HTML."""
+    if path is None:
+        return False
+    path = Path(path)
+    if path.is_dir():
+        return (path / "Index" / "Document.iwa").is_file()
+    if not path.is_file():
+        return False
+    try:
+        with zipfile.ZipFile(path) as zf:
+            names = zf.namelist()
+    except (OSError, zipfile.BadZipFile):
+        return False
+    return any(name == "Index/Document.iwa" or name.endswith("/Document.iwa") for name in names)
+
+
+def is_fake_pages(path: Path | None) -> bool:
+    """True when a .pages zip exists but Pages.app cannot open it."""
+    if path is None:
+        return False
+    path = Path(path)
+    if not path.is_file() or is_native_pages(path):
+        return False
+    try:
+        with zipfile.ZipFile(path) as zf:
+            names = set(zf.namelist())
+    except (OSError, zipfile.BadZipFile):
+        return True
+    return "Index/Document.iwa" not in names and not any(n.endswith("/Document.iwa") for n in names)
+
+
+def docx_to_pages(docx_path: Path, pages_path: Path) -> None:
+    """Convert Word to native Pages via Pages.app (Mac) or the host helper (Docker)."""
+    if os.environ.get("JOB_SEARCH_SKIP_PAGES_APP", "").lower() in {"1", "true", "yes"}:
+        raise RuntimeError("Pages export skipped")
+    docx_path = Path(docx_path)
+    pages_path = Path(pages_path)
+    if not docx_path.is_file():
+        raise FileNotFoundError(docx_path)
+    if _pages_app_enabled():
+        docx_to_pages_via_app(docx_path, pages_path)
+        return
+    helper = (os.environ.get("JOB_SEARCH_PAGES_HELPER") or "").strip()
+    if not helper and _in_docker():
+        helper = PAGES_HELPER_DEFAULT
+    if helper and _helper_available(helper):
+        _docx_to_pages_via_helper(helper, docx_path, pages_path)
+        return
+    raise RuntimeError("Pages.app is not available in this environment")
+
+
+def docx_to_pages_via_app(docx_path: Path, pages_path: Path) -> None:
+    """Open a Word file in Pages.app and save it as a native .pages document."""
+    docx_path = Path(docx_path).resolve()
+    pages_path = Path(pages_path).resolve()
     pages_path.parent.mkdir(parents=True, exist_ok=True)
-    with zipfile.ZipFile(pages_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr("index.html", html)
-        zf.writestr("Resume.html", html)
-        zf.writestr(
-            "Metadata/Properties.plist",
-            (
-                '<?xml version="1.0" encoding="UTF-8"?>\n'
-                '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" '
-                '"http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n'
-                '<plist version="1.0"><dict>'
-                "<key>title</key><string>Resume</string>"
-                "</dict></plist>\n"
-            ),
-        )
-        if pdf_path and Path(pdf_path).is_file():
-            zf.write(pdf_path, "QuickLook/Preview.pdf")
-        docx_path = html_path.with_suffix(".docx")
-        if docx_path.is_file():
-            zf.write(docx_path, "Document.docx")
+    if pages_path.exists():
+        if pages_path.is_dir():
+            raise RuntimeError(f"Refusing to replace directory {pages_path}")
+        pages_path.unlink()
+    src = _applescript_posix(docx_path)
+    dest = _applescript_posix(pages_path)
+    script = (
+        f'set src to POSIX file "{src}"\n'
+        f'set dest to POSIX file "{dest}"\n'
+        "tell application \"Pages\"\n"
+        "  set theDoc to open src\n"
+        "  delay 1\n"
+        "  close theDoc saving in dest\n"
+        "end tell\n"
+    )
+    subprocess.run(["osascript", "-e", script], check=True, timeout=90, capture_output=True)
+    if not is_native_pages(pages_path):
+        raise RuntimeError(f"Pages.app did not write a native document at {pages_path}")
+
+
+def _pages_app_enabled() -> bool:
+    if os.environ.get("JOB_SEARCH_SKIP_PAGES_APP", "").lower() in {"1", "true", "yes"}:
+        return False
+    if _in_docker() or sys.platform != "darwin":
+        return False
+    return Path("/Applications/Pages.app").is_dir()
+
+
+def _in_docker() -> bool:
+    return os.environ.get("IN_DOCKER") == "1" or Path("/.dockerenv").exists()
+
+
+def _applescript_posix(path: Path) -> str:
+    return str(path).replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _host_path(path: Path) -> str:
+    host_root = (os.environ.get("HOST_PROJECT_ROOT") or "").strip()
+    job_root = (os.environ.get("JOB_SEARCH_ROOT") or "").strip()
+    resolved = path.resolve()
+    if host_root and job_root:
+        try:
+            rel = resolved.relative_to(Path(job_root).resolve())
+            return str(Path(host_root) / rel)
+        except ValueError:
+            pass
+    return str(resolved)
+
+
+def _helper_available(helper: str) -> bool:
+    global _HELPER_OK, _HELPER_OK_UNTIL
+    now = time.monotonic()
+    if _HELPER_OK is not None and now < _HELPER_OK_UNTIL:
+        return _HELPER_OK
+    try:
+        urllib.request.urlopen(helper.rstrip("/") + "/health", timeout=0.4)
+        _HELPER_OK = True
+        _HELPER_OK_UNTIL = now + 60
+    except Exception:
+        _HELPER_OK = False
+        _HELPER_OK_UNTIL = now + 15
+    return _HELPER_OK
+
+
+def _docx_to_pages_via_helper(helper: str, docx_path: Path, pages_path: Path) -> None:
+    url = helper.rstrip("/") + "/pages"
+    payload = json.dumps(
+        {"docx": _host_path(docx_path), "pages": _host_path(pages_path)}
+    ).encode()
+    req = urllib.request.Request(
+        url, data=payload, method="POST", headers={"Content-Type": "application/json"}
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=90) as resp:
+            if resp.status >= 400:
+                raise RuntimeError(f"Pages helper HTTP {resp.status}")
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"Pages helper unreachable at {url}: {exc}") from exc
+    if not is_native_pages(pages_path):
+        raise RuntimeError("Pages helper did not write a native document")
 
 
 def _text(el) -> str:

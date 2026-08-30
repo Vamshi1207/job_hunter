@@ -3,7 +3,7 @@
 Turns a job description into a tailored CV PDF, cover letter, LinkedIn DM, and a paste-by-field playbook. It only rewrites experience that is already in your master CV and experience bank. **It never clicks Submit.**
 
 ```
-jobs.yaml / hunt / pasted URL  →  tailor (agy / Gemini)  →  honesty critic  →  HTML → PDF
+jobs.yaml / hunt / pasted URL  →  tailor (Nemotron, gpt-oss, then agy)  →  honesty critic  →  HTML → PDF
                                                                       ↓
                                          applications/<company>-<role>-<date>/
 ```
@@ -15,7 +15,10 @@ Runtime map (Archify, pinned to commit `0ce6138`): open [`docs/architecture/job-
 ## Prerequisites
 
 - Docker + Docker Compose
-- LLM auth: **either** `agy auth login` on the host (compose mounts `~/.gemini`) **or** `GEMINI_API_KEY` in the environment (see `.env.example`)
+- An LLM key in `.env` (copy from `.env.example`):
+  - **`NVIDIA_API_KEY`** — primary. Create one at [build.nvidia.com](https://build.nvidia.com/) (NIM, `https://integrate.api.nvidia.com/v1`). Tailor tries Nemotron Ultra, then `openai/gpt-oss-120b`, then agy.
+  - **`GEMINI_API_KEY`** or `agy auth login` — last backup. The image already includes the agy CLI; Compose mounts `~/.gemini` if you logged in on the host.
+- Optional on macOS: Pages.app, if you want native `.pages` files (Word still works without it)
 
 ## How configuration is loaded
 
@@ -29,7 +32,7 @@ Never commit `config.yaml`. It may contain your LinkedIn password.
 ## First-time setup
 
 ```bash
-git clone git@github.com:YOUR_USER/job_hunter.git
+git clone https://github.com/Vamshi1207/job_hunter.git
 cd job_hunter
 
 cp config.example.yaml config.yaml
@@ -40,12 +43,11 @@ cp memory/project.template.md memory/project.md
 cp memory/feedback.template.md memory/feedback.md
 cp experience-bank/example-project.md experience-bank/YOUR-EMPLOYER.md
 cp experience-bank/about-variants.example.md experience-bank/about-variants.md
-cp applications/_tracker.example.md applications/_tracker.md   # optional
-cp .env.example .env                                           # optional; or use agy login
+cp .env.example .env
 mkdir -p .cursor && cp .cursor/mcp.example.json .cursor/mcp.json   # optional Indeed MCP in Cursor
 ```
 
-Then edit the copies. Minimum to get a PDF: `config.yaml` (name + `experience.jobs`), `cv_master.md`, and `resumes/template.html`. Hunt also needs `career.target_roles`, `career.target_markets`, and LinkedIn login if you hunt LinkedIn.
+Then edit the copies. Put your NVIDIA (and optional Gemini) keys in `.env`. Minimum to get a PDF: `config.yaml` (name + `experience.jobs`), `cv_master.md`, `resumes/template.html`, and at least one LLM key. Hunt also needs `career.target_roles`, `career.target_markets`, and LinkedIn login if you hunt LinkedIn. `applications/_tracker.md` is created automatically after the first successful tailor.
 
 ### Personal files (gitignored) and their examples
 
@@ -58,11 +60,10 @@ Then edit the copies. Minimum to get a PDF: `config.yaml` (name + `experience.jo
 | `memory/project.md` | `memory/project.template.md` | Recommended | Profile narrative, visa wording, positioning. Loaded into the tailor prompt. Keep in sync with `config.yaml` `user` / `visa` / `career`. |
 | `memory/feedback.md` | `memory/feedback.template.md` | Recommended | Writing rules. Add a rule whenever you correct a draft so the next tailor does not repeat it. |
 | `experience-bank/*.md` | `experience-bank/example-project.md`, `about-variants.example.md` | Recommended | Alternate bullets per employer/project. Filenames with `example` are skipped by the tailor. |
-| `applications/_tracker.md` | `applications/_tracker.example.md` | Optional | Status table. Created/appended automatically after a successful tailor. |
-| `.env` | `.env.example` | If no agy login | `GEMINI_API_KEY=...`. Export it before Compose, or `set -a; source .env; set +a`. |
+| `applications/_tracker.md` | (created at runtime) | Optional | Status table. Written automatically after a successful tailor. |
+| `.env` | `.env.example` | **Yes for NVIDIA / Gemini** | `NVIDIA_API_KEY` and optional `GEMINI_API_KEY`. Compose reads this file and injects the keys into the container. |
 | `.cursor/mcp.json` | `.cursor/mcp.example.json` | Optional | Indeed MCP URL for Cursor. OAuth is in Cursor Settings → MCP. Desk hunt continues with Camoufox if OAuth is missing. |
 | `.camoufox-profile/` | (created at runtime) | Auto | Browser cookies. Gitignored. Re-login if you delete it. |
-| `cv_master.tex` | `cv_master.tex.example` | No | Legacy TeX master. The Docker pipeline uses HTML + Playwright (`cv_format.engine: html-playwright`). |
 
 `applications/<company>-<role>-<date>/` is also gitignored. That is output, not input.
 
@@ -88,11 +89,12 @@ Open `config.example.yaml` for every key and comment. Below is what people actua
 | `career.stage` | Tone | `junior` \| `mid` \| `senior` \| `career-changer` \| `academic`. |
 | `career.years_experience` | Hunt fit gate | Skip JDs that require more than this plus `hunt.years_buffer` (default 2). |
 | `career.target_markets` | Hunt location | e.g. `Canada`. |
-| `career.target_roles` | Hunt queries + title allowlist | Exact titles you want. Seniority in `hunt.exclude_levels` is skipped unless the same phrase is here. |
-| `hunt.max_jobs` | Desk “Hunt from profile” | Cap per hunt. |
-| `hunt.exclude_levels` | Title filter | e.g. intern, junior, staff, principal. |
-| `hunt.exclude_title_tokens` | Title filter | e.g. manager, director. |
-| `hunt.preferred_skills` | Ranking | Boost Python/Kafka/… if they appear in the JD. |
+| `career.target_roles` | Hunt queries (fallback) + title boost | Used in search keywords if `hunt.browser.queries` is empty. Titles do not have to match exactly; the JD stack decides keep/drop. |
+| `hunt.max_jobs` | Desk “Hunt from profile” | `0` = tailor every match. A positive number is a safety ceiling, not a “best N” rank. |
+| `hunt.exclude_levels` | Title veto | e.g. intern, junior, principal. `staff` still skips Staff Engineer; “Member of Technical Staff” / MTS is kept. |
+| `hunt.exclude_title_tokens` | Title veto | e.g. manager, director, QA. |
+| `hunt.browser.queries` | Board keywords | Skill-first searches (e.g. `python`) so odd titles still appear. Empty = first preferred skill + first target role. |
+| `hunt.preferred_skills` | JD keep | After the posting text loads, at least one of these must appear. |
 | `hunt.reject_skills` | JD filter | Drop roles that require a skill you will not use (example: `java`). |
 | `hunt.exclude_companies` | Search **and** saved jobs | Current/former employers you will not apply to. Add brand aliases if a board uses a shorter name. |
 | `hunt.saved_jobs` | LinkedIn/Indeed saved | Treated as matches (fit gates skipped) unless the company is excluded. |
@@ -120,23 +122,40 @@ If you add a fourth job, add a `JOB4` block in **both** `config.yaml` and `resum
 
 | Key | Why |
 |---|---|
-| `pipeline.model` | `agy` model (default `gemini-3.1-pro`). |
+| `pipeline.provider` | `nvidia` (NIM API) or `agy` (Gemini CLI). |
+| `pipeline.model` | Primary NIM model (default Nemotron Ultra). |
+| `pipeline.nvidia.fallback_model` | Second NIM model if Nemotron fails (default `openai/gpt-oss-120b`). |
+| `pipeline.fallback_provider` / `fallback_model` | Last resort after both NIM models (default `agy` / `gemini-3.1-pro`). |
+| `pipeline.workers` | Parallel tailor jobs (default 4). Shared 40 req/min NVIDIA cap. |
+| `pipeline.nvidia.rpm` | NVIDIA rate limit (default 40). |
 | `pipeline.ats_threshold` | Stop when score **and** honesty meet this (default 80). |
 | `pipeline.max_attempts` | Tailor/critic loops (default 3). |
 | `pipeline.auto_apply` | Leave `false`. `--fill-form` still never clicks Submit. |
 
 ## Desk UI (Docker)
 
+From the repo root (Compose loads `.env` automatically):
+
 ```bash
-# optional: export GEMINI_API_KEY from .env
 docker compose up ui --build
 ```
 
-Open [http://127.0.0.1:8000](http://127.0.0.1:8000). Rows appear as Camoufox finds postings, then each row updates (Found → Waiting → Working → Ready). Counts show found / processed / still working. Already tailored company/role or job URL combinations are skipped.
+Open [http://127.0.0.1:8000](http://127.0.0.1:8000).
 
-1. Click **Hunt from profile**. Camoufox runs in the container. LinkedIn may need a one-time sign-in in that session (cookies live in `.camoufox-profile/`). Apply/Submit is never clicked.
-2. The table lists job name, company, status, **PDF**, **Edit** (Word / HTML / Pages), and the posting link. **Delete** removes that `applications/<folder>/`. Click a row for score, cover letter, and playbook.
-3. Optional: expand **Add postings by URL**. Paste one or more job links (one per line). Paste the **job description** to tailor from that text (used with a single URL).
+1. **Add postings by URL** is at the top of the desk. Paste one or more job links (one per line). Paste the **job description** to tailor from that text (used with a single URL).
+2. Click **Hunt from profile**. Camoufox runs in the container. Each posting is tailored as soon as it matches; search keeps adding more. **Stop** cancels search and skips jobs not yet started. LinkedIn may need a one-time sign-in in that session (cookies live in `.camoufox-profile/`). Apply/Submit is never clicked.
+3. Status on each row is the current step (searching, Writing CV, Scoring ATS, Building PDF, Ready, Stopped, …), not a generic “working”. Already tailored company/role or job URL combinations are skipped.
+4. The table lists job name, company, status, **PDF**, **Edit** (Word / HTML / Pages / **Rebuild PDF**), and the posting link. Edit the HTML in Cursor, then **Rebuild PDF**. **Delete** removes that `applications/<folder>/`. Click a row for score, cover letter, and playbook.
+
+Python pipeline changes need a container restart (`docker compose up -d ui` or `--build` after `requirements.txt` / Dockerfile changes). HTML/CSS/JS update from the bind mount without a rebuild.
+
+Native `.pages` files are written by Pages.app on the Mac. From another terminal:
+
+```bash
+python3 scripts/macos_pages_helper.py
+```
+
+That converts existing Word CVs and keeps listening so Docker hunts can save real Pages files. Word still opens in Pages if the helper is not running.
 
 ### How hunt runs in Docker
 
@@ -177,7 +196,7 @@ applications/<company>-<role>-<YYYY-MM-DD>/
 ├── <Your_Name>_CV.pdf      ← upload this
 ├── <Your_Name>_CV.html     ← editable
 ├── <Your_Name>_CV.docx     ← Word
-├── <Your_Name>_CV.pages    ← Pages package (HTML + Word + PDF preview)
+├── <Your_Name>_CV.pages    ← Pages (native; needs Pages.app on the Mac)
 ├── <Your_Name>_CV_changes.md
 ├── cover_letter.md
 ├── linkedin_dm.txt
@@ -189,8 +208,16 @@ applications/<company>-<role>-<YYYY-MM-DD>/
 
 ## Tests (no LLM)
 
+From the host (Python 3.10+):
+
 ```bash
 python3 -m unittest pipeline.test_pipeline
+```
+
+Or inside Docker:
+
+```bash
+docker compose run --rm --profile batch pipeline python3 -m unittest pipeline.test_pipeline
 ```
 
 ## Cursor skills
@@ -201,12 +228,11 @@ Skills `job-hunt` and `cv-tailor` use the same `config.yaml`, master CV, bank, a
 
 What landed since the last published `main`:
 
-- **Live hunt table**: rows appear as postings are found; status and found/processed/waiting counts update one job at a time.
-- **Edit downloads**: Word, HTML, and Pages next to the PDF. **Delete** removes the `applications/` folder.
-- **Skip non-jobs**: Indeed salary/career-explorer pages and LinkedIn search URLs are not tailored.
-- **Docker-only desk** at port 8000: hunt, tailor, live SSE table, inline PDF.
-- **Hunt from profile** via Camoufox: LinkedIn, Indeed, Google ATS dorks, optional saved jobs, `exclude_companies` / years / level / skill gates.
-- **Manual intake**: URLs (one per line) plus an optional job-description field; pasted JD is the tailor source for a single URL.
-- **Skip already processed** company/role or job URL; live strip says so.
-- **Gitignored personal files** all have tracked examples (`config.example.yaml`, `cv_master.example.md`, `jobs.example.yaml`, `resumes/template.example.html`, memory templates, experience-bank examples, `.env.example`, `.cursor/mcp.example.json`). Copy them once; never commit `config.yaml` (it may hold a LinkedIn password).
-- **Camoufox in Docker**: entrypoint Xvfb, virtual display, and seccomp/sandbox flags so Firefox can actually launch in the container.
+- **Streamed hunt**: tailor starts as soon as a posting matches; search keeps adding jobs. **Stop** cancels the rest.
+- **Live step status**: Writing CV, Scoring ATS, Building PDF, Searching LinkedIn, Stopped — not a generic Working label.
+- **LLM chain**: NVIDIA Nemotron → `openai/gpt-oss-120b` → agy/Gemini. Put `NVIDIA_API_KEY` in `.env`.
+- **URL form** at the top of the desk; **Rebuild PDF** after HTML edits; native Pages via `scripts/macos_pages_helper.py`.
+- **Fit gates, not ranking**: `hunt.max_jobs: 0` tailors every match. JD stack decides keep/drop; titles are vetoes only.
+- **Live hunt table**, Word/HTML/Pages downloads, skip salary/search pages, skip already processed company/role or URL.
+- **Docker-only desk** at port 8000. Camoufox needs the entrypoint Xvfb and seccomp flags in `docker-compose.yml`.
+- **Gitignored personal files** have tracked examples (`config.example.yaml`, `cv_master.example.md`, `jobs.example.yaml`, `resumes/template.example.html`, memory templates, experience-bank examples, `.env.example`, `.cursor/mcp.example.json`). Copy them once; never commit `config.yaml` (it may hold a LinkedIn password). `applications/_tracker.md` is created at runtime.

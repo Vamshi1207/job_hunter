@@ -53,15 +53,17 @@ def target_markets(cfg: Config) -> list[str]:
     return [str(item).strip() for item in raw if str(item).strip()]
 
 
-def hunt_limit(cfg: Config, override: int | None = None) -> int:
+def hunt_limit(cfg: Config, override: int | None = None) -> int | None:
+    """Safety ceiling for how many matches to tailor. None/0 = every match."""
     if override is not None:
         raw = override
     else:
-        raw = cfg.get("hunt.max_jobs", cfg.get("pipeline.hunt_max_jobs", 5))
+        raw = cfg.get("hunt.max_jobs", cfg.get("pipeline.hunt_max_jobs", 0))
     try:
-        return max(1, min(20, int(raw)))
+        n = int(raw)
     except (TypeError, ValueError):
-        return 5
+        return None
+    return n if n > 0 else None
 
 
 def greenhouse_boards(cfg: Config) -> list[str]:
@@ -157,6 +159,22 @@ def company_is_excluded(listing: dict, cfg: Config) -> bool:
 
 
 WEAK_ROLE_WORDS = {"engineer", "engineering", "manager", "specialist", "analyst", "developer", "lead", "staff"}
+IC_TITLE_HINTS = (
+    "engineer",
+    "developer",
+    "programmer",
+    "swe",
+    "sde",
+    "mts",
+    "technical staff",
+    "backend",
+    "frontend",
+    "full stack",
+    "fullstack",
+    "devops",
+    "sre",
+    "forward deployed",
+)
 
 YEAR_RANGE = re.compile(
     r"(\d{1,2})\s*(?:\+|plus)?\s*(?:-|–|—|to)\s*(\d{1,2})\s*\+?\s*years?",
@@ -200,8 +218,30 @@ def _role_words(role: str) -> list[str]:
     return [word for word in re.split(r"\W+", role.lower()) if len(word) > 2 and word not in skip]
 
 
+def hunt_queries(cfg: Config) -> list[str]:
+    """LinkedIn/Indeed/Google keywords. Skill-first so odd titles still surface."""
+    configured = _as_list(cfg.get("hunt.browser.queries"))
+    if configured:
+        return configured[:4]
+    roles = target_roles(cfg) or ["software engineer"]
+    skills = preferred_skills(cfg)
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in (*(skills[:1]), *(roles[:1])):
+        text = (item or "").strip()
+        key = text.lower()
+        if text and key not in seen:
+            seen.add(key)
+            out.append(text)
+    return out[:2] or ["software engineer"]
+
+
 def score_listing(listing: dict, cfg: Config) -> int:
-    """Higher is a closer title/location/stack match. 0 means do not tailor this posting."""
+    """Higher is a closer stack/location match. 0 means do not tailor this posting.
+
+    Titles are vetoes (intern, manager, Java-in-title) and a ranking boost.
+    Keep/drop after the JD loads is driven by preferred_skills / require_any.
+    """
     url = listing.get("url") or ""
     if is_directory_or_salary_listing(listing):
         return 0
@@ -223,7 +263,7 @@ def score_listing(listing: dict, cfg: Config) -> int:
     targets = [role.lower() for role in target_roles(cfg)]
 
     for level in exclude_levels(cfg):
-        if phrase_in(title, level) and not _allowed_by_targets(level, targets):
+        if _level_blocked_in_title(title, level, targets):
             return 0
     for token in exclude_title_tokens(cfg):
         if phrase_in(title, token) and not _allowed_by_targets(token, targets):
@@ -242,8 +282,7 @@ def score_listing(listing: dict, cfg: Config) -> int:
             title_score = max(title_score, 4)
         elif strong and any(word in title for word in strong):
             title_score = max(title_score, 2)
-    if title_score == 0:
-        return 0
+    ic_hint = any(phrase_in(title, hint) for hint in IC_TITLE_HINTS)
 
     if jd:
         needed = parse_required_years(jd)
@@ -268,8 +307,14 @@ def score_listing(listing: dict, cfg: Config) -> int:
                 return 0
             if not any(phrase_in(jd, item) for item in core):
                 return 0
+        if core and not any(phrase_in(haystack, skill) for skill in core):
+            return 0
+        if title_score == 0 and not ic_hint:
+            return 0
+    elif title_score == 0 and not ic_hint:
+        return 0
 
-    score = title_score
+    score = title_score or (2 if ic_hint else 0)
     city = (cfg.get("user.city") or "").lower()
     country = (cfg.get("user.country") or "").lower()
     if city and city in loc:
@@ -287,6 +332,18 @@ def score_listing(listing: dict, cfg: Config) -> int:
             if phrase_in(haystack, skill):
                 score += 1
     return score
+
+
+def _level_blocked_in_title(title: str, level: str, targets: list[str]) -> bool:
+    if _allowed_by_targets(level, targets):
+        return False
+    if not phrase_in(title, level):
+        return False
+    if level == "staff" and (
+        phrase_in(title, "member of technical staff") or phrase_in(title, "mts")
+    ):
+        return False
+    return True
 
 
 def fetch_json(url: str, timeout: int = 20) -> dict | list | None:
@@ -522,82 +579,93 @@ def harvest_api_listings(cfg: Config) -> list[dict]:
     return listings
 
 
-def saved_jobs_max(cfg: Config, limit: int | None = None) -> int:
-    cap = hunt_limit(cfg, limit)
+def saved_jobs_max(cfg: Config, limit: int | None = None) -> int | None:
     raw = cfg.get("hunt.saved_jobs.max")
     if raw is None:
-        return cap
+        return hunt_limit(cfg, limit)
     try:
-        return max(0, min(20, int(raw)))
+        n = int(raw)
     except (TypeError, ValueError):
-        return cap
+        return hunt_limit(cfg, limit)
+    return n if n > 0 else None
+
+
+class HuntMatcher:
+    """Apply fit gates one posting at a time so hunt can tailor while search continues."""
+
+    def __init__(self, cfg: Config, limit: int | None = None):
+        self.cfg = cfg
+        self.cap = hunt_limit(cfg, limit)
+        self.saved_cap = saved_jobs_max(cfg, limit)
+        self.extra_saved = bool(cfg.get("hunt.saved_jobs.extra", False))
+        self.have = existing_keys(cfg)
+        self.have_urls = existing_job_urls(cfg)
+        self.seen_keys: set[str] = set()
+        self.chosen: list[dict] = []
+        self.saved_kept = 0
+        self._cap_logged = False
+
+    def offer(self, listing: dict) -> dict | None:
+        key = listing_key(listing)
+        url = _norm_job_url(listing.get("url") or "")
+        if not key or key in self.seen_keys or key in self.have:
+            return None
+        if url and url in self.have_urls:
+            return None
+        item = dict(listing)
+        item["fit"] = score_listing(item, self.cfg)
+        if item["fit"] <= 0:
+            return None
+        saved = bool(item.get("saved"))
+        if saved:
+            if self.saved_cap is not None and self.saved_kept >= self.saved_cap:
+                return None
+            if not self.extra_saved and self.cap is not None and len(self.chosen) >= self.cap:
+                return None
+        elif self.cap is not None and len(self.chosen) >= self.cap:
+            if not self._cap_logged:
+                log.info("Hunt cap %s reached; later matches are not tailored this run.", self.cap)
+                self._cap_logged = True
+            return None
+        item = ensure_jd(item)
+        if not (item.get("jd") or "").strip():
+            log.info(
+                "Skipping %s — %s (no JD text, will not invent)",
+                item.get("company"),
+                item.get("role"),
+            )
+            return None
+        item["fit"] = score_listing(item, self.cfg)
+        if item["fit"] <= 0:
+            log.info(
+                "Skipping %s — %s (does not match hunt years/skills/level in config)",
+                item.get("company"),
+                item.get("role"),
+            )
+            return None
+        self.seen_keys.add(key)
+        if saved:
+            log.info("Saved job counts as a match: %s — %s", item.get("company"), item.get("role"))
+            self.saved_kept += 1
+        self.chosen.append(item)
+        return item
 
 
 def rank_and_select(cfg: Config, listings: list[dict], limit: int | None = None) -> list[dict]:
-    saved_ranked: list[dict] = []
-    search_ranked: list[dict] = []
-    seen_keys: set[str] = set()
-    have = existing_keys(cfg)
-    have_urls = existing_job_urls(cfg)
+    """Keep every posting that passes fit gates. Score is keep/drop, not a top-N rank."""
+    matcher = HuntMatcher(cfg, limit)
+    saved_hits: list[dict] = []
+    search_hits: list[dict] = []
     for listing in listings:
-        key = listing_key(listing)
-        url = _norm_job_url(listing.get("url") or "")
-        if not key or key in seen_keys or key in have:
-            continue
-        if url and url in have_urls:
-            continue
-        listing["fit"] = score_listing(listing, cfg)
-        if listing["fit"] <= 0:
-            continue
-        seen_keys.add(key)
         if listing.get("saved"):
-            saved_ranked.append(listing)
+            saved_hits.append(listing)
         else:
-            search_ranked.append(listing)
-    search_ranked.sort(key=lambda item: item["fit"], reverse=True)
-    cap = hunt_limit(cfg, limit)
-    saved_cap = min(saved_jobs_max(cfg, limit), cap)
-    extra_saved = bool(cfg.get("hunt.saved_jobs.extra", False))
-    chosen: list[dict] = []
-
-    def _accept(listing: dict) -> bool:
-        listing = ensure_jd(listing)
-        if not (listing.get("jd") or "").strip():
-            log.info(
-                "Skipping %s — %s (no JD text, will not invent)",
-                listing.get("company"),
-                listing.get("role"),
-            )
-            return False
-        listing["fit"] = score_listing(listing, cfg)
-        if listing["fit"] <= 0:
-            log.info(
-                "Skipping %s — %s (does not match hunt years/skills/level in config)",
-                listing.get("company"),
-                listing.get("role"),
-            )
-            return False
-        chosen.append(listing)
-        return True
-
-    for listing in saved_ranked:
-        if len([item for item in chosen if item.get("saved")]) >= saved_cap:
-            break
-        if not extra_saved and len(chosen) >= cap:
-            break
-        if listing.get("saved"):
-            log.info("Saved job counts as a match: %s — %s", listing.get("company"), listing.get("role"))
-        _accept(listing)
-    remaining = 0 if extra_saved else max(0, cap - len(chosen))
-    if extra_saved:
-        remaining = cap
-    for listing in search_ranked:
-        if remaining <= 0:
-            break
-        before = len(chosen)
-        if _accept(listing) and len(chosen) > before:
-            remaining -= 1
-    return chosen
+            search_hits.append(listing)
+    for listing in saved_hits:
+        matcher.offer(listing)
+    for listing in search_hits:
+        matcher.offer(listing)
+    return matcher.chosen
 
 
 def search_jobs(
@@ -621,30 +689,63 @@ def search_jobs(
         _jd_fetcher = prev_jd
 
 
-def _notify_listings(on_listing, items: list[dict]) -> None:
-    if not on_listing:
+def _notify_stage(on_stage, line: str) -> None:
+    if not on_stage or not (line or "").strip():
         return
-    for item in items:
-        try:
-            on_listing(item)
-        except Exception:
-            log.debug("on_listing failed", exc_info=True)
+    try:
+        on_stage(line.strip())
+    except Exception:
+        log.debug("on_stage failed", exc_info=True)
 
 
-async def search_jobs_async(cfg: Config, *, limit: int | None = None, on_listing=None) -> list[dict]:
-    """MCP (optional), Camoufox boards, and public APIs, then the same fit gates."""
+def _is_stopped(should_stop) -> bool:
+    try:
+        return bool(should_stop and should_stop())
+    except Exception:
+        return False
+
+
+async def search_jobs_async(
+    cfg: Config, *, limit: int | None = None, on_listing=None, on_stage=None, should_stop=None
+) -> list[dict]:
+    """MCP (optional), Camoufox boards, and public APIs. Fit gates run as each posting arrives."""
     from pipeline.browser_hunt import api_sources_enabled, browse_jobs, browser_enabled
     from pipeline.mcp_hunt import harvest_mcp_listings, mcp_indeed_enabled
 
-    listings: list[dict] = []
+    matcher = HuntMatcher(cfg, limit)
+
+    def notify(item: dict) -> None:
+        kept = matcher.offer(item)
+        if not kept:
+            return
+        if on_listing:
+            try:
+                on_listing(kept)
+            except Exception:
+                log.debug("on_listing failed", exc_info=True)
+
+    if _is_stopped(should_stop):
+        return list(matcher.chosen)
     if mcp_indeed_enabled(cfg):
-        found = await harvest_mcp_listings(cfg)
-        _notify_listings(on_listing, found)
-        listings.extend(found)
+        _notify_stage(on_stage, "Searching Indeed")
+        for item in await harvest_mcp_listings(cfg):
+            if _is_stopped(should_stop):
+                return list(matcher.chosen)
+            notify(item)
+        if _is_stopped(should_stop):
+            return list(matcher.chosen)
     if browser_enabled(cfg):
-        listings.extend(await browse_jobs(cfg, on_listing=on_listing))
+        await browse_jobs(
+            cfg, on_listing=notify, on_stage=on_stage, should_stop=should_stop
+        )
+        if _is_stopped(should_stop):
+            return list(matcher.chosen)
     if api_sources_enabled(cfg):
-        found = harvest_api_listings(cfg)
-        _notify_listings(on_listing, found)
-        listings.extend(found)
-    return rank_and_select(cfg, listings, limit)
+        _notify_stage(on_stage, "Checking public job APIs")
+        for item in harvest_api_listings(cfg):
+            if _is_stopped(should_stop):
+                return list(matcher.chosen)
+            notify(item)
+    if not _is_stopped(should_stop):
+        _notify_stage(on_stage, "Search finished")
+    return list(matcher.chosen)

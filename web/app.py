@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field
 
 from pipeline.config import load_config
 from pipeline.jobs import append_job, apply_pasted_job_text, infer_company_role, listing_has_identity, parse_job_urls
-from pipeline.reports import delete_package_dir, list_packages, package_detail, package_file
+from pipeline.reports import delete_package_dir, list_packages, package_detail, package_file, package_dir
 from pipeline.run_pipeline import process_job
 from pipeline.search import hunt_limit, target_markets, target_roles
 
@@ -32,6 +32,50 @@ log = logging.getLogger("jobdesk")
 
 _runs: dict[str, dict] = {}
 _run_lock = threading.Lock()
+
+
+def _new_run(run_id: str, sink: queue.Queue, *, kind: str) -> dict:
+    return {
+        "id": run_id,
+        "kind": kind,
+        "status": "running",
+        "company": "",
+        "role": "",
+        "queue": sink,
+        "package_id": None,
+        "packages": [],
+        "error": None,
+        "stop": threading.Event(),
+        "loop": None,
+        "task": None,
+    }
+
+
+def _stop_requested(run_id: str) -> bool:
+    with _run_lock:
+        event = (_runs.get(run_id) or {}).get("stop")
+    return bool(event is not None and event.is_set())
+
+
+def _bind_run_task(run_id: str) -> None:
+    with _run_lock:
+        run = _runs.get(run_id)
+        if not run:
+            return
+        run["loop"] = asyncio.get_running_loop()
+        run["task"] = asyncio.current_task()
+
+
+def _mark_stopped(run_id: str, packages: list[str] | None = None) -> None:
+    with _run_lock:
+        run = _runs.get(run_id)
+        if not run:
+            return
+        if packages is not None:
+            run["packages"] = packages
+            run["package_id"] = packages[0] if packages else None
+        run["status"] = "stopped"
+        run["error"] = "Stopped"
 
 
 class InspectRequest(BaseModel):
@@ -174,6 +218,24 @@ def package_download(package_id: str, filename: str):
     return FileResponse(path, media_type=media, content_disposition_type=disposition, filename=path.name)
 
 
+@app.post("/api/packages/{package_id}/rebuild-pdf")
+async def rebuild_pdf(package_id: str) -> dict:
+    cfg = load_config(force=True)
+    folder = package_dir(cfg, package_id)
+    if folder is None:
+        raise HTTPException(status_code=404, detail="Package not found")
+    from pipeline.tailor import rebuild_package_pdf
+
+    try:
+        pdf = await rebuild_package_pdf(folder)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        log.exception("PDF rebuild failed for %s", package_id)
+        raise HTTPException(status_code=500, detail=f"PDF rebuild failed: {exc}") from exc
+    return {"ok": True, "id": package_id, "pdf_name": pdf.name}
+
+
 @app.delete("/api/packages/{package_id}")
 def delete_package(package_id: str) -> dict:
     cfg = load_config(force=True)
@@ -190,16 +252,7 @@ def start_run(body: RunRequest) -> dict:
     run_id = uuid.uuid4().hex[:10]
     sink: queue.Queue = queue.Queue()
     with _run_lock:
-        _runs[run_id] = {
-            "id": run_id,
-            "status": "running",
-            "company": "",
-            "role": "",
-            "queue": sink,
-            "package_id": None,
-            "packages": [],
-            "error": None,
-        }
+        _runs[run_id] = _new_run(run_id, sink, kind="run")
 
     thread = threading.Thread(target=_execute_run, args=(run_id, urls, body, sink), daemon=True)
     thread.start()
@@ -252,10 +305,39 @@ async def run_stream(run_id: str):
     return StreamingResponse(events(), media_type="text/event-stream")
 
 
+@app.post("/api/runs/{run_id}/stop")
+def stop_run(run_id: str) -> dict:
+    with _run_lock:
+        run = _runs.get(run_id)
+        if not run:
+            raise HTTPException(status_code=404, detail="Run not found")
+        if run["status"] not in {"running", "stopping"}:
+            return {"id": run_id, "status": run["status"]}
+        event = run.get("stop")
+        if event:
+            event.set()
+        run["status"] = "stopping"
+        loop = run.get("loop")
+        task = run.get("task")
+    if loop is not None and task is not None:
+        def cancel_task() -> None:
+            if not task.done():
+                task.cancel()
+
+        try:
+            loop.call_soon_threadsafe(cancel_task)
+        except RuntimeError:
+            pass
+    return {"id": run_id, "status": "stopping"}
+
+
 @app.post("/api/hunt")
 def start_hunt(body: HuntRequest) -> dict:
     with _run_lock:
-        busy = any(run.get("kind") == "hunt" and run.get("status") == "running" for run in _runs.values())
+        busy = any(
+            run.get("kind") == "hunt" and run.get("status") in {"running", "stopping"}
+            for run in _runs.values()
+        )
     if busy:
         raise HTTPException(status_code=409, detail="A hunt is already running.")
     cfg = load_config(force=True)
@@ -263,17 +345,7 @@ def start_hunt(body: HuntRequest) -> dict:
     run_id = uuid.uuid4().hex[:10]
     sink: queue.Queue = queue.Queue()
     with _run_lock:
-        _runs[run_id] = {
-            "id": run_id,
-            "kind": "hunt",
-            "status": "running",
-            "company": "",
-            "role": "",
-            "queue": sink,
-            "package_id": None,
-            "packages": [],
-            "error": None,
-        }
+        _runs[run_id] = _new_run(run_id, sink, kind="hunt")
     thread = threading.Thread(target=_execute_hunt, args=(run_id, cap, sink), daemon=True)
     thread.start()
     return {"id": run_id, "max_jobs": cap}
@@ -295,6 +367,20 @@ def _execute_run(run_id: str, urls: list[str], body: RunRequest, sink: queue.Que
     cfg = load_config(force=True)
     packages: list[str] = []
     board = JobProgress(sink.put)
+
+    def stop() -> bool:
+        return _stop_requested(run_id)
+
+    async def _hydrate() -> list:
+        _bind_run_task(run_id)
+        return await hydrate_job_urls(
+            cfg,
+            urls,
+            on_listing=board.found,
+            on_stage=board.stage,
+            should_stop=stop,
+        )
+
     try:
         extra_jd = (body.jd or "").strip()
         listings: list[dict] = []
@@ -318,7 +404,7 @@ def _execute_run(run_id: str, urls: list[str], body: RunRequest, sink: queue.Que
                 board.found(listings[0])
             if not listings or not listing_has_identity(listings[0]):
                 sink.put({"type": "stage", "line": "Reading the posting for company and role. Camoufox opens for LinkedIn. Apply is never clicked."})
-                browser = aio.run(hydrate_job_urls(cfg, urls, on_listing=board.found))
+                browser = aio.run(_hydrate())
                 listings = apply_pasted_job_text(
                     browser or listings,
                     urls,
@@ -329,7 +415,12 @@ def _execute_run(run_id: str, urls: list[str], body: RunRequest, sink: queue.Que
                 )
         else:
             sink.put({"type": "stage", "line": f"Reading {len(urls)} posting(s). Camoufox opens for LinkedIn. Apply is never clicked."})
-            listings = aio.run(hydrate_job_urls(cfg, urls, on_listing=board.found))
+            listings = aio.run(_hydrate())
+        if stop():
+            board.stop_unfinished()
+            _mark_stopped(run_id, packages)
+            sink.put({"type": "stage", "line": "Stopped."})
+            return
         if not listings:
             raise RuntimeError("Could not read those URLs. Sign in to LinkedIn in the Camoufox window if asked, then run again.")
         work: list[dict] = []
@@ -353,36 +444,77 @@ def _execute_run(run_id: str, urls: list[str], body: RunRequest, sink: queue.Que
                 continue
             work.append(job)
         board.queue(work)
-        for job in work:
-            company = job["company"]
-            role = job["role"]
-            prior = find_existing_package(cfg, job)
-            if prior:
-                board.ready(job, prior.name, skipped=True)
-                packages.append(prior.name)
-                continue
-            try:
-                append_job(cfg, job)
-            except Exception as exc:
-                log.warning("Could not append jobs.yaml: %s", exc)
-            board.working(job)
-            with _run_lock:
-                _runs[run_id]["company"] = company
-                _runs[run_id]["role"] = role
-            output_dir = aio.run(process_job(job, fill_form=False))
-            if output_dir:
-                packages.append(output_dir.name)
-                board.ready(job, output_dir.name)
-            else:
-                board.failed(job, f"No package for {company} — {role}")
+        from pipeline.llm import worker_count
+
+        workers = worker_count(cfg)
+
+        async def _tailor_work() -> None:
+            _bind_run_task(run_id)
+            sem = aio.Semaphore(workers)
+
+            async def one(job: dict) -> None:
+                async with sem:
+                    if stop():
+                        board.stopped(job)
+                        return
+                    company = job["company"]
+                    role = job["role"]
+                    prior = find_existing_package(cfg, job)
+                    if prior:
+                        board.ready(job, prior.name, skipped=True)
+                        packages.append(prior.name)
+                        return
+                    try:
+                        append_job(cfg, job)
+                    except Exception as exc:
+                        log.warning("Could not append jobs.yaml: %s", exc)
+                    board.working(job, "Writing CV")
+                    with _run_lock:
+                        _runs[run_id]["company"] = company
+                        _runs[run_id]["role"] = role
+                    try:
+                        output_dir = await process_job(
+                            job,
+                            fill_form=False,
+                            on_progress=lambda msg, current=job: board.working(current, msg),
+                        )
+                    except aio.CancelledError:
+                        board.stopped(job)
+                        return
+                    except Exception as exc:
+                        log.exception("Tailor failed for %s — %s", company, role)
+                        board.failed(job, str(exc))
+                        return
+                    if output_dir:
+                        packages.append(output_dir.name)
+                        board.ready(job, output_dir.name)
+                    else:
+                        board.failed(job, f"No package for {company} — {role}")
+
+            if work:
+                log.info("Tailoring %s posting(s) with %s worker(s)", len(work), workers)
+                await aio.gather(*(one(job) for job in work))
+
+        aio.run(_tailor_work())
         with _run_lock:
             _runs[run_id]["packages"] = packages
             _runs[run_id]["package_id"] = packages[0] if packages else None
-            if packages:
+            stopped = _runs[run_id]["stop"].is_set() or _runs[run_id]["status"] == "stopping"
+            if stopped:
+                _runs[run_id]["status"] = "stopped"
+                _runs[run_id]["error"] = "Stopped"
+            elif packages:
                 _runs[run_id]["status"] = "done"
             else:
                 _runs[run_id]["status"] = "error"
                 _runs[run_id]["error"] = "Pipeline produced no package"
+        if stopped:
+            board.stop_unfinished()
+            sink.put({"type": "stage", "line": "Stopped."})
+    except aio.CancelledError:
+        board.stop_unfinished()
+        _mark_stopped(run_id, packages)
+        sink.put({"type": "stage", "line": "Stopped."})
     except Exception as exc:
         with _run_lock:
             _runs[run_id]["status"] = "error"
@@ -393,7 +525,7 @@ def _execute_run(run_id: str, urls: list[str], body: RunRequest, sink: queue.Que
         sink.put(None)
 
 
-def _execute_hunt(run_id: str, max_jobs: int, sink: queue.Queue) -> None:
+def _execute_hunt(run_id: str, max_jobs: int | None, sink: queue.Queue) -> None:
     import asyncio as aio
 
     from pipeline.hunt import hunt_and_tailor
@@ -404,18 +536,36 @@ def _execute_hunt(run_id: str, max_jobs: int, sink: queue.Queue) -> None:
     if root.level > logging.INFO:
         root.setLevel(logging.INFO)
     try:
-        sink.put({"type": "stage", "line": f"Hunting with Camoufox for up to {max_jobs} matching role(s). Sign in if a board asks. Apply/Submit is never clicked."})
+        if max_jobs:
+            line = f"Hunting with Camoufox for matching roles (safety cap {max_jobs}). Sign in if a board asks. Apply/Submit is never clicked."
+        else:
+            line = "Hunting with Camoufox for matching roles. Every posting that passes fit gates is tailored. Sign in if a board asks. Apply/Submit is never clicked."
+        sink.put({"type": "stage", "line": line})
         cfg = load_config(force=True)
 
         def on_event(item: dict) -> None:
             sink.put(item)
 
-        results = aio.run(hunt_and_tailor(cfg, fill_form=False, max_jobs=max_jobs, on_event=on_event))
+        async def _run():
+            _bind_run_task(run_id)
+            return await hunt_and_tailor(
+                cfg,
+                fill_form=False,
+                max_jobs=max_jobs,
+                on_event=on_event,
+                should_stop=lambda: _stop_requested(run_id),
+            )
+
+        results = aio.run(_run())
         package_ids = [item["package_id"] for item in results if item.get("package_id")]
         with _run_lock:
             _runs[run_id]["packages"] = package_ids
             _runs[run_id]["package_id"] = package_ids[0] if package_ids else None
-            if package_ids:
+            stopped = _runs[run_id]["stop"].is_set() or _runs[run_id]["status"] == "stopping"
+            if stopped:
+                _runs[run_id]["status"] = "stopped"
+                _runs[run_id]["error"] = "Stopped"
+            elif package_ids:
                 _runs[run_id]["status"] = "done"
             elif results:
                 _runs[run_id]["status"] = "error"
@@ -423,10 +573,15 @@ def _execute_hunt(run_id: str, max_jobs: int, sink: queue.Queue) -> None:
             else:
                 _runs[run_id]["status"] = "done"
                 _runs[run_id]["error"] = "No postings matched the profile after hunt filters"
-        if package_ids:
+        if stopped:
+            sink.put({"type": "stage", "line": "Hunt stopped. Packages already finished are kept."})
+        elif package_ids:
             sink.put({"type": "stage", "line": f"Ready: {len(package_ids)} package(s). You click Submit."})
         else:
             sink.put({"type": "log", "line": "Hunt finished with no new packages."})
+    except aio.CancelledError:
+        _mark_stopped(run_id)
+        sink.put({"type": "stage", "line": "Hunt stopped. Packages already finished are kept."})
     except Exception as exc:
         with _run_lock:
             _runs[run_id]["status"] = "error"

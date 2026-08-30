@@ -63,7 +63,8 @@ career:
     # - "US"
     # - "EU"
 
-  # Roles you'd take (used for tailoring About + Skills variants)
+  # Roles you'd take. Hunt uses these as extra search keywords and a ranking
+  # boost — the job description stack (hunt.preferred_skills) decides keep/drop.
   target_roles:
     - "Software Engineer"
     - "Forward Deployed Engineer"
@@ -166,8 +167,21 @@ pipeline:
   html_template: resumes/template.html
   ats_threshold: 80
   max_attempts: 3
-  model: gemini-3.1-pro
+  # nvidia = OpenAI-compatible NVIDIA NIM (NVIDIA_API_KEY). agy = Gemini CLI.
+  provider: nvidia
+  model: nvidia/nemotron-3-ultra-550b-a55b
+  fallback_provider: agy
+  fallback_model: gemini-3.1-pro
+  workers: 4                 # parallel tailor jobs (stay under nvidia.rpm)
   llm_timeout_seconds: 600
+  nvidia:
+    base_url: https://integrate.api.nvidia.com/v1
+    fallback_model: openai/gpt-oss-120b   # after Nemotron, before agy
+    rpm: 40
+    max_tokens: 16384
+    temperature: 1
+    top_p: 0.95
+    enable_thinking: true
   # Form fill is off unless you pass --fill-form. Submit is never clicked.
   auto_apply: false
 
@@ -176,7 +190,7 @@ pipeline:
 # Only real postings are tailored: Indeed viewjob?jk=, LinkedIn /jobs/view/{id}, ATS job pages.
 # Salary guides, career-explorer, search result, and company-review URLs are skipped.
 hunt:
-  max_jobs: 5
+  max_jobs: 0                # 0 = tailor every match; >0 is a safety ceiling, not a ranking
   api_sources: false
   greenhouse_boards: []
     # Example: the Greenhouse board token from boards.greenhouse.io/<token>
@@ -186,7 +200,8 @@ hunt:
     # - https://jobs.lever.co/acme
     # - https://jobs.ashbyhq.com/acme
   years_buffer: 2            # skip if JD requires more than years_experience + this
-  # Title seniority you will not apply to (unless the same phrase is in target_roles)
+  # Title seniority you will not apply to (unless the same phrase is in target_roles).
+  # "staff" skips Staff Engineer; Member of Technical Staff / MTS is still kept.
   exclude_levels:
     - intern
     - internship
@@ -208,9 +223,9 @@ hunt:
     - qa
     - quality assurance
     - quality engineer
-  # After the JD is loaded: keep the posting only if at least one of these appears
+  # After the JD is loaded: keep only if at least one preferred/require_any skill appears.
   require_any: []
-  # Boost ranking when these appear in the title or JD
+  # Keep + boost when these appear in the JD (titles can be anything)
   preferred_skills:
     - python
     - kafka
@@ -226,7 +241,7 @@ hunt:
   saved_jobs:
     enabled: true
     max: 5                   # how many saved postings to tailor per hunt
-    extra: false             # true = tailor saved jobs in addition to hunt.max_jobs
+    extra: false             # true = tailor saved jobs in addition to hunt.max_jobs (when that cap is set)
     urls: []                 # empty = LinkedIn my-items/saved-jobs + Indeed saved
   # Official Indeed MCP (https://mcp.indeed.com/claude/mcp) uses OAuth in Cursor.
   # Desk Hunt also tries it; if OAuth is missing it continues with Camoufox.
@@ -248,8 +263,8 @@ hunt:
     os: linux                # fingerprint OS: linux inside Docker; macos | windows on a host
     page_delay_ms: 1500
     login_wait_seconds: 120  # pause if a sign-in wall or 2FA appears
-    max_per_source: 12
-    queries: []              # empty = career.target_roles
+    max_per_source: 40
+    queries: []              # empty = first preferred_skill + first target_role
     # Put real credentials only in gitignored config.yaml. Never commit or log them.
     logins:
       linkedin:
@@ -276,7 +291,7 @@ hunt:
       url: "https://www.google.com/search?q={dork}&hl=en&num=10"
       max_queries: 1          # how many target_roles to dork (1 keeps CAPTCHA risk down)
       group_size: 1           # 1 = one search per ATS; 3 = OR-clump several site: operators
-      max_results: 4          # job URLs to open per Google results page
+      max_results: 8          # job URLs to open per Google results page
       ats:
         - site:boards.greenhouse.io
         - site:job-boards.greenhouse.io

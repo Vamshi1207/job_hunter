@@ -482,10 +482,34 @@ class HuntTests(unittest.TestCase):
             self.assertGreater(
                 score_listing(
                     {
-                        "role": "Senior Software Engineer",
-                        "url": "https://example.com/ok",
+                        "role": "Backend Platform Engineer",
+                        "url": "https://example.com/be",
                         "location": "Montreal, Canada",
-                        "jd": "5+ years of experience with Python and Kafka.",
+                        "jd": "5+ years of experience with Python, Kafka, and AWS.",
+                    },
+                    cfg,
+                ),
+                0,
+            )
+            self.assertGreater(
+                score_listing(
+                    {
+                        "role": "Member of Technical Staff",
+                        "url": "https://example.com/mts",
+                        "location": "Canada",
+                        "jd": "Python microservices and distributed systems.",
+                    },
+                    cfg,
+                ),
+                0,
+            )
+            self.assertEqual(
+                score_listing(
+                    {
+                        "role": "Technical Recruiter",
+                        "url": "https://example.com/rec",
+                        "location": "Canada",
+                        "jd": "Hire Python engineers for our Kafka platform.",
                     },
                     cfg,
                 ),
@@ -518,6 +542,22 @@ class HuntTests(unittest.TestCase):
                 ),
                 0,
             )
+        finally:
+            os.environ.pop("JOB_SEARCH_ROOT", None)
+            tmp.cleanup()
+            load_config(force=True)
+
+    def test_hunt_queries_prefer_stack_over_exact_title(self):
+        from pipeline.search import hunt_queries
+
+        tmp = tempfile.TemporaryDirectory()
+        try:
+            cfg = self._cfg(
+                Path(tmp.name),
+                "  preferred_skills:\n    - python\n    - kafka\n",
+            )
+            self.assertEqual(hunt_queries(cfg)[0].lower(), "python")
+            self.assertIn("software engineer", " ".join(hunt_queries(cfg)).lower())
         finally:
             os.environ.pop("JOB_SEARCH_ROOT", None)
             tmp.cleanup()
@@ -647,7 +687,7 @@ class HuntTests(unittest.TestCase):
             tmp.cleanup()
             load_config(force=True)
 
-    def test_search_jobs_ranks_and_caps(self):
+    def test_search_jobs_keeps_every_match(self):
         from pipeline.search import html_to_text, search_jobs
 
         self.assertIn("Python", html_to_text("<p>Need <b>Python</b></p>"))
@@ -685,6 +725,13 @@ class HuntTests(unittest.TestCase):
                                 "contents": "<p>Agents in production</p>",
                             },
                             {
+                                "name": "Software Engineer",
+                                "company": {"name": "Beta"},
+                                "refs": {"landing_page": "https://boards.greenhouse.io/beta/jobs/3"},
+                                "locations": [{"name": "Canada"}],
+                                "contents": "<p>Python Kafka AWS</p>",
+                            },
+                            {
                                 "name": "Barista",
                                 "company": {"name": "Cafe"},
                                 "refs": {"landing_page": "https://example.com/coffee"},
@@ -701,13 +748,18 @@ class HuntTests(unittest.TestCase):
 
             chosen = search_jobs(cfg, fetcher=fake_fetch, jd_fetcher=lambda url: None)
             companies = [item["company"] for item in chosen]
-            self.assertIn("Acme", companies)
-            self.assertIn("Northstar", companies)
             self.assertNotIn("OldCo", companies)
             self.assertNotIn("Cafe", companies)
-            self.assertLessEqual(len(chosen), 2)
+            self.assertEqual(len(chosen), 2)
             self.assertTrue(all(item["jd"] for item in chosen))
             self.assertTrue(all(item["url"] for item in chosen))
+            (root / "config.yaml").write_text(
+                (root / "config.yaml").read_text().replace("max_jobs: 2", "max_jobs: 0")
+            )
+            cfg = load_config(force=True)
+            chosen = search_jobs(cfg, fetcher=fake_fetch, jd_fetcher=lambda url: None)
+            companies = [item["company"] for item in chosen]
+            self.assertEqual(set(companies), {"Acme", "Northstar", "Beta"})
         finally:
             os.environ.pop("JOB_SEARCH_ROOT", None)
             tmp.cleanup()
@@ -835,24 +887,162 @@ class HuntTests(unittest.TestCase):
             )
             docx_path = folder / "Test_User_CV.docx"
             pages_path = folder / "Test_User_CV.pages"
+            os.environ["JOB_SEARCH_SKIP_PAGES_APP"] = "1"
             html_to_docx(html_path, docx_path)
-            html_to_pages(html_path, pages_path)
+            with self.assertRaises(RuntimeError):
+                html_to_pages(html_path, pages_path, docx_path=docx_path)
             self.assertTrue(docx_path.is_file())
             self.assertGreater(docx_path.stat().st_size, 1000)
-            self.assertTrue(zipfile.ZipFile(pages_path).namelist())
+            self.assertFalse(pages_path.exists())
+            fake = folder / "fake.pages"
+            with zipfile.ZipFile(fake, "w") as zf:
+                zf.writestr("index.html", "<html></html>")
+            from pipeline.cv_export import is_fake_pages, is_native_pages
+            self.assertTrue(is_fake_pages(fake))
+            self.assertFalse(is_native_pages(fake))
+            native = folder / "native.pages"
+            with zipfile.ZipFile(native, "w") as zf:
+                zf.writestr("Index/Document.iwa", b"iwa")
+            self.assertTrue(is_native_pages(native))
             cfg = self._cfg(root)
             summary = package_summary(cfg, folder)
             self.assertEqual(summary["docx_name"], "Test_User_CV.docx")
             self.assertEqual(summary["html_name"], "Test_User_CV.html")
-            self.assertEqual(summary["pages_name"], "Test_User_CV.pages")
+            self.assertIsNone(summary["pages_name"])
             self.assertTrue(delete_package_dir(cfg, folder.name))
             self.assertFalse(folder.exists())
             self.assertFalse(delete_package_dir(cfg, "../etc"))
             self.assertFalse(delete_package_dir(cfg, "_tracker"))
         finally:
             os.environ.pop("JOB_SEARCH_ROOT", None)
+            os.environ.pop("JOB_SEARCH_SKIP_PAGES_APP", None)
             tmp.cleanup()
             load_config(force=True)
+
+    def test_rebuild_pdf_from_html(self):
+        import asyncio
+        from unittest.mock import patch
+
+        from pipeline.tailor import rebuild_package_pdf
+
+        tmp = tempfile.TemporaryDirectory()
+        try:
+            root = Path(tmp.name)
+            folder = root / "applications" / "Acme-Software-Engineer-2026-08-30"
+            folder.mkdir(parents=True)
+            (folder / "Test_User_CV.html").write_text("<html><body>Hi</body></html>")
+            os.environ["JOB_SEARCH_ROOT"] = str(root)
+            os.environ["JOB_SEARCH_SKIP_PAGES_APP"] = "1"
+
+            async def fake_pdf(html, pdf, max_pages=None):
+                Path(pdf).write_bytes(b"%PDF-fake")
+
+            with patch("pipeline.tailor.html_to_pdf", fake_pdf), patch(
+                "pipeline.cv_export.write_editable_exports", return_value={}
+            ):
+                out = asyncio.run(rebuild_package_pdf(folder))
+            self.assertEqual(out.name, "Test_User_CV.pdf")
+            self.assertTrue(out.is_file())
+        finally:
+            os.environ.pop("JOB_SEARCH_ROOT", None)
+            os.environ.pop("JOB_SEARCH_SKIP_PAGES_APP", None)
+            tmp.cleanup()
+            load_config(force=True)
+
+    def test_llm_nvidia_falls_back_to_agy(self):
+        from unittest.mock import patch
+
+        from pipeline.llm import complete_prompt, nvidia_model_chain, primary_provider, worker_count
+
+        tmp = tempfile.TemporaryDirectory()
+        try:
+            root = Path(tmp.name)
+            (root / "config.yaml").write_text(
+                "pipeline:\n"
+                "  provider: nvidia\n"
+                "  model: nvidia/nemotron-3-ultra-550b-a55b\n"
+                "  fallback_provider: agy\n"
+                "  workers: 5\n"
+                "  nvidia:\n"
+                "    fallback_model: openai/gpt-oss-120b\n"
+            )
+            os.environ["JOB_SEARCH_ROOT"] = str(root)
+            cfg = load_config(force=True)
+            self.assertEqual(primary_provider(cfg), "nvidia")
+            self.assertEqual(worker_count(cfg), 5)
+            self.assertEqual(
+                nvidia_model_chain(cfg),
+                ["nvidia/nemotron-3-ultra-550b-a55b", "openai/gpt-oss-120b"],
+            )
+
+            def boom(*_a, **_k):
+                raise RuntimeError("nvidia down")
+
+            with patch("pipeline.llm._call_nvidia", boom), patch(
+                "pipeline.llm.call_agy", lambda prompt, effort="high": "from-agy"
+            ):
+                self.assertEqual(complete_prompt("hi"), "from-agy")
+        finally:
+            os.environ.pop("JOB_SEARCH_ROOT", None)
+            tmp.cleanup()
+            load_config(force=True)
+
+    def test_llm_nemotron_falls_back_to_gpt_oss_before_agy(self):
+        from unittest.mock import patch
+
+        from pipeline.llm import complete_prompt
+
+        tmp = tempfile.TemporaryDirectory()
+        try:
+            root = Path(tmp.name)
+            (root / "config.yaml").write_text(
+                "pipeline:\n"
+                "  provider: nvidia\n"
+                "  model: nvidia/nemotron-3-ultra-550b-a55b\n"
+                "  fallback_provider: agy\n"
+                "  nvidia:\n"
+                "    fallback_model: openai/gpt-oss-120b\n"
+            )
+            os.environ["JOB_SEARCH_ROOT"] = str(root)
+            load_config(force=True)
+            models: list[str] = []
+
+            def nvidia(_prompt, _cfg, *, timeout, effort, model=None):
+                models.append(model)
+                if model and "gpt-oss" in model:
+                    return "from-gpt-oss"
+                raise RuntimeError("nemotron down")
+
+            def agy_should_not_run(*_a, **_k):
+                raise AssertionError("agy should not run when gpt-oss succeeds")
+
+            with patch("pipeline.llm._call_nvidia", nvidia), patch(
+                "pipeline.llm.call_agy", agy_should_not_run
+            ):
+                self.assertEqual(complete_prompt("hi"), "from-gpt-oss")
+            self.assertEqual(
+                models,
+                ["nvidia/nemotron-3-ultra-550b-a55b", "openai/gpt-oss-120b"],
+            )
+        finally:
+            os.environ.pop("JOB_SEARCH_ROOT", None)
+            tmp.cleanup()
+            load_config(force=True)
+
+    def test_nvidia_gpt_oss_uses_non_stream_content(self):
+        from pipeline.llm import _nvidia_message_text
+
+        class Message:
+            content = "tagged resume"
+            reasoning_content = "internal chain of thought"
+
+        class Choice:
+            message = Message()
+
+        class Completion:
+            choices = [Choice()]
+
+        self.assertEqual(_nvidia_message_text(Completion()), "tagged resume")
 
     def test_skips_already_processed_role_and_url(self):
         from pipeline.search import find_existing_package
@@ -894,6 +1084,16 @@ class HuntTests(unittest.TestCase):
         board.found(extra)
         board.queue([first])
         board.working(first)
+        working = next(item for item in events if item["type"] == "processing")
+        self.assertEqual(working["detail"], "Writing CV")
+        self.assertEqual(working["status"], "working")
+        board.working(first, "Scoring ATS (1/3)")
+        scoring = [item for item in events if item["type"] == "processing"][-1]
+        self.assertEqual(scoring["detail"], "Scoring ATS (1/3)")
+        self.assertEqual(scoring["line"], "")
+        board.stage("Searching LinkedIn")
+        self.assertEqual(events[-1]["type"], "hunt_stage")
+        self.assertEqual(events[-1]["line"], "Searching LinkedIn")
         board.ready(first, "acme-software-engineer-2026-08-30")
         types = [item["type"] for item in events]
         self.assertEqual(types[0], "found")
@@ -913,7 +1113,13 @@ class HuntTests(unittest.TestCase):
 
         empty = progress_snapshot([])
         self.assertEqual(empty["found"], 0)
-        self.assertIn("0 waiting", empty["line"])
+        self.assertIn("0 processed", empty["line"])
+        self.assertNotIn("waiting", empty["line"])
+        mid = progress_snapshot(
+            [{"company": "Acme", "role": "SE", "url": "", "status": "working", "detail": "Writing CV (1/3)"}]
+        )
+        self.assertIn("Writing CV (1/3)", mid["line"])
+        self.assertNotIn("working", mid["line"])
 
     def test_hunt_and_tailor_emits_queue_before_processing(self):
         import asyncio
@@ -929,7 +1135,7 @@ class HuntTests(unittest.TestCase):
             "location": "Montreal",
         }
 
-        async def fake_search(cfg, limit=None, on_listing=None):
+        async def fake_search(cfg, limit=None, on_listing=None, on_stage=None, should_stop=None):
             if on_listing:
                 on_listing(listing)
             return [listing]
@@ -937,7 +1143,9 @@ class HuntTests(unittest.TestCase):
         class FakeDir:
             name = "acme-software-engineer-2026-08-30"
 
-        async def fake_process(job, fill_form=False):
+        async def fake_process(job, fill_form=False, on_progress=None):
+            if on_progress:
+                on_progress("Scoring ATS (1/3)")
             return FakeDir()
 
         events = []
@@ -955,9 +1163,154 @@ class HuntTests(unittest.TestCase):
 
             results = asyncio.run(run())
             self.assertEqual(results[0]["package_id"], FakeDir.name)
-            types = [item["type"] for item in events if item.get("type") in {"found", "queue", "processing", "package"}]
-            self.assertEqual(types, ["found", "queue", "processing", "package"])
+            types = [item["type"] for item in events if item.get("type") in {"found", "queued", "queue", "processing", "package"}]
+            compact = []
+            for kind in types:
+                if kind == "processing" and compact and compact[-1] == "processing":
+                    continue
+                compact.append(kind)
+            self.assertIn("processing", compact)
+            self.assertIn("package", compact)
+            self.assertLess(compact.index("queued") if "queued" in compact else compact.index("found"), compact.index("processing"))
+            self.assertLess(compact.index("processing"), compact.index("package"))
+            details = [item.get("detail") for item in events if item.get("type") == "processing"]
+            self.assertIn("Writing CV", details)
+            self.assertIn("Scoring ATS (1/3)", details)
             self.assertEqual(results[0]["company"], "Acme")
+        finally:
+            os.environ.pop("JOB_SEARCH_ROOT", None)
+            tmp.cleanup()
+            load_config(force=True)
+
+    def test_hunt_and_tailor_processes_while_search_continues(self):
+        import asyncio
+        from unittest.mock import patch
+
+        from pipeline.hunt import hunt_and_tailor
+
+        first = {
+            "company": "Acme",
+            "role": "Software Engineer",
+            "url": "https://example.com/acme",
+            "jd": "Python Kafka",
+            "location": "Montreal",
+        }
+        second = {
+            "company": "Beta",
+            "role": "Software Engineer",
+            "url": "https://example.com/beta",
+            "jd": "Python Kafka",
+            "location": "Montreal",
+        }
+        search_done = {"v": False}
+
+        class FakeDir:
+            def __init__(self, name):
+                self.name = name
+
+        events = []
+        tmp = tempfile.TemporaryDirectory()
+        try:
+            cfg = self._cfg(Path(tmp.name))
+
+            async def run():
+                started = asyncio.Event()
+
+                async def fake_search(cfg, limit=None, on_listing=None, on_stage=None, should_stop=None):
+                    if on_listing:
+                        on_listing(first)
+                    await asyncio.wait_for(started.wait(), timeout=2)
+                    self.assertFalse(search_done["v"])
+                    if on_listing:
+                        on_listing(second)
+                    search_done["v"] = True
+                    return [first, second]
+
+                async def fake_process(job, fill_form=False, on_progress=None):
+                    started.set()
+                    await asyncio.sleep(0)
+                    return FakeDir(f"{job['company'].lower()}-software-engineer-2026-08-30")
+
+                with patch("pipeline.hunt.search_jobs_async", fake_search), patch(
+                    "pipeline.run_pipeline.process_job", fake_process
+                ), patch("pipeline.search.find_existing_package", return_value=None), patch(
+                    "pipeline.hunt.append_job"
+                ), patch("pipeline.llm.worker_count", return_value=2):
+                    return await hunt_and_tailor(cfg, on_event=events.append)
+
+            results = asyncio.run(run())
+            companies = {item["company"] for item in results}
+            self.assertEqual(companies, {"Acme", "Beta"})
+            self.assertTrue(search_done["v"])
+        finally:
+            os.environ.pop("JOB_SEARCH_ROOT", None)
+            tmp.cleanup()
+            load_config(force=True)
+
+    def test_hunt_and_tailor_stop_skips_remaining_jobs(self):
+        import asyncio
+        from unittest.mock import patch
+
+        from pipeline.hunt import hunt_and_tailor
+
+        first = {
+            "company": "Acme",
+            "role": "Software Engineer",
+            "url": "https://example.com/acme",
+            "jd": "Python Kafka",
+            "location": "Montreal",
+        }
+        second = {
+            "company": "Beta",
+            "role": "Software Engineer",
+            "url": "https://example.com/beta",
+            "jd": "Python Kafka",
+            "location": "Montreal",
+        }
+        stop = {"v": False}
+        processed: list[str] = []
+
+        class FakeDir:
+            name = "acme-software-engineer-2026-08-30"
+
+        events = []
+        tmp = tempfile.TemporaryDirectory()
+        try:
+            cfg = self._cfg(Path(tmp.name))
+
+            async def run():
+                started = asyncio.Event()
+
+                async def fake_search(cfg, limit=None, on_listing=None, on_stage=None, should_stop=None):
+                    if on_listing:
+                        on_listing(first)
+                    await asyncio.wait_for(started.wait(), timeout=2)
+                    stop["v"] = True
+                    if on_listing:
+                        on_listing(second)
+                    return [first, second]
+
+                async def fake_process(job, fill_form=False, on_progress=None):
+                    processed.append(job["company"])
+                    started.set()
+                    await asyncio.sleep(0.01)
+                    return FakeDir()
+
+                with patch("pipeline.hunt.search_jobs_async", fake_search), patch(
+                    "pipeline.run_pipeline.process_job", fake_process
+                ), patch("pipeline.search.find_existing_package", return_value=None), patch(
+                    "pipeline.hunt.append_job"
+                ), patch("pipeline.llm.worker_count", return_value=1):
+                    return await hunt_and_tailor(
+                        cfg,
+                        on_event=events.append,
+                        should_stop=lambda: stop["v"],
+                    )
+
+            asyncio.run(run())
+            self.assertEqual(processed, ["Acme"])
+            self.assertTrue(any(item.get("status") == "stopped" for item in events))
+            self.assertFalse(any(item.get("company") == "Beta" and item.get("type") == "processing" for item in events))
         finally:
             os.environ.pop("JOB_SEARCH_ROOT", None)
             tmp.cleanup()

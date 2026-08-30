@@ -20,6 +20,27 @@
   </header>
 
   <main class="desk">
+    <section class="intake-panel">
+      <details class="intake-wrap" id="intake-wrap">
+        <summary>Add postings by URL</summary>
+        <form id="intake" class="intake" autocomplete="off">
+          <label>
+            Job URLs
+            <textarea id="urls" name="urls" rows="4" placeholder="One URL per line. Company and role are read from the page."></textarea>
+          </label>
+          <label>
+            Job description
+            <textarea id="jd" name="jd" rows="8" placeholder="Optional. Paste the posting text to tailor from it. Use with a single URL."></textarea>
+          </label>
+          <p class="field-note">If you paste a description, that text is used instead of scraping the page. Company and role still come from the URL when needed.</p>
+          <p id="inspect-note" class="hint" hidden></p>
+          <div class="actions">
+            <button type="submit" id="run">Run tailor</button>
+          </div>
+        </form>
+      </details>
+    </section>
+
     <section class="board-panel">
       <div class="board-head">
         <div>
@@ -28,6 +49,7 @@
         </div>
         <div class="board-actions">
           <button type="button" id="refresh" class="ghost">Refresh</button>
+          <button type="button" id="stop" class="stop" hidden>Stop</button>
           <button type="button" id="hunt">Hunt from profile</button>
         </div>
       </div>
@@ -50,25 +72,6 @@
     </section>
 
     <section class="stage">
-      <details class="intake-wrap" id="intake-wrap">
-        <summary>Add postings by URL</summary>
-        <form id="intake" class="intake" autocomplete="off">
-          <label>
-            Job URLs
-            <textarea id="urls" name="urls" rows="4" placeholder="One URL per line. Company and role are read from the page."></textarea>
-          </label>
-          <label>
-            Job description
-            <textarea id="jd" name="jd" rows="8" placeholder="Optional. Paste the posting text to tailor from it. Use with a single URL."></textarea>
-          </label>
-          <p class="field-note">If you paste a description, that text is used instead of scraping the page. Company and role still come from the URL when needed.</p>
-          <p id="inspect-note" class="hint" hidden></p>
-          <div class="actions">
-            <button type="submit" id="run">Run tailor</button>
-          </div>
-        </form>
-      </details>
-
       <div class="strip-wrap">
         <div class="strip-head">
           <span class="lamp" id="lamp" aria-hidden="true"></span>

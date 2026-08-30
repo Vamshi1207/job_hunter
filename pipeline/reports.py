@@ -136,6 +136,7 @@ def package_summary(cfg: Config, folder: Path) -> dict:
         "pdf_name": pdf.name if pdf else None,
         "pdf_path": as_host_path(cfg, pdf) if pdf else "",
         "html_name": exports.get("html_name") or (html.name if html else None),
+        "html_path": as_host_path(cfg, html) if html else "",
         "docx_name": exports.get("docx_name"),
         "pages_name": exports.get("pages_name"),
         "score": eval_data.get("score"),
@@ -185,6 +186,10 @@ def _job_meta(folder: Path) -> dict:
         if match:
             return {"url": match.group(1).strip()}
     return {}
+
+
+def package_dir(cfg: Config, folder_id: str) -> Path | None:
+    return _safe_folder(cfg, folder_id)
 
 
 def _safe_folder(cfg: Config, folder_id: str) -> Path | None:

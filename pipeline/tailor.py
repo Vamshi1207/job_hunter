@@ -7,14 +7,13 @@ import json
 import logging
 import os
 import re
-import shutil
-import subprocess
 from pathlib import Path
 
 from pipeline.bank import load_experience_bank, load_optional
 from pipeline.config import Config, load_config
 from pipeline.cv_format import apply_cv_format, page_height_px, page_size, tailor_layout_instructions
 from pipeline.jobs import slug
+from pipeline.llm import complete_prompt
 
 log = logging.getLogger(__name__)
 
@@ -88,20 +87,6 @@ def resume_tags(cfg: Config | None = None) -> list[str]:
 
 def all_tags(cfg: Config | None = None) -> list[str]:
     return resume_tags(cfg) + EXTRA_TAGS
-
-
-def call_agy(prompt: str, effort: str = "high") -> str:
-    cfg = load_config()
-    model = cfg.get("pipeline.model", "gemini-3.1-pro")
-    agy = shutil.which("agy") or "/root/.local/bin/agy"
-    result = subprocess.run(
-        [agy, "--print", prompt, "--model", model, "--effort", effort],
-        capture_output=True,
-        text=True,
-        check=True,
-        timeout=int(cfg.get("pipeline.llm_timeout_seconds", 600)),
-    )
-    return result.stdout
 
 
 def _tag_schema(cfg: Config | None = None) -> str:
@@ -223,16 +208,12 @@ Return ONLY these tagged blocks. For every content tag except ROLE_TYPE and ANAL
 
 
 def generate_tailored_materials(company: str, role: str, jd_text: str, feedback_history: str = "") -> str:
-    cfg = load_config()
-    prompt = build_tailor_prompt(cfg, company, role, jd_text, feedback_history)
+    prompt = build_tailor_prompt(load_config(), company, role, jd_text, feedback_history)
     log.info("Tailoring materials for %s — %s", company, role)
     try:
-        return call_agy(prompt, effort="high")
-    except subprocess.CalledProcessError as exc:
-        log.error("agy failed: %s", exc.stderr)
-        return ""
-    except FileNotFoundError:
-        log.error("agy CLI not found on PATH")
+        return complete_prompt(prompt, effort="high")
+    except Exception as exc:
+        log.error("Tailor LLM failed: %s", exc)
         return ""
 
 
@@ -330,7 +311,7 @@ def evaluate_ats_score(jd_text: str, tailored_resume: str, source_of_truth: str 
     prompt = build_critic_prompt(jd_text, tailored_resume, source_of_truth)
     log.info("Evaluating keyword coverage + honesty")
     try:
-        out = call_agy(prompt, effort="low")
+        out = complete_prompt(prompt, effort="low")
         match = re.search(r"\{.*\}", out, re.DOTALL)
         if not match:
             return {"score": 0, "honesty": 0, "critique": "Failed to parse JSON evaluation."}
@@ -522,6 +503,24 @@ async def html_to_pdf(html_path: Path, pdf_path: Path, max_pages: int | None = N
         log.info("PDF page count: %s (cv_format.pages=%s)", page_count, max_pages)
 
 
+async def rebuild_package_pdf(folder: Path) -> Path:
+    """Re-render PDF (and Word/Pages) from the HTML already on disk."""
+    folder = Path(folder)
+    html_out = next(iter(sorted(folder.glob("*_CV.html"))), None)
+    if html_out is None or not html_out.is_file():
+        raise FileNotFoundError(f"No *_CV.html in {folder.name}")
+    pdf_out = html_out.with_suffix(".pdf")
+    await html_to_pdf(html_out, pdf_out)
+    log.info("Rebuilt PDF from HTML: %s", pdf_out)
+    try:
+        from pipeline.cv_export import write_editable_exports
+
+        write_editable_exports(html_out, pdf_out if pdf_out.is_file() else None)
+    except Exception as exc:
+        log.warning("Word/Pages export failed: %s", exc)
+    return pdf_out
+
+
 async def save_materials(
     company: str,
     role: str,
@@ -530,7 +529,12 @@ async def save_materials(
     feedback_history: str = "",
     date_str: str | None = None,
     job: dict | None = None,
+    on_progress=None,
 ) -> Path:
+    def note(msg: str) -> None:
+        if on_progress:
+            on_progress(msg)
+
     cfg = load_config()
     date_str = date_str or datetime.date.today().isoformat()
     folder_name = f"{slug(company)}-{slug(role)}-{date_str}"
@@ -577,12 +581,14 @@ async def save_materials(
     (output_dir / "analysis.md").write_text("\n".join(analysis_body).strip() + "\n")
 
     pdf_out = output_dir / f"{cfg.cv_stem}.pdf"
+    note("Building PDF")
     try:
         await html_to_pdf(html_out, pdf_out)
         log.info("Compiled PDF: %s", pdf_out)
     except Exception as exc:
         log.error("PDF conversion failed: %s", exc)
 
+    note("Exporting Word/Pages")
     try:
         from pipeline.cv_export import write_editable_exports
 

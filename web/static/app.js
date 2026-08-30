@@ -6,7 +6,8 @@ const state = {
   activeId: null,
   runId: null,
   events: null,
-  hunt: { max_jobs: 5, roles: [], markets: [] },
+  hunt: { max_jobs: 0, roles: [], markets: [] },
+  huntStage: "",
 };
 
 async function api(path, options) {
@@ -33,6 +34,16 @@ function setLamp(mode) {
   $("lamp").className = "lamp" + (mode ? " " + mode : "");
 }
 
+function setControls(mode) {
+  const idle = mode === "idle";
+  const running = mode === "running";
+  $("hunt").disabled = !idle;
+  $("run").disabled = !idle;
+  $("stop").hidden = idle;
+  $("stop").disabled = !running;
+  $("stop").textContent = running || idle ? "Stop" : "Stopping…";
+}
+
 async function loadMe() {
   const me = await api("/api/me");
   $("who").textContent = me.name || "Job desk";
@@ -48,7 +59,9 @@ async function loadMe() {
   $("hunt-line").textContent =
     `Hunt looks for ${roles}` +
     (markets || where ? ` in ${markets || where}` : "") +
-    ` (up to ${state.hunt.max_jobs} jobs)` +
+    (state.hunt.max_jobs
+      ? ` (safety cap ${state.hunt.max_jobs} matches)`
+      : ", and tailors every posting that matches") +
     (years ? `, ~${years} years experience` : "") +
     (skip.length ? `, skipping ${skip.join("/")}` : "") +
     (reject ? `, not ${reject}` : "") +
@@ -66,6 +79,7 @@ function upsertJob(data) {
     url: data.url || "",
     status: data.status || "found",
     package_id: data.package_id || "",
+    detail: data.status === "working" ? (data.detail || "") : "",
   };
   const key = jobKey(incoming);
   const idx = state.jobs.findIndex((row) => jobKey(row) === key);
@@ -88,29 +102,41 @@ function setQueue(jobs) {
     url: row.url || "",
     status: row.status || "queued",
     package_id: row.package_id || "",
+    detail: "",
   }));
 }
 
 function progressFromJobs() {
   const jobs = state.jobs;
-  if (!jobs.length) return "";
+  if (!jobs.length) return state.huntStage || "";
   let ready = 0;
   let working = 0;
   let waiting = 0;
   let skipped = 0;
   let failed = 0;
+  let stopped = 0;
+  const workingDetails = [];
   for (const row of jobs) {
     if (row.status === "ready") ready += 1;
-    else if (row.status === "working") working += 1;
+    else if (row.status === "working") {
+      working += 1;
+      const detail = (row.detail || "").trim();
+      if (detail && !workingDetails.includes(detail)) workingDetails.push(detail);
+    }
     else if (row.status === "queued" || row.status === "found") waiting += 1;
     else if (row.status === "skipped") skipped += 1;
     else if (row.status === "failed") failed += 1;
+    else if (row.status === "stopped") stopped += 1;
   }
-  const processed = ready + skipped + failed;
-  let line = `Found ${jobs.length} · ${processed} processed · ${working} working · ${waiting} waiting`;
-  if (skipped) line += ` · ${skipped} skipped`;
-  if (failed) line += ` · ${failed} failed`;
-  return line;
+  const processed = ready + skipped + failed + stopped;
+  const parts = [`Found ${jobs.length}`, `${processed} processed`];
+  if (workingDetails.length) parts.push(workingDetails.join(" · "));
+  else if (working) parts.push(`${working} tailoring`);
+  if (waiting) parts.push(`${waiting} waiting`);
+  if (skipped) parts.push(`${skipped} skipped`);
+  if (failed) parts.push(`${failed} failed`);
+  if (stopped) parts.push(`${stopped} stopped`);
+  return parts.join(" · ");
 }
 
 function renderProgress(line) {
@@ -128,12 +154,15 @@ function renderProgress(line) {
   title.textContent = state.jobs.length ? "Jobs" : "Ready packages";
 }
 
-function statusLabel(status) {
+function statusLabel(row) {
+  const status = typeof row === "string" ? row : row && row.status;
+  const detail = typeof row === "string" ? "" : (row && row.detail) || "";
   if (status === "found") return "Found";
   if (status === "queued") return "Waiting";
-  if (status === "working") return "Working";
+  if (status === "working") return detail || "Tailoring";
   if (status === "ready") return "Ready";
   if (status === "skipped") return "Skipped";
+  if (status === "stopped") return "Stopped";
   if (status === "failed") return "Failed";
   return status || "";
 }
@@ -173,11 +202,19 @@ function editLink(pkg, name, label, title) {
 
 function editCell(pkg) {
   if (!pkg) return "—";
+  const htmlTip = pkg.html_path
+    ? `Edit in Cursor: ${pkg.html_path}`
+    : "Editable HTML resume";
   const links = [
     editLink(pkg, pkg.docx_name, "Word", "Editable Word document. Pages on Mac can open this too."),
-    editLink(pkg, pkg.html_name, "HTML", "Editable HTML resume"),
-    editLink(pkg, pkg.pages_name, "Pages", "Pages package: HTML, Word, and PDF preview inside"),
+    editLink(pkg, pkg.html_name, "HTML", htmlTip),
+    editLink(pkg, pkg.pages_name, "Pages", "Opens in Pages"),
   ].filter(Boolean);
+  if (pkg.html_name) {
+    links.push(
+      `<button type="button" class="rebuild-pdf ghost" data-id="${escapeAttr(pkg.id)}" title="Rebuild PDF from the HTML on disk">Rebuild PDF</button>`
+    );
+  }
   if (!links.length) return "—";
   return `<span class="edit-links">${links.join(" ")}</span>`;
 }
@@ -230,6 +267,31 @@ function bindDelete(tr, packageId, liveRow) {
   });
 }
 
+function bindRebuild(tr) {
+  const btn = tr.querySelector(".rebuild-pdf");
+  if (!btn) return;
+  btn.addEventListener("click", async (ev) => {
+    ev.preventDefault();
+    ev.stopPropagation();
+    const id = btn.dataset.id;
+    if (!id) return;
+    const label = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = "Rebuilding…";
+    try {
+      await api("/api/packages/" + encodeURIComponent(id) + "/rebuild-pdf", { method: "POST" });
+      await loadPackages(state.activeId);
+      if (state.activeId === id) {
+        await openPackage(id);
+      }
+    } catch (err) {
+      setStrip(err.message);
+      btn.disabled = false;
+      btn.textContent = label;
+    }
+  });
+}
+
 function jobLinkCell(pkg) {
   if (!pkg.url) return "—";
   return `<a class="file-link" href="${escapeAttr(pkg.url)}" target="_blank" rel="noopener">Posting</a>`;
@@ -266,13 +328,14 @@ function renderBoard(active) {
     tr.innerHTML = `
       <td>${escapeHtml(row.role || "Role")}</td>
       <td>${escapeHtml(row.company || "")}</td>
-      <td><span class="job-status job-status-${escapeAttr(row.status || "found")}">${escapeHtml(statusLabel(row.status))}</span></td>
+      <td><span class="job-status job-status-${escapeAttr(row.status || "found")}">${escapeHtml(statusLabel(row))}</span></td>
       <td>${liveResumeCell(row)}</td>
       <td>${liveEditCell(row)}</td>
       <td>${liveJobLink(row)}</td>
       <td>${deleteCell(row.package_id, row.company, row.role)}</td>
     `;
     bindDelete(tr, row.package_id, row);
+    bindRebuild(tr);
     if (row.package_id) {
       tr.tabIndex = 0;
       tr.style.cursor = "pointer";
@@ -303,6 +366,7 @@ function renderBoard(active) {
       <td>${deleteCell(pkg.id, pkg.company, pkg.role)}</td>
     `;
     bindDelete(tr, pkg.id);
+    bindRebuild(tr);
     tr.tabIndex = 0;
     tr.addEventListener("click", (ev) => {
       if (ev.target.closest("a") || ev.target.closest("button")) return;
@@ -387,9 +451,12 @@ function showTab(detail, tabId, btn) {
       body.textContent = "No PDF in this package.";
       return;
     }
-    const src = `/api/packages/${encodeURIComponent(detail.id)}/file/${encodeURIComponent(detail.pdf_name)}`;
+    const src = `/api/packages/${encodeURIComponent(detail.id)}/file/${encodeURIComponent(detail.pdf_name)}?t=${Date.now()}`;
     const pathNote = detail.pdf_path ? `<p class="hint">${escapeHtml(detail.pdf_path)}</p>` : "";
-    body.innerHTML = `${pathNote}<iframe title="Resume PDF" src="${src}"></iframe>`;
+    const htmlNote = detail.html_path
+      ? `<p class="hint">Edit HTML in Cursor: ${escapeHtml(detail.html_path)} then Rebuild PDF.</p>`
+      : "";
+    body.innerHTML = `${pathNote}${htmlNote}<iframe title="Resume PDF" src="${src}"></iframe>`;
     return;
   }
   const map = {
@@ -404,8 +471,10 @@ function showTab(detail, tabId, btn) {
 function watchRun(runId) {
   if (state.events) state.events.close();
   state.jobs = [];
+  state.huntStage = "";
   renderProgress("");
   setLamp("on");
+  setControls("running");
   $("run-state").textContent = "running";
   setStrip("— strip open —\n");
   const src = new EventSource("/api/runs/" + runId + "/stream");
@@ -414,16 +483,26 @@ function watchRun(runId) {
     try {
       const data = JSON.parse(ev.data);
       if (data.line && data.type !== "progress") setStrip(data.line, true);
-      if (data.type === "found") {
-        upsertJob({ ...data, status: data.status || "found" });
+      if (data.type === "found" || data.type === "queued") {
+        upsertJob({ ...data, status: data.status || (data.type === "queued" ? "queued" : "found") });
         renderBoard(state.activeId);
       }
       if (data.type === "queue") {
-        setQueue(data.jobs || []);
+        for (const row of data.jobs || []) {
+          upsertJob({ ...row, status: row.status || "queued" });
+        }
+        if ((data.jobs || []).length) $("run-state").textContent = "tailoring";
         renderBoard(state.activeId);
+      }
+      if (data.type === "hunt_stage") {
+        state.huntStage = data.detail || data.line || "";
+        const busy = state.jobs.some((row) => row.status === "working" || row.status === "queued");
+        if (state.huntStage && !busy) $("run-state").textContent = state.huntStage;
+        if (!state.jobs.length && state.huntStage) renderProgress(state.huntStage);
       }
       if (data.type === "processing" && (data.company || data.role)) {
         upsertJob({ ...data, status: data.status || "working" });
+        $("run-state").textContent = "tailoring";
         renderBoard(state.activeId);
       }
       if (data.type === "package") {
@@ -438,6 +517,10 @@ function watchRun(runId) {
         upsertJob({ ...data, status: "failed" });
         renderBoard(state.activeId);
       }
+      if (data.type === "stopped") {
+        upsertJob({ ...data, status: "stopped" });
+        renderBoard(state.activeId);
+      }
       if (data.type === "progress") {
         renderProgress(data.line);
       }
@@ -450,11 +533,12 @@ function watchRun(runId) {
     try { payload = JSON.parse(ev.data); } catch (_) {}
     setLamp(payload.status === "done" ? "done" : "");
     $("run-state").textContent = payload.status || "done";
+    setControls("idle");
     const first = payload.package_id || (payload.packages && payload.packages[0]);
     await loadPackages(first);
     renderProgress(progressFromJobs());
     if (first) openPackage(first);
-    if (payload.error) setStrip("ERROR: " + payload.error, true);
+    if (payload.error && payload.status !== "stopped") setStrip("ERROR: " + payload.error, true);
     $("hunt").disabled = false;
     $("run").disabled = false;
   });
@@ -465,12 +549,12 @@ function watchRun(runId) {
 
 $("refresh").addEventListener("click", () => {
   state.jobs = [];
+  state.huntStage = "";
   renderProgress("");
   loadPackages();
 });
 $("hunt").addEventListener("click", async () => {
-  const huntBtn = $("hunt");
-  huntBtn.disabled = true;
+  setControls("running");
   try {
     const run = await api("/api/hunt", {
       method: "POST",
@@ -482,13 +566,24 @@ $("hunt").addEventListener("click", async () => {
   } catch (err) {
     setStrip(err.message);
     setLamp("");
-    huntBtn.disabled = false;
+    setControls("idle");
+  }
+});
+$("stop").addEventListener("click", async () => {
+  if (!state.runId) return;
+  setControls("stopping");
+  $("run-state").textContent = "stopping";
+  try {
+    await api("/api/runs/" + state.runId + "/stop", { method: "POST" });
+    setStrip("Stopping hunt…", true);
+  } catch (err) {
+    setStrip(err.message, true);
+    setControls("running");
   }
 });
 $("intake").addEventListener("submit", async (ev) => {
   ev.preventDefault();
-  const runBtn = $("run");
-  runBtn.disabled = true;
+  setControls("running");
   try {
     const body = {
       urls: $("urls").value,
@@ -505,7 +600,7 @@ $("intake").addEventListener("submit", async (ev) => {
     $("inspect-note").hidden = false;
     $("inspect-note").textContent = err.message;
     setLamp("");
-    runBtn.disabled = false;
+    setControls("idle");
   }
 });
 

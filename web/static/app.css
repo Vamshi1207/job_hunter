@@ -74,6 +74,10 @@ h2 { font-size: 1.15rem; }
   color: #3d4c5c;
 }
 
+.intake-panel {
+  padding: 1rem 1.5rem 0;
+}
+
 .board-panel {
   padding: 1rem 1.5rem 0;
 }
@@ -104,9 +108,16 @@ h2 { font-size: 1.15rem; }
 
 .job-status-found,
 .job-status-queued { color: #4a5a6a; }
-.job-status-working { color: #8a5a12; }
+.job-status-working {
+  color: #8a5a12;
+  text-transform: none;
+  letter-spacing: 0.02em;
+  white-space: normal;
+  line-height: 1.35;
+}
 .job-status-ready { color: #1f6b3a; }
-.job-status-skipped { color: #5a6a7a; }
+.job-status-skipped,
+.job-status-stopped { color: #5a6a7a; }
 .job-status-failed { color: #8a2b2b; }
 
 .job-row-live td {
@@ -169,7 +180,7 @@ h2 { font-size: 1.15rem; }
   gap: 0.45rem 0.7rem;
 }
 
-.row-delete {
+.rebuild-pdf {
   font-size: 0.78rem;
   padding: 0.2rem 0.45rem;
 }
@@ -292,6 +303,12 @@ button.ghost {
   color: var(--ink);
 }
 
+button.stop {
+  background: transparent;
+  color: #8a2b2b;
+  border-color: #8a2b2b;
+}
+
 button:focus-visible {
   outline: 2px solid var(--amber);
   outline-offset: 2px;
@@ -306,7 +323,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 }
 
 .strip-wrap {
-  margin-top: 1.25rem;
+  margin-top: 0;
 }
 
 .strip-head {
