@@ -115,6 +115,10 @@ def package_summary(cfg: Config, folder: Path) -> dict:
             if named and not is_placeholder_company(named.group(1)):
                 company = named.group(1).strip()
     url = (job_meta.get("url") or "").strip()
+    from pipeline.jobs import display_location, infer_work_mode
+
+    location = (job_meta.get("location") or "").strip()
+    work_mode = (job_meta.get("work_mode") or "").strip().lower() or infer_work_mode(location)
     if not eval_data.get("score"):
         changes = next(iter(sorted(folder.glob("*_changes.md"))), None)
         if changes and changes.exists():
@@ -128,7 +132,8 @@ def package_summary(cfg: Config, folder: Path) -> dict:
         "company": company,
         "role": role,
         "url": url,
-        "location": job_meta.get("location") or "",
+        "location": display_location(location, work_mode) or location,
+        "work_mode": work_mode,
         "source": job_meta.get("source") or "",
         "date": date,
         "modified": folder.stat().st_mtime,
@@ -140,6 +145,7 @@ def package_summary(cfg: Config, folder: Path) -> dict:
         "docx_name": exports.get("docx_name"),
         "pages_name": exports.get("pages_name"),
         "score": eval_data.get("score"),
+        "ats_score": eval_data.get("score"),
         "honesty": eval_data.get("honesty"),
         "critique": eval_data.get("critique") or "",
         "evaluation": {

@@ -249,6 +249,72 @@ def parse_posting_meta(html: str, url: str = "") -> dict:
     return {"company": company.strip(), "role": (role or "").strip()[:160], "jd": jd.strip(), "location": location.strip()}
 
 
+REGION_TOKENS = {
+    "qc", "on", "bc", "ab", "mb", "sk", "ns", "nb", "nl", "pe", "yt", "nt", "nu",
+    "ca", "us", "usa", "uk", "canada", "united states", "america", "remote",
+}
+
+
+def infer_work_mode(location: str = "", jd: str = "") -> str:
+    """hybrid, remote, onsite, or empty if the posting does not say."""
+    blob = f"{location or ''}\n{jd or ''}".lower()
+    if re.search(r"\bhybrid\b", blob):
+        return "hybrid"
+    if re.search(r"\b(remote|work from home|\bwfh\b|anywhere)\b", blob) and not re.search(
+        r"\b(not remote|no remote|not a remote)\b", blob
+    ):
+        return "remote"
+    if re.search(r"\b(on-?site|in-?office|office-based|in the office)\b", blob):
+        return "onsite"
+    loc = (location or "").strip().lower()
+    if loc in {"remote", "anywhere"} or loc.startswith("remote"):
+        return "remote"
+    if loc:
+        return "onsite"
+    return ""
+
+
+def display_location(location: str = "", work_mode: str = "") -> str:
+    """Short place list for the desk table, e.g. Montreal, Toronto, Remote."""
+    text = (location or "").strip()
+    if not text:
+        return "Remote" if work_mode == "remote" else ""
+    cleaned = re.sub(r"\b(hybrid|on-?site|in-?office|wfh)\b", " ", text, flags=re.I)
+    chunks = re.split(r"[\n|/•;·]|(?:\s+-\s+)|(?:\s+or\s+)|(?:\s+and\s+)", cleaned, flags=re.I)
+    found: list[str] = []
+    seen: set[str] = set()
+    for chunk in chunks:
+        piece = re.sub(r"\s+", " ", chunk).strip(" ,-()")
+        if not piece:
+            continue
+        first = piece.split(",")[0].strip()
+        key = first.lower()
+        if not first or key in REGION_TOKENS or len(first) > 40:
+            continue
+        if key not in seen:
+            seen.add(key)
+            found.append(first)
+        if len(found) >= 3:
+            break
+    if work_mode == "remote" and "remote" not in seen and found:
+        pass
+    if not found:
+        if work_mode == "remote" or "remote" in (location or "").lower():
+            return "Remote"
+        return (location or "").split(",")[0].strip()[:40]
+    return ", ".join(found)
+
+
+def decorate_listing(listing: dict) -> dict:
+    item = dict(listing)
+    loc = (item.get("location") or "").strip()
+    mode = (item.get("work_mode") or "").strip().lower() or infer_work_mode(loc, item.get("jd") or "")
+    item["location"] = loc
+    item["work_mode"] = mode
+    item["location_display"] = display_location(loc, mode)
+    return item
+
+
 def fetch_posting(url: str, timeout: int = 20) -> Optional[dict]:
     """Public ATS fetch. LinkedIn returns None so Camoufox can read the signed-in page."""
     host = urlparse(url).netloc.lower()

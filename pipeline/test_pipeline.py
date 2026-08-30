@@ -854,10 +854,10 @@ class HuntTests(unittest.TestCase):
             cfg = self._cfg(Path(tmp.name), extra)
             saved = {
                 "company": "SavedCo",
-                "role": "Principal Java Engineer",
+                "role": "Principal Python Engineer",
                 "url": "https://example.com/saved",
                 "location": "Montreal, Canada",
-                "jd": "10-15 years of Java required.",
+                "jd": "10-15 years of Python required.",
                 "saved": True,
             }
             search = {
@@ -869,6 +869,20 @@ class HuntTests(unittest.TestCase):
             }
             self.assertEqual(score_listing(saved, cfg), 50)
             self.assertEqual(score_listing({**saved, "saved": False}, cfg), 0)
+            self.assertEqual(
+                score_listing(
+                    {
+                        "company": "CppCo",
+                        "role": "C++ Software Engineer",
+                        "url": "https://example.com/cpp",
+                        "location": "Montreal, Canada",
+                        "jd": "5+ years of C++ required. STL and templates.",
+                        "saved": True,
+                    },
+                    cfg,
+                ),
+                0,
+            )
             chosen = rank_and_select(cfg, [search, saved])
             self.assertEqual(chosen[0]["company"], "SavedCo")
             self.assertTrue(chosen[0]["saved"])
@@ -900,6 +914,78 @@ class HuntTests(unittest.TestCase):
             tmp.cleanup()
             load_config(force=True)
 
+    def test_saved_jobs_pagination_collects_links_across_pages(self):
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from pipeline.browser_hunt import listing_next_is_enabled, _collect_paginated_job_links
+
+        linkedin = """
+        <button aria-current="true">1</button>
+        <button aria-label="Page 2">2</button>
+        <button aria-label="Next">Next</button>
+        <a href="https://www.linkedin.com/jobs/view/111111111">job</a>
+        """
+        self.assertTrue(listing_next_is_enabled(linkedin))
+        self.assertFalse(listing_next_is_enabled('<button aria-label="Next" disabled>Next</button>'))
+        self.assertFalse(listing_next_is_enabled("<button>Easy Apply</button>"))
+
+        pages = [
+            (
+                '<a href="https://www.linkedin.com/jobs/view/111111111">a</a>'
+                '<button aria-label="Next">Next</button>'
+            ),
+            (
+                '<a href="https://www.linkedin.com/jobs/view/222222222">b</a>'
+                '<button aria-label="Next" disabled>Next</button>'
+            ),
+        ]
+        state = {"i": 0}
+        page = MagicMock()
+        page.url = "https://www.linkedin.com/my-items/saved-jobs/"
+
+        async def content():
+            return pages[state["i"]]
+
+        async def evaluate(script):
+            text = str(script)
+            if "scrollBy" in text or "scrollTo" in text:
+                return None
+            if state["i"] < 1:
+                state["i"] = 1
+                return "next"
+            return ""
+
+        page.content = content
+        page.evaluate = evaluate
+        page.goto = AsyncMock()
+
+        async def run():
+            from pipeline import browser_hunt as bh
+
+            token = bh._should_stop.set(lambda: False)
+            try:
+                with patch("pipeline.browser_hunt._open_listings_url", AsyncMock(return_value=True)), patch(
+                    "pipeline.browser_hunt._pause_ms", AsyncMock(return_value=False)
+                ), patch("pipeline.browser_hunt._click_first", AsyncMock(return_value=False)):
+                    return await _collect_paginated_job_links(
+                        page,
+                        MagicMock(),
+                        {"id": "saved jobs", "link_contains": ["/jobs/view/"]},
+                        "https://www.linkedin.com/my-items/saved-jobs/",
+                        100,
+                        0,
+                        10,
+                        max_pages=5,
+                    )
+            finally:
+                bh._should_stop.reset(token)
+
+        links = asyncio.run(run())
+        self.assertEqual(len(links), 2)
+        self.assertTrue(any("111111111" in item for item in links))
+        self.assertTrue(any("222222222" in item for item in links))
+
     def test_package_summary_includes_job_link(self):
         from pipeline.reports import package_summary
 
@@ -908,7 +994,7 @@ class HuntTests(unittest.TestCase):
         folder = root / "applications" / "Acme-Software-Engineer-2026-08-29"
         folder.mkdir(parents=True)
         (folder / "job.json").write_text(
-            '{"company": "Acme", "role": "Software Engineer", "url": "https://example.com/job"}'
+            '{"company": "Acme", "role": "Software Engineer", "url": "https://example.com/job", "location": "Montreal, QC, Canada", "work_mode": "hybrid"}'
         )
         (folder / "Test_CV.pdf").write_text("pdf")
         try:
@@ -917,6 +1003,8 @@ class HuntTests(unittest.TestCase):
             self.assertEqual(summary["company"], "Acme")
             self.assertEqual(summary["role"], "Software Engineer")
             self.assertEqual(summary["url"], "https://example.com/job")
+            self.assertEqual(summary["location"], "Montreal")
+            self.assertEqual(summary["work_mode"], "hybrid")
             self.assertTrue(summary["has_pdf"])
             self.assertTrue(summary["pdf_path"])
         finally:
@@ -1169,7 +1257,9 @@ class HuntTests(unittest.TestCase):
         board.stage("Sign in or extra verification — use the Camoufox panel")
         self.assertTrue(events[-1].get("browser"))
         board.stage("Opening job boards")
-        self.assertTrue(events[-1].get("browser"))
+        self.assertFalse(events[-1].get("browser"))
+        board.stage("Signed in")
+        self.assertFalse(events[-1].get("browser"))
         board.ready(first, "acme-software-engineer-2026-08-30")
         types = [item["type"] for item in events]
         self.assertEqual(types[0], "found")
@@ -1196,6 +1286,81 @@ class HuntTests(unittest.TestCase):
         )
         self.assertIn("Writing CV (1/3)", mid["line"])
         self.assertNotIn("working", mid["line"])
+
+    def test_stage_needs_browser_only_for_user_action(self):
+        from pipeline.hunt import stage_needs_browser
+
+        self.assertTrue(
+            stage_needs_browser("Sign in or extra verification — use the Camoufox panel")
+        )
+        self.assertTrue(stage_needs_browser("Complete extra verification — use the Camoufox panel"))
+        self.assertFalse(stage_needs_browser("Opening job boards"))
+        self.assertFalse(stage_needs_browser("Searching LinkedIn"))
+        self.assertFalse(stage_needs_browser("Signed in"))
+        self.assertFalse(stage_needs_browser("Sign-in wait ended"))
+
+    def test_stack_gate_and_location_display(self):
+        from pipeline.jobs import display_location, infer_work_mode
+        from pipeline.search import score_listing
+        from pipeline.stack_match import apply_stack_gate, stack_decision
+
+        tmp = tempfile.TemporaryDirectory()
+        extra = (
+            "  preferred_skills:\n"
+            "    - python\n"
+            "    - kafka\n"
+            "  reject_skills:\n"
+            "    - java\n"
+        )
+        try:
+            cfg = self._cfg(Path(tmp.name), extra)
+            python_job = {
+                "company": "Acme",
+                "role": "Software Engineer",
+                "url": "https://example.com/py",
+                "location": "Montreal, QC, Canada",
+                "jd": "5+ years of Python and Kafka. Distributed systems.",
+            }
+            cpp_job = {
+                "company": "ChipCo",
+                "role": "C++ Software Engineer",
+                "url": "https://example.com/cpp",
+                "location": "Toronto, ON (Hybrid)",
+                "jd": "5+ years of C++ required. STL, templates, low-level performance.",
+            }
+            ts_job = {
+                "company": "WebCo",
+                "role": "Software Engineer",
+                "url": "https://example.com/ts",
+                "location": "Remote, Canada",
+                "jd": "TypeScript and Node.js required. APIs and distributed services.",
+            }
+            mixed = {
+                "company": "MixCo",
+                "role": "Software Engineer",
+                "url": "https://example.com/mix",
+                "location": "Canada",
+                "jd": "Systems programming in C++. Python is a plus for tooling.",
+            }
+            self.assertGreater(score_listing(python_job, cfg), 0)
+            self.assertEqual(stack_decision(python_job, cfg), "keep")
+            self.assertEqual(score_listing(cpp_job, cfg), 0)
+            self.assertEqual(stack_decision(cpp_job, cfg), "drop")
+            self.assertEqual(stack_decision(ts_job, cfg), "keep")
+            self.assertEqual(stack_decision(mixed, cfg), "doubt")
+            self.assertTrue(apply_stack_gate(python_job, cfg, ask_llm=lambda *_: False))
+            self.assertFalse(apply_stack_gate(cpp_job, cfg, ask_llm=lambda *_: True))
+            self.assertTrue(apply_stack_gate(mixed, cfg, ask_llm=lambda *_: True))
+            self.assertFalse(apply_stack_gate(mixed, cfg, ask_llm=lambda *_: False))
+            self.assertEqual(infer_work_mode("Toronto, ON (Hybrid)", ""), "hybrid")
+            self.assertEqual(infer_work_mode("Remote, Canada", ""), "remote")
+            self.assertEqual(infer_work_mode("Montreal, QC", "On-site in downtown Montreal"), "onsite")
+            self.assertEqual(display_location("Montreal, QC, Canada", "onsite"), "Montreal")
+            self.assertEqual(display_location("Toronto / Montreal", "hybrid"), "Toronto, Montreal")
+        finally:
+            os.environ.pop("JOB_SEARCH_ROOT", None)
+            tmp.cleanup()
+            load_config(force=True)
 
     def test_hunt_and_tailor_emits_queue_before_processing(self):
         import asyncio

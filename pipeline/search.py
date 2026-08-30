@@ -253,6 +253,10 @@ def score_listing(listing: dict, cfg: Config) -> int:
             return 0
         if blocked_url(url) and not (listing.get("jd") or "").strip():
             return 0
+        from pipeline.stack_match import stack_decision
+
+        if stack_decision(listing, cfg) == "drop":
+            return 0
         return 50
     if blocked_url(url) and not (listing.get("jd") or "").strip():
         return 0
@@ -272,6 +276,10 @@ def score_listing(listing: dict, cfg: Config) -> int:
     for skill in reject_skills(cfg):
         if phrase_in(title, skill):
             return 0
+    from pipeline.stack_match import stack_decision
+
+    if stack_decision(listing, cfg) == "drop":
+        return 0
 
     title_score = 0
     for role in target_roles(cfg):
@@ -640,6 +648,17 @@ class HuntMatcher:
         if item["fit"] <= 0:
             log.info(
                 "Skipping %s — %s (does not match hunt years/skills/level in config)",
+                item.get("company"),
+                item.get("role"),
+            )
+            return None
+        from pipeline.jobs import decorate_listing
+        from pipeline.stack_match import apply_stack_gate
+
+        item = decorate_listing(item)
+        if not apply_stack_gate(item, self.cfg):
+            log.info(
+                "Skipping %s — %s (stack does not match strong skills)",
                 item.get("company"),
                 item.get("role"),
             )

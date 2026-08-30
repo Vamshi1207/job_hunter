@@ -185,6 +185,18 @@ h2 { font-size: 1.15rem; }
   font-size: 0.95rem;
 }
 
+.board th:nth-child(3),
+.board td:nth-child(3),
+.board th:nth-child(4),
+.board td:nth-child(4) {
+  white-space: nowrap;
+}
+
+.ats-cell {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+
 .board th {
   font-family: var(--mono);
   font-size: 0.72rem;

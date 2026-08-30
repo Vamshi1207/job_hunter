@@ -100,7 +100,10 @@ async def _wait_for_manual_auth(page, seconds: int, reason: str) -> bool:
     still_blocked = await _needs_login(page)
     if still_blocked:
         log.warning("Still on a sign-in or verification page after %ss.", wait)
-    return not still_blocked
+        _notify_stage("Sign-in wait ended")
+        return False
+    _notify_stage("Signed in")
+    return True
 
 
 DEFAULT_LINK_HINTS = (
@@ -632,21 +635,102 @@ async def _crawl_google_ats(page, cfg: Config, source: dict, delay_ms: int, logi
     return listings
 
 
-async def _collect_from_url(
-    page,
-    cfg: Config,
-    source: dict,
-    url: str,
-    delay_ms: int,
-    login_wait: int,
-    max_per: int,
-) -> list[dict]:
+SAVED_LIST_MAX_PAGES = 25
+
+# Click LinkedIn/Indeed listing pagination. Never matches Apply/Submit.
+_CLICK_NEXT_PAGE_JS = """() => {
+  const labelOf = (el) =>
+    `${el.getAttribute("aria-label") || ""} ${el.textContent || ""}`.replace(/\\s+/g, " ").trim();
+  const disabled = (el) =>
+    el.disabled ||
+    el.getAttribute("aria-disabled") === "true" ||
+    el.classList.contains("disabled") ||
+    el.classList.contains("artdeco-button--disabled");
+  const applyLike = (text) => /\\b(apply|submit)\\b/i.test(text);
+  const nodes = [...document.querySelectorAll("button, a, [role='button']")];
+  const next = nodes.find((el) => {
+    if (disabled(el)) return false;
+    const text = labelOf(el);
+    if (applyLike(text)) return false;
+    const testid = (el.getAttribute("data-testid") || "").toLowerCase();
+    if (/^next\\b/i.test(text) || /next page/i.test(text)) return true;
+    if (testid.includes("pagination-page-next")) return true;
+    if (el.classList.contains("artdeco-pagination__button--next")) return true;
+    return false;
+  });
+  if (next) {
+    next.click();
+    return "next";
+  }
+  const current = nodes.find(
+    (el) => el.getAttribute("aria-current") === "true" || el.getAttribute("aria-current") === "page"
+  );
+  const n = current ? parseInt((current.textContent || "").trim(), 10) : NaN;
+  if (n >= 1) {
+    const want = String(n + 1);
+    const pageBtn = nodes.find((el) => {
+      if (disabled(el) || applyLike(labelOf(el))) return false;
+      const aria = (el.getAttribute("aria-label") || "").trim();
+      if (/^page\\s+/i.test(aria) && aria.replace(/[^0-9]/g, "") === want) return true;
+      return (el.textContent || "").trim() === want && /pagination/i.test(el.className || el.parentElement?.className || "");
+    });
+    if (pageBtn) {
+      pageBtn.click();
+      return "page";
+    }
+  }
+  return "";
+}"""
+
+_NEXT_PAGE_SELECTORS = (
+    "button.artdeco-pagination__button--next:not([disabled])",
+    'button[aria-label="Next"]:not([disabled])',
+    'button[aria-label="Next Page"]:not([disabled])',
+    'a[aria-label="Next"]',
+    'a[aria-label="Next Page"]',
+    'a[data-testid="pagination-page-next"]',
+    'button[data-testid="pagination-page-next"]',
+)
+
+
+def listing_next_is_enabled(html: str) -> bool:
+    """True when a listings page has a usable Next / page-N control (not Apply)."""
+    soup = BeautifulSoup(html or "", "html.parser")
+    for el in soup.find_all(["button", "a"]):
+        aria = el.get("aria-label") or ""
+        if isinstance(aria, (list, tuple)):
+            aria = " ".join(str(part) for part in aria)
+        text = f"{aria} {el.get_text(' ', strip=True)}".strip()
+        classes = " ".join(el.get("class") or [])
+        testid = str(el.get("data-testid") or "")
+        if el.has_attr("disabled") or str(el.get("aria-disabled") or "").lower() == "true":
+            continue
+        if "disabled" in classes:
+            continue
+        if re.search(r"\b(apply|submit)\b", text, re.I):
+            continue
+        if re.match(r"^next\b", text, re.I) or re.search(r"next page", text, re.I):
+            return True
+        if "pagination-page-next" in testid.lower() or "artdeco-pagination__button--next" in classes:
+            return True
+    return False
+
+
+def _mark_saved_listing(item: dict, link: str) -> dict:
+    item["saved"] = True
+    host = urlparse(item.get("url") or link).netloc.lower()
+    board = "linkedin" if "linkedin.com" in host else "indeed" if "indeed." in host else "board"
+    item["source"] = f"saved:{board}"
+    return item
+
+
+async def _open_listings_url(page, cfg: Config, url: str, delay_ms: int, login_wait: int) -> bool:
     if _stopped():
-        return []
+        return False
     log.info("Camoufox open %s", url)
     await page.goto(url, wait_until="domcontentloaded", timeout=60000)
     if await _pause_ms(max(400, delay_ms)):
-        return []
+        return False
     if await _needs_login(page):
         signed_in = await _try_configured_login(page, cfg, delay_ms)
         if not signed_in or await _needs_login(page):
@@ -656,11 +740,106 @@ async def _collect_from_url(
                 "Sign in or extra verification — use the Camoufox panel",
             )
         if _stopped():
-            return []
+            return False
         await page.goto(url, wait_until="domcontentloaded", timeout=60000)
         if await _pause_ms(max(400, delay_ms)):
-            return []
+            return False
+    return not _stopped()
 
+
+async def _click_next_listings_page(page, delay_ms: int) -> bool:
+    """Click Next (or the next page number). False if there is no further page."""
+    before_url = page.url or ""
+    before_html = ""
+    try:
+        before_html = await page.content()
+    except Exception as exc:
+        _raise_if_cancelled(exc)
+    clicked = ""
+    try:
+        clicked = str(await page.evaluate(_CLICK_NEXT_PAGE_JS) or "")
+    except Exception as exc:
+        _raise_if_cancelled(exc)
+    if not clicked:
+        if await _click_first(page, list(_NEXT_PAGE_SELECTORS)):
+            clicked = "selector"
+    if not clicked:
+        return False
+    if await _pause_ms(max(800, delay_ms)):
+        return False
+    after_url = page.url or ""
+    if after_url != before_url:
+        return True
+    try:
+        after_html = await page.content()
+    except Exception as exc:
+        _raise_if_cancelled(exc)
+        return True
+    return after_html != before_html
+
+
+async def _collect_paginated_job_links(
+    page,
+    cfg: Config,
+    source: dict,
+    url: str,
+    delay_ms: int,
+    login_wait: int,
+    limit: int,
+    *,
+    max_pages: int = SAVED_LIST_MAX_PAGES,
+) -> list[str]:
+    """Stay on the saved/search list and follow Next until limit, last page, or max_pages."""
+    if limit <= 0 or not await _open_listings_url(page, cfg, url, delay_ms, login_wait):
+        return []
+    contains = _as_list(source.get("link_contains")) or None
+    found: list[str] = []
+    seen: set[str] = set()
+    pages = max(1, min(40, int(max_pages or SAVED_LIST_MAX_PAGES)))
+    for page_n in range(1, pages + 1):
+        if _stopped() or len(found) >= limit:
+            break
+        label = source.get("id") or "jobs"
+        _notify_stage(f"Reading {label} (page {page_n})")
+        await _scroll_listings(page)
+        try:
+            html = await page.content()
+        except Exception as exc:
+            _raise_if_cancelled(exc)
+            break
+        new = 0
+        for link in collect_job_links(html, page.url, contains):
+            key = link.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            found.append(link)
+            new += 1
+            if len(found) >= limit:
+                log.info("%s: %s unique posting link(s) across %s page(s)", label, len(found), page_n)
+                return found
+        if page_n >= pages:
+            break
+        if new == 0 and page_n > 1:
+            break
+        moved = await _click_next_listings_page(page, delay_ms)
+        if not moved:
+            break
+    log.info("%s: %s unique posting link(s) across listing page(s)", source.get("id") or "jobs", len(found))
+    return found
+
+
+async def _collect_from_url(
+    page,
+    cfg: Config,
+    source: dict,
+    url: str,
+    delay_ms: int,
+    login_wait: int,
+    max_per: int,
+) -> list[dict]:
+    if not await _open_listings_url(page, cfg, url, delay_ms, login_wait):
+        return []
     await _scroll_listings(page)
     html = await page.content()
     contains = _as_list(source.get("link_contains")) or None
@@ -673,10 +852,7 @@ async def _collect_from_url(
         item = await _extract_posting(page, cfg, source, link, delay_ms)
         if item:
             if saved:
-                item["saved"] = True
-                host = urlparse(item.get("url") or link).netloc.lower()
-                board = "linkedin" if "linkedin.com" in host else "indeed" if "indeed." in host else "board"
-                item["source"] = f"saved:{board}"
+                _mark_saved_listing(item, link)
             listings.append(item)
             _notify_listing(item)
     return listings
@@ -690,28 +866,37 @@ async def _collect_saved_jobs(page, cfg: Config, delay_ms: int, login_wait: int,
         cap = max_per
     cap = max(1, min(80, cap))
     source = {
-        "id": "saved",
+        "id": "saved jobs",
         "saved": True,
         "link_contains": ["/jobs/view/", "/viewjob", "jk="],
     }
     listings: list[dict] = []
     seen: set[str] = set()
     for url in saved_job_urls(cfg):
+        if _stopped() or len(listings) >= cap:
+            break
         log.info("Opening saved jobs %s", url)
         try:
-            found = await _collect_from_url(page, cfg, source, url, delay_ms, login_wait, cap)
+            links = await _collect_paginated_job_links(
+                page, cfg, source, url, delay_ms, login_wait, cap - len(listings)
+            )
         except Exception as exc:
             _raise_if_cancelled(exc)
             log.warning("Saved jobs page failed %s: %s", url, exc)
             continue
-        for item in found:
-            key = (item.get("url") or "").lower()
+        for link in links:
+            if _stopped() or len(listings) >= cap:
+                break
+            item = await _extract_posting(page, cfg, source, link, delay_ms)
+            if not item:
+                continue
+            _mark_saved_listing(item, link)
+            key = (item.get("url") or link).lower()
             if not key or key in seen:
                 continue
             seen.add(key)
             listings.append(item)
-            if len(listings) >= cap:
-                return listings
+            _notify_listing(item)
     return listings
 
 
@@ -1052,6 +1237,9 @@ async def _extract_posting(page, cfg: Config, source: dict, url: str, delay_ms: 
         "jd": (jd or "").strip(),
         "source": f"camoufox:{_source_name(source)}",
     }
+    from pipeline.jobs import decorate_listing
+
+    listing = decorate_listing(listing)
     if is_directory_or_salary_listing(listing):
         log.info("Skip non-job page %s", final_url)
         return None

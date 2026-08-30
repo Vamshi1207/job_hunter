@@ -563,6 +563,7 @@ async def save_materials(
         "role": role,
         "url": (job or {}).get("url") or "",
         "location": (job or {}).get("location") or "",
+        "work_mode": (job or {}).get("work_mode") or "",
         "source": (job or {}).get("source") or (job or {}).get("channel") or "",
     }
     (output_dir / "job.json").write_text(json.dumps(meta, indent=2))

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from typing import Any, Callable
 
@@ -13,7 +14,7 @@ from pipeline.search import hunt_limit, search_jobs_async
 log = logging.getLogger(__name__)
 
 OnEvent = Callable[[dict], None]
-_ROW_FIELDS = frozenset({"package_id", "detail"})
+_ROW_FIELDS = frozenset({"package_id", "detail", "location", "work_mode", "ats_score"})
 
 
 def row_key(listing: dict) -> tuple[str, str, str]:
@@ -24,14 +25,39 @@ def row_key(listing: dict) -> tuple[str, str, str]:
     )
 
 
+def stage_needs_browser(line: str) -> bool:
+    """True only when hunt is paused for sign-in, 2FA, CAPTCHA, or similar."""
+    text = (line or "").strip().lower()
+    if not text or "signed in" in text or "sign-in wait ended" in text:
+        return False
+    return any(
+        token in text
+        for token in (
+            "camoufox panel",
+            "camoufox window",
+            "extra verification",
+            "captcha",
+            "2fa",
+            "two-factor",
+            "checkpoint",
+        )
+    )
+
+
 def job_row_event(listing: dict, *, status: str, event_type: str, **extra: Any) -> dict:
+    from pipeline.jobs import decorate_listing
+
     company, role, url = row_key(listing)
+    placed = decorate_listing(listing)
     payload = {
         "type": event_type,
         "status": status,
         "company": company,
         "role": role,
         "url": url,
+        "location": extra.get("location") or placed.get("location_display") or placed.get("location") or "",
+        "work_mode": extra.get("work_mode") or placed.get("work_mode") or "",
+        "ats_score": extra["ats_score"] if "ats_score" in extra else listing.get("ats_score"),
     }
     payload.update(extra)
     if "line" not in payload:
@@ -118,7 +144,12 @@ class JobProgress:
         return row
 
     def _push(self, listing: dict, *, status: str, event_type: str, **extra: Any) -> None:
+        from pipeline.jobs import decorate_listing
+
+        placed = decorate_listing(listing)
         fields = {k: v for k, v in extra.items() if k in _ROW_FIELDS}
+        fields.setdefault("location", placed.get("location_display") or placed.get("location") or "")
+        fields.setdefault("work_mode", placed.get("work_mode") or "")
         if status != "working":
             fields["detail"] = extra.get("detail") or ""
         self._upsert(listing, status, **fields)
@@ -129,24 +160,12 @@ class JobProgress:
         text = (line or "").strip()
         if not text:
             return
-        lower = text.lower()
-        needs_browser = any(
-            token in lower
-            for token in (
-                "camoufox panel",
-                "sign-in",
-                "sign in",
-                "verification",
-                "opening job boards",
-                "opening camoufox",
-            )
-        )
         self._emit(
             {
                 "type": "hunt_stage",
                 "line": text,
                 "detail": text,
-                "browser": needs_browser,
+                "browser": stage_needs_browser(text),
             }
         )
 
@@ -211,7 +230,7 @@ class JobProgress:
             line=f"{step}: {company} — {role}" if first else "",
         )
 
-    def ready(self, listing: dict, package_id: str, *, skipped: bool = False) -> None:
+    def ready(self, listing: dict, package_id: str, *, skipped: bool = False, ats_score=None) -> None:
         company, role, _url = row_key(listing)
         status = "skipped" if skipped else "ready"
         line = (
@@ -219,12 +238,14 @@ class JobProgress:
             if skipped
             else f"Ready: {company} — {role}"
         )
+        extra = {"package_id": package_id, "line": line}
+        if ats_score is not None:
+            extra["ats_score"] = ats_score
         self._push(
             listing,
             status=status,
             event_type="package",
-            package_id=package_id,
-            line=line,
+            **extra,
         )
 
     def failed(self, listing: dict, line: str) -> None:
@@ -256,15 +277,36 @@ def _is_stopped(should_stop) -> bool:
 
 
 def _job_from_listing(listing: dict) -> dict:
+    from pipeline.jobs import decorate_listing
+
+    placed = decorate_listing(listing)
     return {
         "company": listing["company"],
         "role": listing["role"],
         "url": listing.get("url") or "",
-        "location": listing.get("location") or "",
+        "location": placed.get("location") or "",
+        "work_mode": placed.get("work_mode") or "",
         "jd": listing["jd"],
         "channel": "saved" if listing.get("saved") else "hunt",
         "source": listing.get("source") or ("saved" if listing.get("saved") else "hunt"),
     }
+
+
+def _ats_score(folder) -> int | None:
+    try:
+        path = folder / "evaluation.json"
+        if path.exists():
+            data = json.loads(path.read_text())
+            if isinstance(data, dict) and data.get("score") is not None:
+                return int(data["score"])
+        changes = next(iter(sorted(folder.glob("*_changes.md"))), None)
+    except (TypeError, AttributeError, OSError, json.JSONDecodeError, ValueError):
+        return None
+    if changes:
+        from pipeline.reports import parse_evaluation
+
+        return parse_evaluation(changes.read_text()).get("score")
+    return None
 
 
 async def hunt_and_tailor(
@@ -318,7 +360,7 @@ async def hunt_and_tailor(
                     append_job(cfg, job)
                 except Exception as exc:
                     log.warning("Could not append jobs.yaml: %s", exc)
-                board.ready(job, output_dir.name)
+                board.ready(job, output_dir.name, ats_score=_ats_score(output_dir))
             else:
                 board.failed(job, f"No package for {job['company']} — {job['role']}")
             return {
@@ -356,7 +398,7 @@ async def hunt_and_tailor(
         prior = find_existing_package(cfg, job)
         if prior:
             log.info("Already processed %s — %s. Skipping.", job["company"], job["role"])
-            board.ready(job, prior.name, skipped=True)
+            board.ready(job, prior.name, skipped=True, ats_score=_ats_score(prior))
             results.append(
                 {
                     "company": job["company"],

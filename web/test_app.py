@@ -73,12 +73,18 @@ class DeskAPITests(unittest.TestCase):
         self.assertIn("camoufox-panel", res.text)
         self.assertIn('id="stop"', res.text)
         self.assertIn("Hunt from profile", res.text)
+        self.assertIn(">Location<", res.text)
+        self.assertIn(">Mode<", res.text)
+        self.assertIn(">ATS<", res.text)
 
     def test_static_js_reconnects_and_opens_camoufox(self):
         js = (Path(__file__).resolve().parent / "static" / "app.js").read_text()
         self.assertIn("function showCamoufox", js)
+        self.assertIn("function applyCamoufoxStage", js)
+        self.assertIn("function workModeLabel", js)
         self.assertIn("/api/runs/active", js)
         self.assertIn("data.browser", js)
+        self.assertNotIn('showCamoufox(mode !== "stopping")', js)
 
     def test_me_exposes_profile_hunt_and_vnc_url(self):
         res = self.client.get("/api/me")
@@ -155,6 +161,7 @@ class DeskAPITests(unittest.TestCase):
             active = self.client.get("/api/runs/active")
             self.assertEqual(active.json()["id"], run_id)
             self.assertEqual(active.json()["kind"], "hunt")
+            self.assertFalse(active.json().get("browser"))
 
             status = self.client.get(f"/api/runs/{run_id}")
             self.assertEqual(status.json()["status"], "running")

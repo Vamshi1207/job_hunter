@@ -94,10 +94,10 @@ Open `config.example.yaml` for every key and comment. Below is what people actua
 | `hunt.exclude_levels` | Title veto | e.g. intern, junior, principal. `staff` still skips Staff Engineer; “Member of Technical Staff” / MTS is kept. |
 | `hunt.exclude_title_tokens` | Title veto | e.g. manager, director, QA. |
 | `hunt.browser.queries` | Board keywords | Skill-first searches (e.g. `python`) so odd titles still appear. Empty = first preferred skill + first target role. |
-| `hunt.preferred_skills` | JD keep | After the posting text loads, at least one of these must appear. |
+| `hunt.preferred_skills` | JD keep | After the posting text loads, at least one of these must appear. Languages here are the strong stack: C++-only roles are dropped for a Python profile; TypeScript/Go can still match. Unclear cases ask the LLM. |
 | `hunt.reject_skills` | JD filter | Drop roles that require a skill you will not use (example: `java`). |
 | `hunt.exclude_companies` | Search **and** saved jobs | Current/former employers you will not apply to. Add brand aliases if a board uses a shorter name. |
-| `hunt.saved_jobs` | LinkedIn/Indeed saved | Treated as matches (fit gates skipped) unless the company is excluded. |
+| `hunt.saved_jobs` | LinkedIn/Indeed saved | Treated as matches (fit gates skipped) unless the company is excluded. Camoufox clicks **Next** through saved-jobs pages until `max` or the last page. |
 | `hunt.sources` / `hunt.ats_boards` | Camoufox | LinkedIn, Indeed, Google ATS dorks (Greenhouse, Lever, Ashby, Workday, iCIMS, Taleo, …), optional company board URLs. Hunt skips salary guides and search SERPs. |
 | `hunt.api_sources` | Extra listings | `true` (default) adds The Muse and Remotive. No API key. Fit gates still apply. |
 | `hunt.mcp.indeed` | Optional MCP | Same URL as `.cursor/mcp.example.json`. |
@@ -160,13 +160,13 @@ That converts existing Word CVs and keeps listening so Docker hunts can save rea
 
 ### How hunt runs in Docker
 
-Firefox draws on a virtual display inside the container. The desk **Camoufox** panel (noVNC) is that display, so you can sign in and complete 2FA. There is no separate Mac Firefox window.
+Firefox draws on a virtual display inside the container. The desk **Camoufox** panel (noVNC) is that display, and it appears only when a board asks you to sign in, complete 2FA, or solve a CAPTCHA. There is no separate Mac Firefox window.
 
 | Piece | Role |
 |---|---|
 | `scripts/docker-entrypoint.sh` | Starts Xvfb on `DISPLAY=:99` with `setsid` so it survives `exec` into uvicorn. Then x11vnc + websockify so the desk can show it. |
 | Headed Camoufox on `:99` | Same display as noVNC. Do not use Camoufox `headless: "virtual"` — that starts a private Xvfb the panel cannot see. |
-| `127.0.0.1:6080` | noVNC. Bound to localhost only. Opened as an iframe on the desk during hunt. |
+| `127.0.0.1:6080` | noVNC. Bound to localhost only. Opened as an iframe on the desk only when you need to act. |
 | `security_opt: seccomp:unconfined` + `cap_add: SYS_ADMIN` | Firefox 138+ needs `unshare` for its sandbox. Docker’s default seccomp blocks it (`CanCreateUserNamespace() clone() failure: EPERM`). |
 | `MOZ_DISABLE_CONTENT_SANDBOX=1` | Extra sandbox bypass for the same EPERM. |
 | `.camoufox-profile/` | Persistent cookies (gitignored). Re-login if you delete it. |
@@ -232,7 +232,7 @@ Skills `job-hunt` and `cv-tailor` use the same `config.yaml`, master CV, bank, a
 What landed since the last published `main`:
 
 - **More ATS via Google**: Greenhouse, Lever, Ashby, Workday, iCIMS, Taleo, and others; two search queries; grouped `site:` dorks. Muse/Remotive APIs on by default.
-- **Camoufox panel**: sign-in and 2FA on the desk (noVNC at localhost:6080). Hunt waits until you finish.
+- **Camoufox panel**: appears only for sign-in, 2FA, or CAPTCHA (noVNC at localhost:6080). Hunt waits until you finish, then the panel hides.
 - **Streamed hunt**: tailor starts as soon as a posting matches; search keeps adding jobs. **Stop** cancels the rest.
 - **Live step status**: Writing CV, Scoring ATS, Building PDF, Searching LinkedIn, Stopped — not a generic Working label.
 - **LLM chain**: NVIDIA Nemotron → `openai/gpt-oss-120b` → agy/Gemini. Put `NVIDIA_API_KEY` in `.env`.

@@ -46,6 +46,18 @@ function setControls(mode) {
   if (idle) hideCamoufox();
 }
 
+function applyCamoufoxStage(needsAction, hint) {
+  if (needsAction) {
+    if (hint) {
+      const el = $("camoufox-hint");
+      if (el) el.textContent = hint;
+    }
+    showCamoufox(true);
+    return;
+  }
+  hideCamoufox();
+}
+
 function showCamoufox(expand) {
   const panel = $("camoufox-panel");
   const wrap = $("camoufox-wrap");
@@ -88,7 +100,7 @@ async function loadMe() {
     (years ? `, ~${years} years experience` : "") +
     (skip.length ? `, skipping ${skip.join("/")}` : "") +
     (reject ? `, not ${reject}` : "") +
-    `. Camoufox opens for LinkedIn/Indeed/ATS. Sign in or 2FA uses the Camoufox panel. Apply is never clicked.`;
+    `. The browser panel appears only if a board asks you to sign in, complete 2FA, or solve a CAPTCHA. Apply is never clicked.`;
   if (me.camoufox && me.camoufox.vnc) state.camoufoxUrl = me.camoufox.vnc;
 }
 
@@ -103,6 +115,9 @@ function upsertJob(data) {
     url: data.url || "",
     status: data.status || "found",
     package_id: data.package_id || "",
+    location: data.location || "",
+    work_mode: data.work_mode || "",
+    ats_score: data.ats_score,
     detail: data.status === "working" ? (data.detail || "") : "",
   };
   const key = jobKey(incoming);
@@ -113,6 +128,9 @@ function upsertJob(data) {
       ...prev,
       ...incoming,
       package_id: incoming.package_id || prev.package_id,
+      location: incoming.location || prev.location,
+      work_mode: incoming.work_mode || prev.work_mode,
+      ats_score: incoming.ats_score == null ? prev.ats_score : incoming.ats_score,
     };
   } else {
     state.jobs.push(incoming);
@@ -126,6 +144,9 @@ function setQueue(jobs) {
     url: row.url || "",
     status: row.status || "queued",
     package_id: row.package_id || "",
+    location: row.location || "",
+    work_mode: row.work_mode || "",
+    ats_score: row.ats_score,
     detail: "",
   }));
 }
@@ -189,6 +210,40 @@ function statusLabel(row) {
   if (status === "stopped") return "Stopped";
   if (status === "failed") return "Failed";
   return status || "";
+}
+
+function workModeLabel(mode) {
+  const value = String(mode || "").toLowerCase();
+  if (value === "hybrid") return "Hybrid";
+  if (value === "remote") return "Remote";
+  if (value === "onsite") return "Onsite";
+  return "—";
+}
+
+function locationLabel(row, pkg) {
+  const text = (row && row.location) || (pkg && pkg.location) || "";
+  return text || "—";
+}
+
+function atsLabel(row, pkg) {
+  const score = row && row.ats_score != null ? row.ats_score : pkg && (pkg.ats_score != null ? pkg.ats_score : pkg.score);
+  if (score == null || score === "") return "—";
+  return String(score);
+}
+
+function boardCells(role, company, location, mode, ats, statusHtml, resume, edit, link, del) {
+  return `
+      <td>${escapeHtml(role || "Role")}</td>
+      <td>${escapeHtml(company || "")}</td>
+      <td>${escapeHtml(location)}</td>
+      <td>${escapeHtml(mode)}</td>
+      <td class="ats-cell">${escapeHtml(ats)}</td>
+      <td>${statusHtml}</td>
+      <td>${resume}</td>
+      <td>${edit}</td>
+      <td>${link}</td>
+      <td>${del}</td>
+    `;
 }
 
 function liveJobLink(row) {
@@ -341,7 +396,7 @@ function renderBoard(active) {
   const readyPackages = state.packages.filter((pkg) => !packageHiddenByLive(pkg));
   if (!state.packages.length && !state.jobs.length) {
     body.innerHTML =
-      '<tr class="empty-row"><td colspan="7">No packages yet. Hunt from your profile, or paste job URLs.</td></tr>';
+      '<tr class="empty-row"><td colspan="10">No packages yet. Hunt from your profile, or paste job URLs.</td></tr>';
     renderProgress("");
     return;
   }
@@ -349,15 +404,19 @@ function renderBoard(active) {
   for (const row of state.jobs) {
     const tr = document.createElement("tr");
     tr.className = "job-row-live job-row-" + (row.status || "found");
-    tr.innerHTML = `
-      <td>${escapeHtml(row.role || "Role")}</td>
-      <td>${escapeHtml(row.company || "")}</td>
-      <td><span class="job-status job-status-${escapeAttr(row.status || "found")}">${escapeHtml(statusLabel(row))}</span></td>
-      <td>${liveResumeCell(row)}</td>
-      <td>${liveEditCell(row)}</td>
-      <td>${liveJobLink(row)}</td>
-      <td>${deleteCell(row.package_id, row.company, row.role)}</td>
-    `;
+    const pkg = row.package_id ? state.packages.find((item) => item.id === row.package_id) : null;
+    tr.innerHTML = boardCells(
+      row.role,
+      row.company,
+      locationLabel(row, pkg),
+      workModeLabel(row.work_mode || (pkg && pkg.work_mode)),
+      atsLabel(row, pkg),
+      `<span class="job-status job-status-${escapeAttr(row.status || "found")}">${escapeHtml(statusLabel(row))}</span>`,
+      liveResumeCell(row),
+      liveEditCell(row),
+      liveJobLink(row),
+      deleteCell(row.package_id, row.company, row.role)
+    );
     bindDelete(tr, row.package_id, row);
     bindRebuild(tr);
     if (row.package_id) {
@@ -380,15 +439,18 @@ function renderBoard(active) {
     const tr = document.createElement("tr");
     tr.dataset.id = pkg.id;
     if (pkg.id === active) tr.classList.add("active");
-    tr.innerHTML = `
-      <td>${escapeHtml(pkg.role || "Role")}</td>
-      <td>${escapeHtml(pkg.company)}</td>
-      <td><span class="job-status job-status-ready">Ready</span></td>
-      <td>${resumeCell(pkg)}</td>
-      <td>${editCell(pkg)}</td>
-      <td>${jobLinkCell(pkg)}</td>
-      <td>${deleteCell(pkg.id, pkg.company, pkg.role)}</td>
-    `;
+    tr.innerHTML = boardCells(
+      pkg.role,
+      pkg.company,
+      locationLabel(pkg, pkg),
+      workModeLabel(pkg.work_mode),
+      atsLabel(pkg, pkg),
+      `<span class="job-status job-status-ready">Ready</span>`,
+      resumeCell(pkg),
+      editCell(pkg),
+      jobLinkCell(pkg),
+      deleteCell(pkg.id, pkg.company, pkg.role)
+    );
     bindDelete(tr, pkg.id);
     bindRebuild(tr);
     tr.tabIndex = 0;
@@ -499,7 +561,6 @@ function watchRun(runId, mode) {
   renderProgress("");
   setLamp("on");
   setControls(mode === "stopping" ? "stopping" : "running");
-  showCamoufox(mode !== "stopping");
   $("run-state").textContent = mode === "stopping" ? "stopping" : "running";
   setStrip("— strip open —\n");
   const src = new EventSource("/api/runs/" + runId + "/stream");
@@ -524,7 +585,7 @@ function watchRun(runId, mode) {
         const busy = state.jobs.some((row) => row.status === "working" || row.status === "queued");
         if (state.huntStage && !busy) $("run-state").textContent = state.huntStage;
         if (!state.jobs.length && state.huntStage) renderProgress(state.huntStage);
-        if (data.browser) showCamoufox(true);
+        applyCamoufoxStage(Boolean(data.browser), state.huntStage);
       }
       if (data.type === "processing" && (data.company || data.role)) {
         upsertJob({ ...data, status: data.status || "working" });
@@ -633,7 +694,7 @@ $("intake").addEventListener("submit", async (ev) => {
 
 loadMe().catch(() => {});
 loadPackages().catch((err) => {
-  $("package-list").innerHTML = `<tr class="empty-row"><td colspan="7">${escapeHtml(err.message)}</td></tr>`;
+  $("package-list").innerHTML = `<tr class="empty-row"><td colspan="10">${escapeHtml(err.message)}</td></tr>`;
 });
 (async () => {
   try {
@@ -641,6 +702,7 @@ loadPackages().catch((err) => {
     if (!active.id) return;
     state.runId = active.id;
     watchRun(active.id, active.status === "stopping" ? "stopping" : "running");
+    if (active.browser) applyCamoufoxStage(true, "Sign in or extra verification happens here");
     if (active.status === "stopping") setStrip("Hunt is stopping…", true);
   } catch (_) {}
 })();

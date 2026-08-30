@@ -57,6 +57,7 @@ def _new_run(run_id: str, sink: queue.Queue, *, kind: str) -> dict:
         "loop": None,
         "task": None,
         "thread": None,
+        "browser": False,
     }
 
 
@@ -64,6 +65,20 @@ def _stop_requested(run_id: str) -> bool:
     with _run_lock:
         event = (_runs.get(run_id) or {}).get("stop")
     return bool(event is not None and event.is_set())
+
+
+def _remember_browser(run_id: str, item: dict) -> None:
+    if not isinstance(item, dict) or item.get("type") != "hunt_stage":
+        return
+    with _run_lock:
+        run = _runs.get(run_id)
+        if run is not None:
+            run["browser"] = bool(item.get("browser"))
+
+
+def _emit_run_event(run_id: str, sink: queue.Queue, item: dict) -> None:
+    _remember_browser(run_id, item)
+    sink.put(item)
 
 
 def _bind_run_task(run_id: str) -> None:
@@ -327,7 +342,12 @@ def active_run() -> dict:
         run = _active_run_locked()
         if not run:
             return {"id": None, "kind": None, "status": None}
-        return {"id": run["id"], "kind": run["kind"], "status": run["status"]}
+        return {
+            "id": run["id"],
+            "kind": run["kind"],
+            "status": run["status"],
+            "browser": bool(run.get("browser")),
+        }
 
 
 @app.get("/api/runs/{run_id}")
@@ -443,7 +463,7 @@ def _execute_run(run_id: str, urls: list[str], body: RunRequest, sink: queue.Que
     import asyncio as aio
 
     from pipeline.browser_hunt import hydrate_job_urls
-    from pipeline.hunt import JobProgress
+    from pipeline.hunt import JobProgress, _ats_score
     from pipeline.jobs import is_placeholder_company
     from pipeline.search import find_existing_package
 
@@ -454,7 +474,7 @@ def _execute_run(run_id: str, urls: list[str], body: RunRequest, sink: queue.Que
         root.setLevel(logging.INFO)
     cfg = load_config(force=True)
     packages: list[str] = []
-    board = JobProgress(sink.put)
+    board = JobProgress(lambda item: _emit_run_event(run_id, sink, item))
 
     def stop() -> bool:
         return _stop_requested(run_id)
@@ -518,15 +538,19 @@ def _execute_run(run_id: str, urls: list[str], body: RunRequest, sink: queue.Que
                 company = "Unknown"
             role = (listing.get("role") or "Role").strip()
             jd = (listing.get("jd") or "").strip()
-            job = {
-                "company": company,
-                "role": role,
-                "url": listing.get("url") or "",
-                "location": (listing.get("location") or body.location or "").strip(),
-                "jd": jd,
-                "channel": "desk",
-                "source": listing.get("source") or "desk",
-            }
+            from pipeline.jobs import decorate_listing
+
+            job = decorate_listing(
+                {
+                    "company": company,
+                    "role": role,
+                    "url": listing.get("url") or "",
+                    "location": (listing.get("location") or body.location or "").strip(),
+                    "jd": jd,
+                    "channel": "desk",
+                    "source": listing.get("source") or "desk",
+                }
+            )
             if not jd:
                 board.failed(job, f"Skipping {job['url'] or role} — no job description found.")
                 continue
@@ -549,7 +573,7 @@ def _execute_run(run_id: str, urls: list[str], body: RunRequest, sink: queue.Que
                     role = job["role"]
                     prior = find_existing_package(cfg, job)
                     if prior:
-                        board.ready(job, prior.name, skipped=True)
+                        board.ready(job, prior.name, skipped=True, ats_score=_ats_score(prior))
                         packages.append(prior.name)
                         return
                     try:
@@ -575,7 +599,7 @@ def _execute_run(run_id: str, urls: list[str], body: RunRequest, sink: queue.Que
                         return
                     if output_dir:
                         packages.append(output_dir.name)
-                        board.ready(job, output_dir.name)
+                        board.ready(job, output_dir.name, ats_score=_ats_score(output_dir))
                     else:
                         board.failed(job, f"No package for {company} — {role}")
 
@@ -632,7 +656,7 @@ def _execute_hunt(run_id: str, max_jobs: int | None, sink: queue.Queue) -> None:
         cfg = load_config(force=True)
 
         def on_event(item: dict) -> None:
-            sink.put(item)
+            _emit_run_event(run_id, sink, item)
 
         async def _run():
             _bind_run_task(run_id)

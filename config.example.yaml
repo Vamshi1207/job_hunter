@@ -225,11 +225,15 @@ hunt:
     - quality engineer
   # After the JD is loaded: keep only if at least one preferred/require_any skill appears.
   require_any: []
-  # Keep + boost when these appear in the JD (titles can be anything)
+  # Keep + boost when these appear in the JD (titles can be anything).
+  # Programming languages here are the strong stack: a C++-only role is dropped
+  # for a Python-primary profile. Related languages (TypeScript, Go) can still match.
+  # Unclear cases call the LLM (`hunt.stack_llm`).
   preferred_skills:
     - python
     - kafka
     - aws
+  stack_llm: true            # if the required language is unclear, ask the LLM to keep/drop
   # Drop if the title names the skill, or the JD requires it (years/must/proficient)
   reject_skills:
     - java
@@ -243,6 +247,7 @@ hunt:
     max: 50                   # how many saved postings to tailor per hunt
     extra: false             # true = tailor saved jobs in addition to hunt.max_jobs (when that cap is set)
     urls: []                 # empty = LinkedIn my-items/saved-jobs + Indeed saved
+    # Camoufox clicks Next on saved-jobs pagination until this many unique jobs or the last page.
   # Official Indeed MCP (https://mcp.indeed.com/claude/mcp) uses OAuth in Cursor.
   # Desk Hunt also tries it; if OAuth is missing it continues with Camoufox.
   mcp:
