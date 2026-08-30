@@ -11,8 +11,14 @@ services:
       - IN_DOCKER=1
       - HOST_PROJECT_ROOT=${PWD}
       - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - DISPLAY=:99
+      - MOZ_DISABLE_CONTENT_SANDBOX=1
     shm_size: "2gb"
-    command: bash -c "Xvfb :99 -screen 0 1920x1080x24 >/dev/null 2>&1 & sleep 0.4; export DISPLAY=:99; exec python3 -m pipeline.run_pipeline"
+    security_opt:
+      - seccomp:unconfined
+    cap_add:
+      - SYS_ADMIN
+    command: ["python3", "-m", "pipeline.run_pipeline"]
 
   ui:
     build: .
@@ -27,5 +33,11 @@ services:
       - IN_DOCKER=1
       - HOST_PROJECT_ROOT=${PWD}
       - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - DISPLAY=:99
+      - MOZ_DISABLE_CONTENT_SANDBOX=1
     shm_size: "2gb"
-    command: bash -c "Xvfb :99 -screen 0 1920x1080x24 >/dev/null 2>&1 & sleep 0.4; export DISPLAY=:99; exec python3 -m uvicorn web.app:app --host 0.0.0.0 --port 8000"
+    security_opt:
+      - seccomp:unconfined
+    cap_add:
+      - SYS_ADMIN
+    command: ["python3", "-m", "uvicorn", "web.app:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
+from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote_plus, urljoin, urlparse, urlunparse
 
@@ -228,10 +230,12 @@ def hunt_sources(cfg: Config) -> list[dict]:
     return sources
 
 
+def _in_docker() -> bool:
+    return os.environ.get("IN_DOCKER") == "1" or Path("/.dockerenv").exists()
+
+
 def _profile_dir(cfg: Config) -> str:
     rel = cfg.get("hunt.browser.user_data_dir") or ".camoufox-profile"
-    from pathlib import Path
-
     path = Path(rel).expanduser()
     if not path.is_absolute():
         path = cfg.root / path
@@ -317,10 +321,26 @@ async def browse_jobs(cfg: Config) -> list[dict]:
 
 
 def _camoufox_launch(cfg: Config) -> dict[str, Any]:
+    headless = cfg.get("hunt.browser.headless", False)
+    if _in_docker() and headless is False:
+        # Headed Firefox needs a display. Camoufox "virtual" starts its own Xvfb
+        # (compose Xvfb is also started; a bare `Xvfb &` used to die on exec).
+        headless = "virtual"
     launch: dict[str, Any] = {
-        "headless": cfg.get("hunt.browser.headless", False),
+        "headless": headless,
         "humanize": bool(cfg.get("hunt.browser.humanize", True)),
+        "env": {
+            **os.environ,
+            "MOZ_DISABLE_CONTENT_SANDBOX": "1",
+            "MOZ_DBUS_REMOTE": "1",
+        },
+        "firefox_user_prefs": {
+            "security.sandbox.content.level": 0,
+        },
     }
+    display = os.environ.get("DISPLAY")
+    if display:
+        launch["env"]["DISPLAY"] = display
     os_name = cfg.get("hunt.browser.os") or None
     if os_name:
         launch["os"] = os_name

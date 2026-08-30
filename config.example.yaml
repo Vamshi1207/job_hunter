@@ -236,7 +236,8 @@ hunt:
   browser:
     enabled: true
     engine: camoufox
-    # Docker runs Camoufox on Xvfb (no Mac window). Keep false so LinkedIn login works.
+    # Docker: the pipeline uses Camoufox headless="virtual" (its own Xvfb).
+    # A headed window is not visible on the Mac; login cookies persist in the profile.
     headless: false
     persistent: true         # keep cookies in gitignored .camoufox-profile/
     user_data_dir: .camoufox-profile

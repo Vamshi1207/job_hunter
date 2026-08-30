@@ -589,6 +589,28 @@ class HuntTests(unittest.TestCase):
             tmp.cleanup()
             load_config(force=True)
 
+    def test_camoufox_launch_uses_virtual_display_in_docker(self):
+        from pipeline.browser_hunt import _camoufox_launch
+
+        tmp = tempfile.TemporaryDirectory()
+        try:
+            cfg = self._cfg(Path(tmp.name))
+            os.environ["IN_DOCKER"] = "1"
+            os.environ["DISPLAY"] = ":99"
+            launch = _camoufox_launch(cfg)
+            self.assertEqual(launch["headless"], "virtual")
+            self.assertEqual(launch["env"]["MOZ_DISABLE_CONTENT_SANDBOX"], "1")
+            self.assertEqual(launch["env"]["DISPLAY"], ":99")
+            os.environ.pop("IN_DOCKER", None)
+            launch_host = _camoufox_launch(cfg)
+            self.assertFalse(launch_host["headless"])
+        finally:
+            os.environ.pop("IN_DOCKER", None)
+            os.environ.pop("DISPLAY", None)
+            os.environ.pop("JOB_SEARCH_ROOT", None)
+            tmp.cleanup()
+            load_config(force=True)
+
     def test_search_jobs_ranks_and_caps(self):
         from pipeline.search import html_to_text, search_jobs
 

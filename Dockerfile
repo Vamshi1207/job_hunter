@@ -9,19 +9,33 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     gnupg \
     xvfb \
+    x11-utils \
+    dbus-x11 \
     libgtk-3-0 \
     libdbus-glib-1-2 \
     libxt6 \
+    libx11-6 \
     libx11-xcb1 \
+    libxext6 \
+    libxrender1 \
+    libxi6 \
+    libxtst6 \
+    libxcursor1 \
+    libxinerama1 \
     libasound2 \
     libnss3 \
     libxss1 \
     libxrandr2 \
     libpangocairo-1.0-0 \
+    libpango-1.0-0 \
+    libatk1.0-0 \
     libxcomposite1 \
     libxdamage1 \
     libxfixes3 \
     libgbm1 \
+    libdrm2 \
+    libxshmfence1 \
+    libxkbcommon0 \
     fonts-liberation \
     xauth \
     && rm -rf /var/lib/apt/lists/*
@@ -36,4 +50,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 RUN playwright install --with-deps chromium \
     && python3 -m camoufox fetch
 
+COPY scripts/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+
+ENTRYPOINT ["docker-entrypoint.sh"]
 CMD ["python3", "-m", "uvicorn", "web.app:app", "--host", "0.0.0.0", "--port", "8000"]

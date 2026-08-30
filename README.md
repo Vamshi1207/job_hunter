@@ -132,9 +132,32 @@ docker compose up ui --build
 
 Open [http://127.0.0.1:8000](http://127.0.0.1:8000). The table updates as each package is written. Open PDF shows the file in the browser (it does not download). Already tailored company/role or job URL combinations are skipped.
 
-1. Click **Hunt from profile**. Camoufox runs in the container. LinkedIn may need a one-time sign-in in that session. Apply/Submit is never clicked.
+1. Click **Hunt from profile**. Camoufox runs in the container. LinkedIn may need a one-time sign-in in that session (cookies live in `.camoufox-profile/`). Apply/Submit is never clicked.
 2. The table lists **job name**, **company**, **resume** (PDF), and **job link**. Click a row for score, cover letter, and playbook.
 3. Optional: expand **Add postings by URL**. Paste one or more job links (one per line). Paste the **job description** to tailor from that text (used with a single URL).
+
+### How hunt runs in Docker
+
+There is **no Mac window**. Firefox uses a virtual display inside the container.
+
+| Piece | Role |
+|---|---|
+| `scripts/docker-entrypoint.sh` | Starts Xvfb on `DISPLAY=:99` with `setsid` so it survives `exec` into uvicorn. A plain `Xvfb &` is killed by SIGHUP and Camoufox then fails with `cannot open display: :99`. |
+| `headless: "virtual"` | Inside Docker, Camoufox starts its own Xvfb even if `config.yaml` has `headless: false`. |
+| `security_opt: seccomp:unconfined` + `cap_add: SYS_ADMIN` | Firefox 138+ needs `unshare` for its sandbox. Docker’s default seccomp blocks it (`CanCreateUserNamespace() clone() failure: EPERM`). |
+| `MOZ_DISABLE_CONTENT_SANDBOX=1` | Extra sandbox bypass for the same EPERM. |
+| `.camoufox-profile/` | Persistent cookies (gitignored). Re-login if you delete it. |
+
+Compose also sets `shm_size: 2gb` (browsers crash in the default 64MB `/dev/shm`).
+
+### Hunt troubleshooting
+
+| Live strip / log | What it means |
+|---|---|
+| `cannot open display: :99` | Xvfb died or `DISPLAY` was unset. Rebuild: `docker compose up ui --build`. |
+| `CanCreateUserNamespace() clone() failure: EPERM` | Seccomp blocked Firefox. Confirm `docker-compose.yml` still has `seccomp:unconfined`. |
+| `Indeed MCP skipped` | Optional. Install the `mcp` package and complete Cursor OAuth, or ignore — hunt continues with Camoufox. |
+| `Hunt found no matching postings` | Camoufox started but fit filters / login / sources yielded nothing. Check LinkedIn login in `.camoufox-profile`, `hunt.exclude_*`, and `career.target_roles`. |
 
 ## CLI (Docker)
 
@@ -169,3 +192,14 @@ python3 -m unittest pipeline.test_pipeline
 ## Cursor skills
 
 Skills `job-hunt` and `cv-tailor` use the same `config.yaml`, master CV, bank, and `applications/` folders. Use the pipeline for PDFs; use the skills in chat to review drafts, research companies, and walk through submission. Indeed MCP: copy `.cursor/mcp.example.json` and complete OAuth in Cursor Settings → MCP.
+
+## Changelog (this branch)
+
+What landed since the last published `main`:
+
+- **Docker-only desk** at port 8000: hunt, tailor, live SSE table, inline PDF (no download).
+- **Hunt from profile** via Camoufox: LinkedIn, Indeed, Google ATS dorks, optional saved jobs, `exclude_companies` / years / level / skill gates.
+- **Manual intake**: URLs (one per line) plus an optional job-description field; pasted JD is the tailor source for a single URL.
+- **Skip already processed** company/role or job URL; live strip says so.
+- **Gitignored personal files** all have tracked examples (`config.example.yaml`, `cv_master.example.md`, `jobs.example.yaml`, `resumes/template.example.html`, memory templates, experience-bank examples, `.env.example`, `.cursor/mcp.example.json`). Copy them once; never commit `config.yaml` (it may hold a LinkedIn password).
+- **Camoufox in Docker**: entrypoint Xvfb, virtual display, and seccomp/sandbox flags so Firefox can actually launch in the container.
