@@ -6,7 +6,7 @@ import json
 import logging
 import re
 from typing import Optional
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 import requests
 from bs4 import BeautifulSoup
@@ -29,6 +29,10 @@ PLACEHOLDER_COMPANIES = {
     "unknown",
 }
 URL_IN_TEXT = re.compile(r"https?://[^\s<>\"')\]]+", re.I)
+SALARY_OR_DIRECTORY_TITLE = re.compile(
+    r"\b(salaries|salary|pay guide|compensation guide|how much does|average base pay|wage guide)\b",
+    re.I,
+)
 
 
 def slug(text: str) -> str:
@@ -86,6 +90,39 @@ def parse_job_urls(text: str) -> list[str]:
             seen.add(url)
             found.append(url)
     return found
+
+
+def is_directory_or_salary_listing(listing: dict) -> bool:
+    """True for salary guides, career-explorer pages, and other non-postings."""
+    role = listing.get("role") or ""
+    if SALARY_OR_DIRECTORY_TITLE.search(role):
+        return True
+    url = listing.get("url") or ""
+    return bool(url) and not is_job_posting_url(url)
+
+
+def is_job_posting_url(url: str) -> bool:
+    """True only for a single job posting, not search/salary/company directory pages."""
+    raw = (url or "").strip()
+    if not raw.startswith("http"):
+        return False
+    parsed = urlparse(raw.split("#")[0])
+    host = parsed.netloc.lower()
+    path = parsed.path.lower() or "/"
+    if re.search(r"/salar(?:y|ies)(?:/|$)", path):
+        return False
+    if "indeed." in host:
+        if "/career/" in path or "/cmp/" in path or "/forum/" in path:
+            return False
+        jk = (parse_qs(parsed.query).get("jk") or [None])[0]
+        return bool(jk)
+    if "linkedin.com" in host:
+        if "/jobs/search" in path or "/jobs/collections" in path or "/my-items/" in path:
+            return False
+        return bool(re.search(r"/jobs/view/(?:[^/]*?-)?(\d{6,})", path))
+    if path.rstrip("/") in {"", "/jobs", "/careers", "/career"}:
+        return False
+    return True
 
 
 def is_placeholder_company(name: str) -> bool:

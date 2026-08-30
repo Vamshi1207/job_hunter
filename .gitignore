@@ -25,3 +25,4 @@ experience-bank/*
 !experience-bank/README.md
 !experience-bank/example-project.md
 !experience-bank/about-variants.example.md
+docs/architecture/*.visual-check.*

@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field
 
 from pipeline.config import load_config
 from pipeline.jobs import append_job, apply_pasted_job_text, infer_company_role, listing_has_identity, parse_job_urls
-from pipeline.reports import list_packages, package_detail, package_file
+from pipeline.reports import delete_package_dir, list_packages, package_detail, package_file
 from pipeline.run_pipeline import process_job
 from pipeline.search import hunt_limit, target_markets, target_roles
 
@@ -157,10 +157,29 @@ def package_download(package_id: str, filename: str):
     path = package_file(cfg, package_id, filename)
     if path is None:
         raise HTTPException(status_code=404, detail="File not found")
-    media = "application/pdf" if path.suffix == ".pdf" else "text/plain; charset=utf-8"
-    if path.suffix.lower() == ".html":
+    suffix = path.suffix.lower()
+    media = "text/plain; charset=utf-8"
+    disposition = "inline"
+    if suffix == ".pdf":
+        media = "application/pdf"
+    elif suffix == ".html":
         media = "text/html; charset=utf-8"
-    return FileResponse(path, media_type=media, content_disposition_type="inline")
+        disposition = "attachment"
+    elif suffix == ".docx":
+        media = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        disposition = "attachment"
+    elif suffix == ".pages":
+        media = "application/vnd.apple.pages"
+        disposition = "attachment"
+    return FileResponse(path, media_type=media, content_disposition_type=disposition, filename=path.name)
+
+
+@app.delete("/api/packages/{package_id}")
+def delete_package(package_id: str) -> dict:
+    cfg = load_config(force=True)
+    if not delete_package_dir(cfg, package_id):
+        raise HTTPException(status_code=404, detail="Package not found")
+    return {"ok": True, "id": package_id}
 
 
 @app.post("/api/runs")
@@ -264,6 +283,7 @@ def _execute_run(run_id: str, urls: list[str], body: RunRequest, sink: queue.Que
     import asyncio as aio
 
     from pipeline.browser_hunt import hydrate_job_urls
+    from pipeline.hunt import JobProgress
     from pipeline.jobs import is_placeholder_company
     from pipeline.search import find_existing_package
 
@@ -274,6 +294,7 @@ def _execute_run(run_id: str, urls: list[str], body: RunRequest, sink: queue.Que
         root.setLevel(logging.INFO)
     cfg = load_config(force=True)
     packages: list[str] = []
+    board = JobProgress(sink.put)
     try:
         extra_jd = (body.jd or "").strip()
         listings: list[dict] = []
@@ -293,9 +314,11 @@ def _execute_run(run_id: str, urls: list[str], body: RunRequest, sink: queue.Que
                 role=body.role,
                 location=body.location,
             )
-            if not listing_has_identity(listings[0]):
+            if listings:
+                board.found(listings[0])
+            if not listings or not listing_has_identity(listings[0]):
                 sink.put({"type": "stage", "line": "Reading the posting for company and role. Camoufox opens for LinkedIn. Apply is never clicked."})
-                browser = aio.run(hydrate_job_urls(cfg, urls))
+                browser = aio.run(hydrate_job_urls(cfg, urls, on_listing=board.found))
                 listings = apply_pasted_job_text(
                     browser or listings,
                     urls,
@@ -306,18 +329,16 @@ def _execute_run(run_id: str, urls: list[str], body: RunRequest, sink: queue.Que
                 )
         else:
             sink.put({"type": "stage", "line": f"Reading {len(urls)} posting(s). Camoufox opens for LinkedIn. Apply is never clicked."})
-            listings = aio.run(hydrate_job_urls(cfg, urls))
+            listings = aio.run(hydrate_job_urls(cfg, urls, on_listing=board.found))
         if not listings:
             raise RuntimeError("Could not read those URLs. Sign in to LinkedIn in the Camoufox window if asked, then run again.")
+        work: list[dict] = []
         for listing in listings:
             company = (listing.get("company") or "").strip()
             if is_placeholder_company(company):
                 company = "Unknown"
             role = (listing.get("role") or "Role").strip()
             jd = (listing.get("jd") or "").strip()
-            if not jd:
-                sink.put({"type": "log", "line": f"Skipping {listing.get('url')} — no job description found."})
-                continue
             job = {
                 "company": company,
                 "role": role,
@@ -327,39 +348,33 @@ def _execute_run(run_id: str, urls: list[str], body: RunRequest, sink: queue.Que
                 "channel": "desk",
                 "source": listing.get("source") or "desk",
             }
+            if not jd:
+                board.failed(job, f"Skipping {job['url'] or role} — no job description found.")
+                continue
+            work.append(job)
+        board.queue(work)
+        for job in work:
+            company = job["company"]
+            role = job["role"]
             prior = find_existing_package(cfg, job)
             if prior:
-                sink.put(
-                    {
-                        "type": "package",
-                        "package_id": prior.name,
-                        "company": company,
-                        "role": role,
-                        "line": f"Already processed {company} — {role}. Skipping.",
-                    }
-                )
+                board.ready(job, prior.name, skipped=True)
                 packages.append(prior.name)
                 continue
             try:
                 append_job(cfg, job)
             except Exception as exc:
                 log.warning("Could not append jobs.yaml: %s", exc)
-            sink.put({"type": "processing", "company": company, "role": role, "line": f"Starting tailor for {company} — {role}"})
+            board.working(job)
             with _run_lock:
                 _runs[run_id]["company"] = company
                 _runs[run_id]["role"] = role
             output_dir = aio.run(process_job(job, fill_form=False))
             if output_dir:
                 packages.append(output_dir.name)
-                sink.put(
-                    {
-                        "type": "package",
-                        "package_id": output_dir.name,
-                        "company": company,
-                        "role": role,
-                        "line": f"Ready: {company} — {role}",
-                    }
-                )
+                board.ready(job, output_dir.name)
+            else:
+                board.failed(job, f"No package for {company} — {role}")
         with _run_lock:
             _runs[run_id]["packages"] = packages
             _runs[run_id]["package_id"] = packages[0] if packages else None

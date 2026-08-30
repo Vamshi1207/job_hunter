@@ -583,4 +583,11 @@ async def save_materials(
     except Exception as exc:
         log.error("PDF conversion failed: %s", exc)
 
+    try:
+        from pipeline.cv_export import write_editable_exports
+
+        write_editable_exports(html_out, pdf_out if pdf_out.exists() else None)
+    except Exception as exc:
+        log.warning("Word/Pages export failed: %s", exc)
+
     return output_dir

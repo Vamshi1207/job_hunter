@@ -120,6 +120,9 @@ def package_summary(cfg: Config, folder: Path) -> dict:
         if changes and changes.exists():
             parsed = parse_evaluation(changes.read_text())
             eval_data = {**parsed, **{k: v for k, v in eval_data.items() if v not in (None, "", [])}}
+    from pipeline.cv_export import ensure_package_exports
+
+    exports = ensure_package_exports(folder)
     return {
         "id": folder.name,
         "company": company,
@@ -132,7 +135,9 @@ def package_summary(cfg: Config, folder: Path) -> dict:
         "has_pdf": bool(pdf),
         "pdf_name": pdf.name if pdf else None,
         "pdf_path": as_host_path(cfg, pdf) if pdf else "",
-        "html_name": html.name if html else None,
+        "html_name": exports.get("html_name") or (html.name if html else None),
+        "docx_name": exports.get("docx_name"),
+        "pages_name": exports.get("pages_name"),
         "score": eval_data.get("score"),
         "honesty": eval_data.get("honesty"),
         "critique": eval_data.get("critique") or "",
@@ -183,7 +188,7 @@ def _job_meta(folder: Path) -> dict:
 
 
 def _safe_folder(cfg: Config, folder_id: str) -> Path | None:
-    if not folder_id or folder_id.startswith(".") or "/" in folder_id or "\\" in folder_id:
+    if not folder_id or folder_id.startswith(".") or folder_id.startswith("_") or "/" in folder_id or "\\" in folder_id:
         return None
     folder = (cfg.applications_dir / folder_id).resolve()
     root = cfg.applications_dir.resolve()
@@ -192,6 +197,17 @@ def _safe_folder(cfg: Config, folder_id: str) -> Path | None:
     if not folder.is_dir():
         return None
     return folder
+
+
+def delete_package_dir(cfg: Config, folder_id: str) -> bool:
+    """Remove one applications/<id>/ folder. Never touches files outside applications/."""
+    import shutil
+
+    folder = _safe_folder(cfg, folder_id)
+    if folder is None:
+        return False
+    shutil.rmtree(folder)
+    return True
 
 
 def package_file(cfg: Config, folder_id: str, filename: str) -> Path | None:
@@ -203,7 +219,7 @@ def package_file(cfg: Config, folder_id: str, filename: str) -> Path | None:
     path = (folder / filename).resolve()
     if folder not in path.parents and path != folder:
         return None
-    allowed = path.suffix.lower() in {".pdf", ".html", ".md", ".txt"}
+    allowed = path.suffix.lower() in {".pdf", ".html", ".md", ".txt", ".docx", ".pages"}
     if not allowed or not path.is_file():
         return None
     return path

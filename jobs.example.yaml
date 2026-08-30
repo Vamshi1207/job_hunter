@@ -4,6 +4,8 @@
 #
 # CLI: paste the full JD under `jd`. LinkedIn pages are often not scrapeable without Camoufox.
 # Desk: paste URL(s) and optionally the job description; with one URL the pasted text is used.
+# Use a posting URL (Greenhouse/Lever/Ashby, LinkedIn /jobs/view/{id}, Indeed viewjob?jk=).
+# Hunt skips salary guides and search pages such as indeed.com/career/.../salaries/...
 
 jobs:
   - company: ExampleCorp

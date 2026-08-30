@@ -173,6 +173,8 @@ pipeline:
 
 # Public job hunt (desk "Hunt from profile" and `python3 -m pipeline.run_pipeline --hunt`)
 # Fit rules are config, not code. Browser hunt uses Camoufox; it never clicks Apply/Submit.
+# Only real postings are tailored: Indeed viewjob?jk=, LinkedIn /jobs/view/{id}, ATS job pages.
+# Salary guides, career-explorer, search result, and company-review URLs are skipped.
 hunt:
   max_jobs: 5
   api_sources: false
@@ -217,6 +219,7 @@ hunt:
   reject_skills:
     - java
   # Never tailor these employers (company name or job URL). Applies to search and saved jobs.
+  # Add brand aliases if a board uses a shorter name (e.g. ForeFlight vs the full employer).
   exclude_companies:
     - Example Current Employer
   # Jobs you saved on LinkedIn/Indeed are treated as matches (fit gates skipped).

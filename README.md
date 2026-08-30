@@ -10,6 +10,8 @@ jobs.yaml / hunt / pasted URL  →  tailor (agy / Gemini)  →  honesty critic  
 
 The desk, hunt, Camoufox, and tailor all run **inside Docker**. Do not start uvicorn on the host.
 
+Runtime map (Archify, pinned to commit `0ce6138`): open [`docs/architecture/job-search-runtime.html`](docs/architecture/job-search-runtime.html) in a browser. Typed source is [`docs/architecture/job-search-runtime.architecture.json`](docs/architecture/job-search-runtime.architecture.json).
+
 ## Prerequisites
 
 - Docker + Docker Compose
@@ -92,9 +94,9 @@ Open `config.example.yaml` for every key and comment. Below is what people actua
 | `hunt.exclude_title_tokens` | Title filter | e.g. manager, director. |
 | `hunt.preferred_skills` | Ranking | Boost Python/Kafka/… if they appear in the JD. |
 | `hunt.reject_skills` | JD filter | Drop roles that require a skill you will not use (example: `java`). |
-| `hunt.exclude_companies` | Search **and** saved jobs | Current/former employers you will not apply to. |
+| `hunt.exclude_companies` | Search **and** saved jobs | Current/former employers you will not apply to. Add brand aliases if a board uses a shorter name. |
 | `hunt.saved_jobs` | LinkedIn/Indeed saved | Treated as matches (fit gates skipped) unless the company is excluded. |
-| `hunt.sources` / `hunt.ats_boards` | Camoufox | LinkedIn, Indeed, Google ATS dorks, Greenhouse/Lever/Ashby boards. |
+| `hunt.sources` / `hunt.ats_boards` | Camoufox | LinkedIn, Indeed, Google ATS dorks, Greenhouse/Lever/Ashby boards. Hunt skips salary guides and search SERPs (Indeed needs `viewjob?jk=`, LinkedIn needs `/jobs/view/{id}`). |
 | `hunt.mcp.indeed` | Optional MCP | Same URL as `.cursor/mcp.example.json`. |
 | `hunt.browser.logins.linkedin` | Auto-fill LinkedIn | **Password only in gitignored `config.yaml`.** Empty password = sign in by hand in the Camoufox session. Docker has no Mac window; login is on the virtual display. Cookies persist in `.camoufox-profile/`. |
 
@@ -130,10 +132,10 @@ If you add a fourth job, add a `JOB4` block in **both** `config.yaml` and `resum
 docker compose up ui --build
 ```
 
-Open [http://127.0.0.1:8000](http://127.0.0.1:8000). The table updates as each package is written. Open PDF shows the file in the browser (it does not download). Already tailored company/role or job URL combinations are skipped.
+Open [http://127.0.0.1:8000](http://127.0.0.1:8000). Rows appear as Camoufox finds postings, then each row updates (Found → Waiting → Working → Ready). Counts show found / processed / still working. Already tailored company/role or job URL combinations are skipped.
 
 1. Click **Hunt from profile**. Camoufox runs in the container. LinkedIn may need a one-time sign-in in that session (cookies live in `.camoufox-profile/`). Apply/Submit is never clicked.
-2. The table lists **job name**, **company**, **resume** (PDF), and **job link**. Click a row for score, cover letter, and playbook.
+2. The table lists job name, company, status, **PDF**, **Edit** (Word / HTML / Pages), and the posting link. **Delete** removes that `applications/<folder>/`. Click a row for score, cover letter, and playbook.
 3. Optional: expand **Add postings by URL**. Paste one or more job links (one per line). Paste the **job description** to tailor from that text (used with a single URL).
 
 ### How hunt runs in Docker
@@ -157,7 +159,7 @@ Compose also sets `shm_size: 2gb` (browsers crash in the default 64MB `/dev/shm`
 | `cannot open display: :99` | Xvfb died or `DISPLAY` was unset. Rebuild: `docker compose up ui --build`. |
 | `CanCreateUserNamespace() clone() failure: EPERM` | Seccomp blocked Firefox. Confirm `docker-compose.yml` still has `seccomp:unconfined`. |
 | `Indeed MCP skipped` | Optional. Install the `mcp` package and complete Cursor OAuth, or ignore — hunt continues with Camoufox. |
-| `Hunt found no matching postings` | Camoufox started but fit filters / login / sources yielded nothing. Check LinkedIn login in `.camoufox-profile`, `hunt.exclude_*`, and `career.target_roles`. |
+| `Hunt found no matching postings` | Camoufox started but fit filters / login / sources yielded nothing. Check LinkedIn login in `.camoufox-profile`, `hunt.exclude_*`, and `career.target_roles`. Salary/career-explorer URLs are skipped on purpose. |
 
 ## CLI (Docker)
 
@@ -173,7 +175,9 @@ A run calls the LLM (can take a few minutes). Edit `jobs.yaml` first for `--job`
 ```
 applications/<company>-<role>-<YYYY-MM-DD>/
 ├── <Your_Name>_CV.pdf      ← upload this
-├── <Your_Name>_CV.html
+├── <Your_Name>_CV.html     ← editable
+├── <Your_Name>_CV.docx     ← Word
+├── <Your_Name>_CV.pages    ← Pages package (HTML + Word + PDF preview)
 ├── <Your_Name>_CV_changes.md
 ├── cover_letter.md
 ├── linkedin_dm.txt
@@ -197,7 +201,10 @@ Skills `job-hunt` and `cv-tailor` use the same `config.yaml`, master CV, bank, a
 
 What landed since the last published `main`:
 
-- **Docker-only desk** at port 8000: hunt, tailor, live SSE table, inline PDF (no download).
+- **Live hunt table**: rows appear as postings are found; status and found/processed/waiting counts update one job at a time.
+- **Edit downloads**: Word, HTML, and Pages next to the PDF. **Delete** removes the `applications/` folder.
+- **Skip non-jobs**: Indeed salary/career-explorer pages and LinkedIn search URLs are not tailored.
+- **Docker-only desk** at port 8000: hunt, tailor, live SSE table, inline PDF.
 - **Hunt from profile** via Camoufox: LinkedIn, Indeed, Google ATS dorks, optional saved jobs, `exclude_companies` / years / level / skill gates.
 - **Manual intake**: URLs (one per line) plus an optional job-description field; pasted JD is the tailor source for a single URL.
 - **Skip already processed** company/role or job URL; live strip says so.

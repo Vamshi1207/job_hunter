@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote_plus, urljoin, urlparse, urlunparse
@@ -12,10 +13,29 @@ from urllib.parse import parse_qs, quote_plus, urljoin, urlparse, urlunparse
 from bs4 import BeautifulSoup
 
 from pipeline.config import Config
-from pipeline.jobs import company_role_from_title, is_placeholder_company, parse_posting_meta
+from pipeline.jobs import (
+    company_role_from_title,
+    is_directory_or_salary_listing,
+    is_job_posting_url,
+    is_placeholder_company,
+    parse_posting_meta,
+)
 from pipeline.search import html_to_text, target_markets, target_roles
 
 log = logging.getLogger(__name__)
+
+_on_listing: ContextVar = ContextVar("on_listing", default=None)
+
+
+def _notify_listing(item: dict | None) -> None:
+    callback = _on_listing.get()
+    if not callback or not item:
+        return
+    try:
+        callback(item)
+    except Exception:
+        log.debug("on_listing failed", exc_info=True)
+
 
 DEFAULT_LINK_HINTS = (
     "/jobs/view/",
@@ -197,6 +217,8 @@ def collect_job_links(html: str, base_url: str, contains: list[str] | None = Non
         if not any(hint in low for hint in hints):
             return
         canon = canonicalize_job_url(href)
+        if not is_job_posting_url(canon):
+            return
         if canon in seen:
             return
         seen.add(canon)
@@ -277,7 +299,7 @@ def saved_job_urls(cfg: Config) -> list[str]:
     return urls
 
 
-async def browse_jobs(cfg: Config) -> list[dict]:
+async def browse_jobs(cfg: Config, on_listing=None) -> list[dict]:
     """Open Camoufox, walk saved jobs then configured search/ATS URLs, return listings with JD text."""
     sources = hunt_sources(cfg)
     if not sources and not saved_jobs_enabled(cfg):
@@ -299,6 +321,7 @@ async def browse_jobs(cfg: Config) -> list[dict]:
         launch.get("headless"),
         bool(launch.get("persistent_context")),
     )
+    token = _on_listing.set(on_listing)
     listings: list[dict] = []
     try:
         async with AsyncCamoufox(**launch) as session:
@@ -317,6 +340,8 @@ async def browse_jobs(cfg: Config) -> list[dict]:
     except Exception as exc:
         log.error("Camoufox failed to start: %s. Run python3 -m camoufox fetch", exc)
         return []
+    finally:
+        _on_listing.reset(token)
     return listings
 
 
@@ -350,31 +375,40 @@ def _camoufox_launch(cfg: Config) -> dict[str, Any]:
     return launch
 
 
-async def hydrate_job_urls(cfg: Config, urls: list[str]) -> list[dict]:
+async def hydrate_job_urls(cfg: Config, urls: list[str], on_listing=None) -> list[dict]:
     """Read company, role, and JD for pasted URLs. LinkedIn/Indeed use Camoufox."""
     from pipeline.jobs import fetch_posting
 
+    token = _on_listing.set(on_listing)
     listings: list[dict] = []
     pending: list[str] = []
     seen: set[str] = set()
-    for url in urls:
-        url = (url or "").strip()
-        if not url or url in seen:
-            continue
-        seen.add(url)
-        posting = fetch_posting(url)
-        if (
-            posting
-            and (posting.get("jd") or "").strip()
-            and (posting.get("role") or "").strip()
-            and not is_placeholder_company(posting.get("company") or "")
-        ):
-            listings.append(posting)
-        else:
-            pending.append(url)
-    if pending:
-        listings.extend(await _hydrate_with_camoufox(cfg, pending))
-    return listings
+    try:
+        for url in urls:
+            url = (url or "").strip()
+            if not url or url in seen:
+                continue
+            seen.add(url)
+            if not is_job_posting_url(url):
+                log.info("Skip non-job page %s", url)
+                continue
+            posting = fetch_posting(url)
+            if (
+                posting
+                and (posting.get("jd") or "").strip()
+                and (posting.get("role") or "").strip()
+                and not is_placeholder_company(posting.get("company") or "")
+                and not is_directory_or_salary_listing(posting)
+            ):
+                listings.append(posting)
+                _notify_listing(posting)
+            else:
+                pending.append(url)
+        if pending:
+            listings.extend(await _hydrate_with_camoufox(cfg, pending))
+        return listings
+    finally:
+        _on_listing.reset(token)
 
 
 async def _hydrate_with_camoufox(cfg: Config, urls: list[str]) -> list[dict]:
@@ -396,6 +430,7 @@ async def _hydrate_with_camoufox(cfg: Config, urls: list[str]) -> list[dict]:
                 if item:
                     item["source"] = item.get("source") or "desk"
                     found.append(item)
+                    _notify_listing(item)
                 else:
                     log.warning("Could not read posting %s", url)
     except Exception as exc:
@@ -514,6 +549,7 @@ async def _collect_from_url(
                 board = "linkedin" if "linkedin.com" in host else "indeed" if "indeed." in host else "board"
                 item["source"] = f"saved:{board}"
             listings.append(item)
+            _notify_listing(item)
     return listings
 
 
@@ -819,6 +855,11 @@ async def _extract_posting(page, cfg: Config, source: dict, url: str, delay_ms: 
         log.info("Skip %s (%s)", url, exc)
         return None
 
+    final_url = canonicalize_job_url(page.url or url)
+    if not is_job_posting_url(final_url):
+        log.info("Skip non-job page %s", final_url)
+        return None
+
     title = await _first_text(page, _as_list(source.get("title_selectors")) or list(DEFAULT_TITLE_SELECTORS))
     company = await _first_text(
         page, _as_list(source.get("company_selectors")) or list(DEFAULT_COMPANY_SELECTORS)
@@ -849,14 +890,18 @@ async def _extract_posting(page, cfg: Config, source: dict, url: str, delay_ms: 
         or [".job-details-jobs-unified-top-card__bullet", ".jobsearch-JobInfoHeader-subtitle", "[data-testid='job-location']"],
     )
     loc = loc or meta.get("location") or hunt_location(cfg)
-    return {
+    listing = {
         "company": (company or "Unknown").strip(),
         "role": title.strip()[:160],
-        "url": canonicalize_job_url(page.url or url),
+        "url": final_url,
         "location": (loc or "").strip(),
         "jd": (jd or "").strip(),
         "source": f"camoufox:{_source_name(source)}",
     }
+    if is_directory_or_salary_listing(listing):
+        log.info("Skip non-job page %s", final_url)
+        return None
+    return listing
 
 
 def _company_from_host(url: str) -> str:

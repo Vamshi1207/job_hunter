@@ -22,7 +22,10 @@
   <main class="desk">
     <section class="board-panel">
       <div class="board-head">
-        <h2>Ready packages</h2>
+        <div>
+          <h2 id="board-title">Ready packages</h2>
+          <p id="board-progress" class="board-progress" hidden aria-live="polite"></p>
+        </div>
         <div class="board-actions">
           <button type="button" id="refresh" class="ghost">Refresh</button>
           <button type="button" id="hunt">Hunt from profile</button>
@@ -34,8 +37,11 @@
             <tr>
               <th scope="col">Job name</th>
               <th scope="col">Company</th>
+              <th scope="col">Status</th>
               <th scope="col">Resume</th>
+              <th scope="col">Edit</th>
               <th scope="col">Job link</th>
+              <th scope="col"><span class="visually-hidden">Delete</span></th>
             </tr>
           </thead>
           <tbody id="package-list"></tbody>

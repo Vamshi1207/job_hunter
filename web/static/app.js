@@ -2,7 +2,7 @@ const $ = (id) => document.getElementById(id);
 
 const state = {
   packages: [],
-  pending: [],
+  jobs: [],
   activeId: null,
   runId: null,
   events: null,
@@ -55,11 +55,179 @@ async function loadMe() {
     `. Camoufox opens for LinkedIn/Indeed/ATS. LinkedIn needs a one-time sign-in. Apply is never clicked.`;
 }
 
+function jobKey(row) {
+  return `${row.company || ""}|${row.role || ""}|${row.url || ""}`;
+}
+
+function upsertJob(data) {
+  const incoming = {
+    company: data.company || "",
+    role: data.role || "Role",
+    url: data.url || "",
+    status: data.status || "found",
+    package_id: data.package_id || "",
+  };
+  const key = jobKey(incoming);
+  const idx = state.jobs.findIndex((row) => jobKey(row) === key);
+  if (idx >= 0) {
+    const prev = state.jobs[idx];
+    state.jobs[idx] = {
+      ...prev,
+      ...incoming,
+      package_id: incoming.package_id || prev.package_id,
+    };
+  } else {
+    state.jobs.push(incoming);
+  }
+}
+
+function setQueue(jobs) {
+  state.jobs = (jobs || []).map((row) => ({
+    company: row.company || "",
+    role: row.role || "Role",
+    url: row.url || "",
+    status: row.status || "queued",
+    package_id: row.package_id || "",
+  }));
+}
+
+function progressFromJobs() {
+  const jobs = state.jobs;
+  if (!jobs.length) return "";
+  let ready = 0;
+  let working = 0;
+  let waiting = 0;
+  let skipped = 0;
+  let failed = 0;
+  for (const row of jobs) {
+    if (row.status === "ready") ready += 1;
+    else if (row.status === "working") working += 1;
+    else if (row.status === "queued" || row.status === "found") waiting += 1;
+    else if (row.status === "skipped") skipped += 1;
+    else if (row.status === "failed") failed += 1;
+  }
+  const processed = ready + skipped + failed;
+  let line = `Found ${jobs.length} · ${processed} processed · ${working} working · ${waiting} waiting`;
+  if (skipped) line += ` · ${skipped} skipped`;
+  if (failed) line += ` · ${failed} failed`;
+  return line;
+}
+
+function renderProgress(line) {
+  const el = $("board-progress");
+  const title = $("board-title");
+  const text = line === undefined ? progressFromJobs() : line;
+  if (!text) {
+    el.hidden = true;
+    el.textContent = "";
+    title.textContent = "Ready packages";
+    return;
+  }
+  el.hidden = false;
+  el.textContent = text;
+  title.textContent = state.jobs.length ? "Jobs" : "Ready packages";
+}
+
+function statusLabel(status) {
+  if (status === "found") return "Found";
+  if (status === "queued") return "Waiting";
+  if (status === "working") return "Working";
+  if (status === "ready") return "Ready";
+  if (status === "skipped") return "Skipped";
+  if (status === "failed") return "Failed";
+  return status || "";
+}
+
+function liveJobLink(row) {
+  if (!row.url) return "—";
+  return `<a class="file-link" href="${escapeAttr(row.url)}" target="_blank" rel="noopener">Posting</a>`;
+}
+
+function packageHiddenByLive(pkg) {
+  return state.jobs.some(
+    (row) =>
+      (pkg.url && row.url && pkg.url === row.url) ||
+      (row.company === pkg.company && row.role === pkg.role)
+  );
+}
+
 function resumeCell(pkg) {
   if (!pkg.pdf_name) return "—";
   const href = `/api/packages/${encodeURIComponent(pkg.id)}/file/${encodeURIComponent(pkg.pdf_name)}`;
   const title = pkg.pdf_path ? escapeAttr(pkg.pdf_path) : "Open PDF";
-  return `<a class="file-link" href="${href}" target="_blank" rel="noopener" title="${title}">Open PDF</a>`;
+  return `<a class="file-link" href="${href}" target="_blank" rel="noopener" title="${title}">PDF</a>`;
+}
+
+function liveResumeCell(row) {
+  const pkg = row.package_id ? state.packages.find((item) => item.id === row.package_id) : null;
+  if (pkg) return resumeCell(pkg);
+  return "—";
+}
+
+function editLink(pkg, name, label, title) {
+  if (!name) return "";
+  const href = `/api/packages/${encodeURIComponent(pkg.id)}/file/${encodeURIComponent(name)}`;
+  const tip = title ? ` title="${escapeAttr(title)}"` : "";
+  return `<a class="file-link" href="${href}" rel="noopener"${tip}>${escapeHtml(label)}</a>`;
+}
+
+function editCell(pkg) {
+  if (!pkg) return "—";
+  const links = [
+    editLink(pkg, pkg.docx_name, "Word", "Editable Word document. Pages on Mac can open this too."),
+    editLink(pkg, pkg.html_name, "HTML", "Editable HTML resume"),
+    editLink(pkg, pkg.pages_name, "Pages", "Pages package: HTML, Word, and PDF preview inside"),
+  ].filter(Boolean);
+  if (!links.length) return "—";
+  return `<span class="edit-links">${links.join(" ")}</span>`;
+}
+
+function liveEditCell(row) {
+  const pkg = row.package_id ? state.packages.find((item) => item.id === row.package_id) : null;
+  return editCell(pkg);
+}
+
+function deleteCell(pkgId, company, role) {
+  if (!pkgId) {
+    return `<button type="button" class="row-delete ghost" data-forget="1" aria-label="Remove row">Remove</button>`;
+  }
+  const label = `Delete ${company || ""} ${role || ""}`.trim();
+  return `<button type="button" class="row-delete ghost" data-id="${escapeAttr(pkgId)}" aria-label="${escapeAttr(label)}">Delete</button>`;
+}
+
+function bindDelete(tr, packageId, liveRow) {
+  const btn = tr.querySelector(".row-delete");
+  if (!btn) return;
+  btn.addEventListener("click", async (ev) => {
+    ev.preventDefault();
+    ev.stopPropagation();
+    if (btn.dataset.forget) {
+      if (liveRow) {
+        state.jobs = state.jobs.filter((row) => row !== liveRow && jobKey(row) !== jobKey(liveRow));
+      }
+      renderBoard(state.activeId);
+      return;
+    }
+    const id = packageId || btn.dataset.id;
+    if (!id) return;
+    const who = liveRow
+      ? `${liveRow.company || ""} — ${liveRow.role || ""}`
+      : id;
+    if (!window.confirm(`Delete ${who.trim() || id}? This removes the folder from applications/.`)) {
+      return;
+    }
+    try {
+      await api("/api/packages/" + encodeURIComponent(id), { method: "DELETE" });
+      state.jobs = state.jobs.filter((row) => row.package_id !== id);
+      if (state.activeId === id) {
+        state.activeId = null;
+        $("report").hidden = true;
+      }
+      await loadPackages();
+    } catch (err) {
+      setStrip(err.message);
+    }
+  });
 }
 
 function jobLinkCell(pkg) {
@@ -84,35 +252,60 @@ async function loadPackages(selectId) {
 function renderBoard(active) {
   const body = $("package-list");
   body.innerHTML = "";
-  if (!state.packages.length && !state.pending.length) {
+  const readyPackages = state.packages.filter((pkg) => !packageHiddenByLive(pkg));
+  if (!state.packages.length && !state.jobs.length) {
     body.innerHTML =
-      '<tr class="empty-row"><td colspan="4">No packages yet. Hunt from your profile, or paste job URLs.</td></tr>';
+      '<tr class="empty-row"><td colspan="7">No packages yet. Hunt from your profile, or paste job URLs.</td></tr>';
+    renderProgress("");
     return;
   }
-  for (const row of state.pending) {
+  renderProgress();
+  for (const row of state.jobs) {
     const tr = document.createElement("tr");
-    tr.className = "pending-row";
+    tr.className = "job-row-live job-row-" + (row.status || "found");
     tr.innerHTML = `
       <td>${escapeHtml(row.role || "Role")}</td>
       <td>${escapeHtml(row.company || "")}</td>
-      <td>Working…</td>
-      <td>—</td>
+      <td><span class="job-status job-status-${escapeAttr(row.status || "found")}">${escapeHtml(statusLabel(row.status))}</span></td>
+      <td>${liveResumeCell(row)}</td>
+      <td>${liveEditCell(row)}</td>
+      <td>${liveJobLink(row)}</td>
+      <td>${deleteCell(row.package_id, row.company, row.role)}</td>
     `;
+    bindDelete(tr, row.package_id, row);
+    if (row.package_id) {
+      tr.tabIndex = 0;
+      tr.style.cursor = "pointer";
+      tr.addEventListener("click", (ev) => {
+        if (ev.target.closest("a") || ev.target.closest("button")) return;
+        openPackage(row.package_id);
+      });
+      tr.addEventListener("keydown", (ev) => {
+        if (ev.key === "Enter" || ev.key === " ") {
+          ev.preventDefault();
+          openPackage(row.package_id);
+        }
+      });
+    }
     body.appendChild(tr);
   }
-  for (const pkg of state.packages) {
+  for (const pkg of readyPackages) {
     const tr = document.createElement("tr");
     tr.dataset.id = pkg.id;
     if (pkg.id === active) tr.classList.add("active");
     tr.innerHTML = `
       <td>${escapeHtml(pkg.role || "Role")}</td>
       <td>${escapeHtml(pkg.company)}</td>
+      <td><span class="job-status job-status-ready">Ready</span></td>
       <td>${resumeCell(pkg)}</td>
+      <td>${editCell(pkg)}</td>
       <td>${jobLinkCell(pkg)}</td>
+      <td>${deleteCell(pkg.id, pkg.company, pkg.role)}</td>
     `;
+    bindDelete(tr, pkg.id);
     tr.tabIndex = 0;
     tr.addEventListener("click", (ev) => {
-      if (ev.target.closest("a")) return;
+      if (ev.target.closest("a") || ev.target.closest("button")) return;
       openPackage(pkg.id);
     });
     tr.addEventListener("keydown", (ev) => {
@@ -210,6 +403,8 @@ function showTab(detail, tabId, btn) {
 
 function watchRun(runId) {
   if (state.events) state.events.close();
+  state.jobs = [];
+  renderProgress("");
   setLamp("on");
   $("run-state").textContent = "running";
   setStrip("— strip open —\n");
@@ -218,32 +413,46 @@ function watchRun(runId) {
   src.onmessage = (ev) => {
     try {
       const data = JSON.parse(ev.data);
-      if (data.line) setStrip(data.line, true);
-      if (data.type === "processing" && (data.company || data.role)) {
-        const key = `${data.company}|${data.role}`;
-        if (!state.pending.some((row) => `${row.company}|${row.role}` === key)) {
-          state.pending.unshift({ company: data.company, role: data.role });
-        }
+      if (data.line && data.type !== "progress") setStrip(data.line, true);
+      if (data.type === "found") {
+        upsertJob({ ...data, status: data.status || "found" });
         renderBoard(state.activeId);
       }
-      if (data.type === "package" && data.package_id) {
-        state.pending = state.pending.filter(
-          (row) => row.company !== data.company || row.role !== data.role
-        );
-        loadPackages(data.package_id);
+      if (data.type === "queue") {
+        setQueue(data.jobs || []);
+        renderBoard(state.activeId);
+      }
+      if (data.type === "processing" && (data.company || data.role)) {
+        upsertJob({ ...data, status: data.status || "working" });
+        renderBoard(state.activeId);
+      }
+      if (data.type === "package") {
+        upsertJob({
+          ...data,
+          status: data.status || (data.package_id ? "ready" : "failed"),
+        });
+        renderBoard(state.activeId);
+        if (data.package_id) loadPackages(data.package_id);
+      }
+      if (data.type === "failed") {
+        upsertJob({ ...data, status: "failed" });
+        renderBoard(state.activeId);
+      }
+      if (data.type === "progress") {
+        renderProgress(data.line);
       }
     } catch (_) {}
   };
   src.addEventListener("done", async (ev) => {
     src.close();
     state.events = null;
-    state.pending = [];
     let payload = {};
     try { payload = JSON.parse(ev.data); } catch (_) {}
     setLamp(payload.status === "done" ? "done" : "");
     $("run-state").textContent = payload.status || "done";
     const first = payload.package_id || (payload.packages && payload.packages[0]);
     await loadPackages(first);
+    renderProgress(progressFromJobs());
     if (first) openPackage(first);
     if (payload.error) setStrip("ERROR: " + payload.error, true);
     $("hunt").disabled = false;
@@ -254,7 +463,11 @@ function watchRun(runId) {
   };
 }
 
-$("refresh").addEventListener("click", () => loadPackages());
+$("refresh").addEventListener("click", () => {
+  state.jobs = [];
+  renderProgress("");
+  loadPackages();
+});
 $("hunt").addEventListener("click", async () => {
   const huntBtn = $("hunt");
   huntBtn.disabled = true;
@@ -298,5 +511,5 @@ $("intake").addEventListener("submit", async (ev) => {
 
 loadMe().catch(() => {});
 loadPackages().catch((err) => {
-  $("package-list").innerHTML = `<tr class="empty-row"><td colspan="4">${escapeHtml(err.message)}</td></tr>`;
+  $("package-list").innerHTML = `<tr class="empty-row"><td colspan="7">${escapeHtml(err.message)}</td></tr>`;
 });

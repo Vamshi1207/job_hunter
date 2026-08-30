@@ -86,6 +86,37 @@ h2 { font-size: 1.15rem; }
   margin-bottom: 0.7rem;
 }
 
+.board-progress {
+  margin: 0.25rem 0 0;
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  color: #4a5a6a;
+}
+
+.job-status {
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.job-status-found,
+.job-status-queued { color: #4a5a6a; }
+.job-status-working { color: #8a5a12; }
+.job-status-ready { color: #1f6b3a; }
+.job-status-skipped { color: #5a6a7a; }
+.job-status-failed { color: #8a2b2b; }
+
+.job-row-live td {
+  cursor: default;
+}
+
+.job-row-working td {
+  font-style: italic;
+}
+
 .board-actions {
   display: flex;
   gap: 0.55rem;
@@ -132,9 +163,31 @@ h2 { font-size: 1.15rem; }
   background: #fff;
 }
 
-.board .file-link {
-  color: var(--ink);
-  font-weight: 500;
+.edit-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem 0.7rem;
+}
+
+.row-delete {
+  font-size: 0.78rem;
+  padding: 0.2rem 0.45rem;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.board tbody tr:has(button:focus-visible) {
+  background: inherit;
 }
 
 .empty-row td,

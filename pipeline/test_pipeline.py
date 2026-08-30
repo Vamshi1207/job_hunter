@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 
 from pipeline.config import load_config
@@ -553,9 +554,44 @@ class HuntTests(unittest.TestCase):
             canonicalize_job_url("https://www.linkedin.com/jobs/view/4423802476/?trk=flagship"),
             "https://www.linkedin.com/jobs/view/4423802476",
         )
+        from pipeline.jobs import is_directory_or_salary_listing, is_job_posting_url
+        from pipeline.search import score_listing
+
+        salary = "https://ca.indeed.com/career/senior-software-engineer/salaries/Montr%C3%A9al--QC"
+        self.assertFalse(is_job_posting_url(salary))
+        self.assertFalse(is_job_posting_url("https://ca.indeed.com/jobs?q=Software+Engineer&l=Montreal"))
+        self.assertTrue(is_job_posting_url("https://ca.indeed.com/viewjob?jk=abc123"))
+        self.assertTrue(is_job_posting_url("https://www.linkedin.com/jobs/view/4456591134"))
+        self.assertFalse(is_job_posting_url("https://www.linkedin.com/jobs/search/?keywords=Software+Engineer"))
+        self.assertTrue(is_job_posting_url("https://boards.greenhouse.io/acme/jobs/9"))
+        mixed = """
+        <a href="https://ca.indeed.com/viewjob?jk=abc123">job</a>
+        <a href="https://ca.indeed.com/career/senior-software-engineer/salaries/Montréal--QC">salary</a>
+        """
+        indeed_links = collect_job_links(mixed, "https://ca.indeed.com/jobs?q=Software+Engineer")
+        self.assertTrue(any("jk=abc123" in item for item in indeed_links))
+        self.assertFalse(any("/career/" in item or "/salaries" in item for item in indeed_links))
         tmp = tempfile.TemporaryDirectory()
         try:
             cfg = self._cfg(Path(tmp.name))
+            self.assertEqual(
+                score_listing(
+                    {
+                        "company": "Unknown",
+                        "role": "Senior software engineer salary in Montréal, QC",
+                        "url": salary,
+                        "location": "Montreal, Canada",
+                        "jd": "Average base salary $126,706",
+                    },
+                    cfg,
+                ),
+                0,
+            )
+            self.assertTrue(
+                is_directory_or_salary_listing(
+                    {"role": "Senior software engineer salary in Montréal, QC", "url": salary}
+                )
+            )
             url = fill_search_url(
                 "https://www.linkedin.com/jobs/search/?keywords={query}&location={location}",
                 cfg,
@@ -765,6 +801,59 @@ class HuntTests(unittest.TestCase):
             tmp.cleanup()
             load_config(force=True)
 
+    def test_editable_exports_and_package_delete(self):
+        from pipeline.cv_export import html_to_docx, html_to_pages
+        from pipeline.reports import delete_package_dir, package_summary
+
+        html = """
+        <html><body>
+          <header class="header">
+            <div class="header-name">Test User</div>
+            <div class="header-title">Software Engineer</div>
+            <div class="header-contact"><span>Montreal</span></div>
+          </header>
+          <div class="summary">Python Kafka.</div>
+          <div class="section-heading">Work Experience</div>
+          <div class="job-block">
+            <div class="job-header">
+              <span class="company-name">Acme</span>
+              <span class="job-place">Montreal</span>
+            </div>
+            <ul><li><span class="point">Shipped a pipeline.</span></li></ul>
+          </div>
+        </body></html>
+        """
+        tmp = tempfile.TemporaryDirectory()
+        try:
+            root = Path(tmp.name)
+            folder = root / "applications" / "Acme-Software-Engineer-2026-08-30"
+            folder.mkdir(parents=True)
+            html_path = folder / "Test_User_CV.html"
+            html_path.write_text(html)
+            (folder / "job.json").write_text(
+                '{"company": "Acme", "role": "Software Engineer", "url": "https://example.com/job"}'
+            )
+            docx_path = folder / "Test_User_CV.docx"
+            pages_path = folder / "Test_User_CV.pages"
+            html_to_docx(html_path, docx_path)
+            html_to_pages(html_path, pages_path)
+            self.assertTrue(docx_path.is_file())
+            self.assertGreater(docx_path.stat().st_size, 1000)
+            self.assertTrue(zipfile.ZipFile(pages_path).namelist())
+            cfg = self._cfg(root)
+            summary = package_summary(cfg, folder)
+            self.assertEqual(summary["docx_name"], "Test_User_CV.docx")
+            self.assertEqual(summary["html_name"], "Test_User_CV.html")
+            self.assertEqual(summary["pages_name"], "Test_User_CV.pages")
+            self.assertTrue(delete_package_dir(cfg, folder.name))
+            self.assertFalse(folder.exists())
+            self.assertFalse(delete_package_dir(cfg, "../etc"))
+            self.assertFalse(delete_package_dir(cfg, "_tracker"))
+        finally:
+            os.environ.pop("JOB_SEARCH_ROOT", None)
+            tmp.cleanup()
+            load_config(force=True)
+
     def test_skips_already_processed_role_and_url(self):
         from pipeline.search import find_existing_package
 
@@ -789,6 +878,86 @@ class HuntTests(unittest.TestCase):
             self.assertEqual(by_role.name, folder.name)
             self.assertEqual(by_url.name, folder.name)
             self.assertIsNone(miss)
+        finally:
+            os.environ.pop("JOB_SEARCH_ROOT", None)
+            tmp.cleanup()
+            load_config(force=True)
+
+    def test_job_progress_emits_found_then_queue_then_working(self):
+        from pipeline.hunt import JobProgress, progress_snapshot
+
+        events = []
+        board = JobProgress(events.append)
+        first = {"company": "Acme", "role": "Software Engineer", "url": "https://example.com/1"}
+        extra = {"company": "Noise", "role": "Intern", "url": "https://example.com/2"}
+        board.found(first)
+        board.found(extra)
+        board.queue([first])
+        board.working(first)
+        board.ready(first, "acme-software-engineer-2026-08-30")
+        types = [item["type"] for item in events]
+        self.assertEqual(types[0], "found")
+        self.assertIn("queue", types)
+        self.assertLess(types.index("found"), types.index("queue"))
+        self.assertLess(types.index("queue"), types.index("processing"))
+        self.assertLess(types.index("processing"), types.index("package"))
+        queue = next(item for item in events if item["type"] == "queue")
+        self.assertEqual(len(queue["jobs"]), 1)
+        self.assertEqual(queue["jobs"][0]["status"], "queued")
+        snap = [item for item in events if item["type"] == "progress"][-1]
+        self.assertEqual(snap["found"], 1)
+        self.assertEqual(snap["ready"], 1)
+        self.assertEqual(snap["waiting"], 0)
+        self.assertEqual(snap["processed"], 1)
+        self.assertIn("1 processed", snap["line"])
+
+        empty = progress_snapshot([])
+        self.assertEqual(empty["found"], 0)
+        self.assertIn("0 waiting", empty["line"])
+
+    def test_hunt_and_tailor_emits_queue_before_processing(self):
+        import asyncio
+        from unittest.mock import patch
+
+        from pipeline.hunt import hunt_and_tailor
+
+        listing = {
+            "company": "Acme",
+            "role": "Software Engineer",
+            "url": "https://example.com/acme",
+            "jd": "Python Kafka",
+            "location": "Montreal",
+        }
+
+        async def fake_search(cfg, limit=None, on_listing=None):
+            if on_listing:
+                on_listing(listing)
+            return [listing]
+
+        class FakeDir:
+            name = "acme-software-engineer-2026-08-30"
+
+        async def fake_process(job, fill_form=False):
+            return FakeDir()
+
+        events = []
+        tmp = tempfile.TemporaryDirectory()
+        try:
+            cfg = self._cfg(Path(tmp.name))
+
+            async def run():
+                with patch("pipeline.hunt.search_jobs_async", fake_search), patch(
+                    "pipeline.run_pipeline.process_job", fake_process
+                ), patch("pipeline.search.find_existing_package", return_value=None), patch(
+                    "pipeline.hunt.append_job"
+                ):
+                    return await hunt_and_tailor(cfg, on_event=events.append)
+
+            results = asyncio.run(run())
+            self.assertEqual(results[0]["package_id"], FakeDir.name)
+            types = [item["type"] for item in events if item.get("type") in {"found", "queue", "processing", "package"}]
+            self.assertEqual(types, ["found", "queue", "processing", "package"])
+            self.assertEqual(results[0]["company"], "Acme")
         finally:
             os.environ.pop("JOB_SEARCH_ROOT", None)
             tmp.cleanup()

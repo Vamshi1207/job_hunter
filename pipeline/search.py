@@ -14,7 +14,7 @@ import yaml
 from bs4 import BeautifulSoup
 
 from pipeline.config import Config
-from pipeline.jobs import BLOCKED_HOSTS, fetch_jd, slug
+from pipeline.jobs import BLOCKED_HOSTS, fetch_jd, is_directory_or_salary_listing, slug
 
 log = logging.getLogger(__name__)
 
@@ -203,6 +203,8 @@ def _role_words(role: str) -> list[str]:
 def score_listing(listing: dict, cfg: Config) -> int:
     """Higher is a closer title/location/stack match. 0 means do not tailor this posting."""
     url = listing.get("url") or ""
+    if is_directory_or_salary_listing(listing):
+        return 0
     if company_is_excluded(listing, cfg):
         return 0
     if listing.get("saved"):
@@ -619,16 +621,30 @@ def search_jobs(
         _jd_fetcher = prev_jd
 
 
-async def search_jobs_async(cfg: Config, *, limit: int | None = None) -> list[dict]:
+def _notify_listings(on_listing, items: list[dict]) -> None:
+    if not on_listing:
+        return
+    for item in items:
+        try:
+            on_listing(item)
+        except Exception:
+            log.debug("on_listing failed", exc_info=True)
+
+
+async def search_jobs_async(cfg: Config, *, limit: int | None = None, on_listing=None) -> list[dict]:
     """MCP (optional), Camoufox boards, and public APIs, then the same fit gates."""
     from pipeline.browser_hunt import api_sources_enabled, browse_jobs, browser_enabled
     from pipeline.mcp_hunt import harvest_mcp_listings, mcp_indeed_enabled
 
     listings: list[dict] = []
     if mcp_indeed_enabled(cfg):
-        listings.extend(await harvest_mcp_listings(cfg))
+        found = await harvest_mcp_listings(cfg)
+        _notify_listings(on_listing, found)
+        listings.extend(found)
     if browser_enabled(cfg):
-        listings.extend(await browse_jobs(cfg))
+        listings.extend(await browse_jobs(cfg, on_listing=on_listing))
     if api_sources_enabled(cfg):
-        listings.extend(harvest_api_listings(cfg))
+        found = harvest_api_listings(cfg)
+        _notify_listings(on_listing, found)
+        listings.extend(found)
     return rank_and_select(cfg, listings, limit)

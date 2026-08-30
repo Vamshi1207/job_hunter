@@ -1,0 +1,165 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Job Search Pipeline",
+    "output": "job-search-runtime.html",
+    "locale": "en",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/Vamshi1207/job_hunter",
+      "revision": "0ce613813b2de18146bc29e095d3b2fae3a7808e"
+    },
+    "views": [
+      {
+        "id": "hunt-path",
+        "label": "Hunt from profile",
+        "focus": ["you", "desk", "hunt", "camoufox", "boards"],
+        "note": "Desk POST /api/hunt opens Camoufox in Docker. Apply is never clicked."
+      },
+      {
+        "id": "tailor-path",
+        "label": "Tailor a posting",
+        "focus": ["desk", "truth", "tailor", "gemini", "packages"],
+        "note": "Master CV and experience bank are the only facts the LLM may reuse."
+      },
+      {
+        "id": "manual-intake",
+        "label": "Manual URL and JD",
+        "focus": ["you", "desk", "tailor", "packages"],
+        "note": "Paste URLs and an optional JD; a single URL uses the pasted text."
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "you",
+      "type": "external",
+      "label": "You",
+      "sublabel": "Browser :8000",
+      "pos": [40, 280],
+      "size": [120, 60]
+    },
+    {
+      "id": "desk",
+      "type": "frontend",
+      "label": "Desk UI",
+      "sublabel": "FastAPI SSE",
+      "brand": "fastapi",
+      "pos": [240, 280],
+      "size": [140, 64],
+      "sources": [{ "path": "web/app.py", "line": 28, "end_line": 29, "label": "app" }]
+    },
+    {
+      "id": "hunt",
+      "type": "backend",
+      "label": "Hunt",
+      "sublabel": "fit gates",
+      "pos": [480, 280],
+      "size": [140, 64],
+      "sources": [{ "path": "pipeline/hunt.py", "line": 14, "end_line": 25, "label": "hunt_and_tailor" }]
+    },
+    {
+      "id": "camoufox",
+      "type": "cloud",
+      "label": "Camoufox",
+      "sublabel": "Xvfb :99",
+      "brand": "docker",
+      "pos": [720, 280],
+      "size": [150, 64],
+      "tag": "never Apply",
+      "sources": [{ "path": "pipeline/browser_hunt.py", "line": 280, "end_line": 316, "label": "browse_jobs" }]
+    },
+    {
+      "id": "boards",
+      "type": "external",
+      "label": "Job boards",
+      "sublabel": "LinkedIn Indeed ATS",
+      "pos": [960, 280],
+      "size": [160, 64]
+    },
+    {
+      "id": "truth",
+      "type": "database",
+      "label": "Source of truth",
+      "sublabel": "config · CV · bank",
+      "pos": [240, 80],
+      "size": [140, 64],
+      "sources": [{ "path": "pipeline/config.py", "line": 44, "end_line": 53, "label": "load_config" }]
+    },
+    {
+      "id": "tailor",
+      "type": "backend",
+      "label": "Tailor + critic",
+      "sublabel": "agy · Playwright PDF",
+      "pos": [480, 460],
+      "size": [140, 64],
+      "sources": [{ "path": "pipeline/run_pipeline.py", "line": 45, "end_line": 71, "label": "process_job" }]
+    },
+    {
+      "id": "gemini",
+      "type": "cloud",
+      "label": "Gemini",
+      "sublabel": "agy CLI",
+      "brand": "google-gemini",
+      "pos": [720, 460],
+      "size": [140, 64],
+      "sources": [{ "path": "pipeline/tailor.py", "line": 93, "end_line": 98, "label": "call_agy" }]
+    },
+    {
+      "id": "packages",
+      "type": "database",
+      "label": "Packages",
+      "sublabel": "applications/",
+      "pos": [960, 460],
+      "size": [160, 64],
+      "tag": "you click Submit"
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "Docker",
+      "wraps": ["desk", "hunt", "camoufox", "tailor", "gemini"]
+    },
+    {
+      "kind": "security-group",
+      "label": "gitignored personal files",
+      "wraps": ["truth"]
+    }
+  ],
+  "connections": [
+    { "id": "you-desk", "from": "you", "to": "desk", "label": "HTTPS", "variant": "emphasis" },
+    { "id": "desk-hunt", "from": "desk", "to": "hunt", "label": "/api/hunt", "labelDy": -28 },
+    { "id": "hunt-camoufox", "from": "hunt", "to": "camoufox", "label": "crawl", "labelDy": -28 },
+    { "id": "camoufox-boards", "from": "camoufox", "to": "boards", "label": "read JDs", "labelDy": -28 },
+    { "id": "desk-truth", "from": "desk", "to": "truth", "label": "config overlay", "fromSide": "top", "toSide": "bottom", "labelDy": -40 },
+    { "id": "desk-tailor", "from": "desk", "to": "tailor", "label": "/api/runs", "variant": "dashed", "fromSide": "bottom", "toSide": "left", "labelDy": 20 },
+    { "id": "hunt-tailor", "from": "hunt", "to": "tailor", "label": "selected JDs", "fromSide": "bottom", "toSide": "top", "labelDy": 24 },
+    { "id": "tailor-gemini", "from": "tailor", "to": "gemini", "label": "agy retry" },
+    { "id": "tailor-packages", "from": "tailor", "to": "packages", "label": "HTML + PDF", "fromSide": "bottom", "toSide": "bottom", "via": [[550, 560], [1040, 560]], "labelDy": 28 }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Desk",
+      "items": [
+        "Hunt from profile or paste URLs plus an optional JD"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Honesty",
+      "items": [
+        "Tailor rewrites only cv_master.md and the experience bank; never clicks Submit"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Docker hunt",
+      "items": [
+        "Xvfb stays alive; Camoufox is virtual-headless; Indeed MCP fail-softs"
+      ]
+    }
+  ]
+}
