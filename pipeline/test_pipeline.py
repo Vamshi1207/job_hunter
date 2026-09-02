@@ -767,6 +767,9 @@ class HuntTests(unittest.TestCase):
         apps = root / "applications"
         apps.mkdir()
         (apps / "OldCo-Software-Engineer-2026-01-01").mkdir()
+        (
+            apps / "OldCo-Software-Engineer-2026-01-01" / "job.json"
+        ).write_text('{"company": "OldCo", "role": "Software Engineer", "url": "https://example.com/old"}')
         try:
             cfg = self._cfg(root)
 
@@ -1108,6 +1111,50 @@ class HuntTests(unittest.TestCase):
             tmp.cleanup()
             load_config(force=True)
 
+    def test_pages_helper_http_error_includes_body(self):
+        import io
+        import urllib.error
+        from unittest.mock import patch
+
+        from pipeline import cv_export
+
+        tmp = tempfile.TemporaryDirectory()
+        try:
+            docx = Path(tmp.name) / "cv.docx"
+            pages = Path(tmp.name) / "cv.pages"
+            docx.write_bytes(b"PK")
+            err = urllib.error.HTTPError(
+                "http://host.docker.internal:8765/pages",
+                400,
+                "Bad Request",
+                hdrs=None,
+                fp=io.BytesIO(
+                    b'{"ok": false, "error": "Pages got an error: Application isn\\u2019t running. (-600)"}'
+                ),
+            )
+            with patch.object(cv_export, "_pages_app_enabled", return_value=False), patch.object(
+                cv_export, "_in_docker", return_value=True
+            ), patch.object(cv_export, "_helper_available", return_value=True), patch(
+                "pipeline.cv_export.urllib.request.urlopen", side_effect=err
+            ):
+                with self.assertRaises(RuntimeError) as ctx:
+                    cv_export.docx_to_pages(docx, pages)
+            msg = str(ctx.exception)
+            self.assertIn("HTTP 400", msg)
+            self.assertIn("-600", msg)
+            self.assertNotIn("unreachable", msg)
+        finally:
+            tmp.cleanup()
+
+    def test_pages_not_running_detects_apple_event_error(self):
+        from pipeline.cv_export import _pages_retryable
+
+        self.assertTrue(
+            _pages_retryable("execution error: Pages got an error: Application isn’t running. (-600)")
+        )
+        self.assertTrue(_pages_retryable("execution error: Pages got an error: Connection is invalid. (-2700)"))
+        self.assertFalse(_pages_retryable("execution error: Pages got an error: Access not allowed"))
+
     def test_llm_nvidia_falls_back_to_agy(self):
         from unittest.mock import patch
 
@@ -1203,30 +1250,54 @@ class HuntTests(unittest.TestCase):
 
         self.assertEqual(_nvidia_message_text(Completion()), "tagged resume")
 
-    def test_skips_already_processed_role_and_url(self):
-        from pipeline.search import find_existing_package
+    def test_skips_already_processed_by_url_not_title(self):
+        from pipeline.search import find_existing_package, rank_and_select, unique_application_dir
 
         tmp = tempfile.TemporaryDirectory()
         root = Path(tmp.name)
         folder = root / "applications" / "Acme-Software-Engineer-2026-08-29"
         folder.mkdir(parents=True)
         (folder / "job.json").write_text(
-            '{"company": "Acme", "role": "Software Engineer", "url": "https://example.com/job"}'
+            '{"company": "Acme", "role": "Software Engineer", "url": "https://www.linkedin.com/jobs/view/111?trk=x"}'
         )
         try:
             cfg = self._cfg(root)
-            by_role = find_existing_package(
-                cfg, {"company": "Acme", "role": "Software Engineer", "url": "https://other.example/new"}
+            same_title = find_existing_package(
+                cfg, {"company": "Acme", "role": "Software Engineer", "url": "https://linkedin.com/jobs/view/222"}
             )
-            by_url = find_existing_package(
-                cfg, {"company": "Other", "role": "Other Role", "url": "https://example.com/job"}
+            same_url = find_existing_package(
+                cfg, {"company": "Other", "role": "Other Role", "url": "https://linkedin.com/jobs/view/111"}
             )
             miss = find_existing_package(
                 cfg, {"company": "Beta", "role": "Engineer", "url": "https://example.com/new"}
             )
-            self.assertEqual(by_role.name, folder.name)
-            self.assertEqual(by_url.name, folder.name)
+            self.assertIsNone(same_title)
+            self.assertEqual(same_url.name, folder.name)
             self.assertIsNone(miss)
+
+            first = {
+                "company": "GitLab",
+                "role": "Senior Backend Engineer",
+                "url": "https://boards.greenhouse.io/gitlab/jobs/100",
+                "location": "Montreal, Canada",
+                "jd": "5+ years of Python and Kafka.",
+            }
+            second = {
+                "company": "GitLab",
+                "role": "Senior Backend Engineer",
+                "url": "https://boards.greenhouse.io/gitlab/jobs/200",
+                "location": "Toronto, Canada",
+                "jd": "5+ years of Python and Kafka.",
+            }
+            dup = dict(first)
+            chosen = rank_and_select(cfg, [first, second, dup])
+            self.assertEqual(len(chosen), 2)
+            self.assertEqual({item["url"] for item in chosen}, {first["url"], second["url"]})
+
+            taken = unique_application_dir(cfg, "Acme", "Software Engineer", "2026-08-29", "https://linkedin.com/jobs/view/222")
+            self.assertEqual(taken.name, "Acme-Software-Engineer-2026-08-29-222")
+            reuse = unique_application_dir(cfg, "Acme", "Software Engineer", "2026-08-29", "https://linkedin.com/jobs/view/111")
+            self.assertEqual(reuse.name, folder.name)
         finally:
             os.environ.pop("JOB_SEARCH_ROOT", None)
             tmp.cleanup()

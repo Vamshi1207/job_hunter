@@ -12,7 +12,6 @@ from pathlib import Path
 from pipeline.bank import load_experience_bank, load_optional
 from pipeline.config import Config, load_config
 from pipeline.cv_format import apply_cv_format, page_height_px, page_size, tailor_layout_instructions
-from pipeline.jobs import slug
 from pipeline.llm import complete_prompt
 
 log = logging.getLogger(__name__)
@@ -537,8 +536,11 @@ async def save_materials(
 
     cfg = load_config()
     date_str = date_str or datetime.date.today().isoformat()
-    folder_name = f"{slug(company)}-{slug(role)}-{date_str}"
-    output_dir = cfg.applications_dir / folder_name
+    from pipeline.search import unique_application_dir
+
+    output_dir = unique_application_dir(
+        cfg, company, role, date_str, (job or {}).get("url") or ""
+    )
     output_dir.mkdir(parents=True, exist_ok=True)
 
     parsed = normalize_parsed(parse_tagged_output(llm_output))

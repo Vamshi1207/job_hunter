@@ -145,7 +145,7 @@ Open [http://127.0.0.1:8000](http://127.0.0.1:8000).
 
 1. **Add postings by URL** is at the top of the desk. Paste one or more job links (one per line). Paste the **job description** to tailor from that text (used with a single URL).
 2. Click **Hunt from profile**. Camoufox runs in the container. Each posting is tailored as soon as it matches; search keeps adding more. **Stop** cancels search and skips jobs not yet started. LinkedIn may need a one-time sign-in in that session (cookies live in `.camoufox-profile/`). Apply/Submit is never clicked.
-3. Status on each row is the current step (searching, Writing CV, Scoring ATS, Building PDF, Ready, Stopped, …), not a generic “working”. Already tailored company/role or job URL combinations are skipped. If LinkedIn asks for sign-in or extra verification, the **Camoufox** panel opens — click and type there. Hunt waits until you finish (default 5 minutes).
+3. Status on each row is the current step (searching, Writing CV, Scoring ATS, Building PDF, Ready, Stopped, …), not a generic “working”. Already tailored **job URLs** are skipped. Two postings at the same company with the same title but different URLs are both tailored. If LinkedIn asks for sign-in or extra verification, the **Camoufox** panel opens — click and type there. Hunt waits until you finish (default 5 minutes).
 4. The table lists job name, company, status, **PDF**, **Edit** (Word / HTML / Pages / **Rebuild PDF**), and the posting link. Edit the HTML in Cursor, then **Rebuild PDF**. **Delete** removes that `applications/<folder>/`. Click a row for score, cover letter, and playbook.
 
 Python pipeline changes need a container restart (`docker compose up -d ui` or `--build` after `requirements.txt` / Dockerfile changes). HTML/CSS/JS update from the bind mount without a rebuild.
@@ -238,6 +238,6 @@ What landed since the last published `main`:
 - **LLM chain**: NVIDIA Nemotron → `openai/gpt-oss-120b` → agy/Gemini. Put `NVIDIA_API_KEY` in `.env`.
 - **URL form** at the top of the desk; **Rebuild PDF** after HTML edits; native Pages via `scripts/macos_pages_helper.py`.
 - **Fit gates, not ranking**: `hunt.max_jobs: 0` tailors every match. JD stack decides keep/drop; titles are vetoes only.
-- **Live hunt table**, Word/HTML/Pages downloads, skip salary/search pages, skip already processed company/role or URL.
+- **Live hunt table**, Word/HTML/Pages downloads, skip salary/search pages, skip already processed job URLs (same title at one company with a new URL is kept).
 - **Docker-only desk** at port 8000. Camoufox needs the entrypoint Xvfb and seccomp flags in `docker-compose.yml`.
 - **Gitignored personal files** have tracked examples (`config.example.yaml`, `cv_master.example.md`, `jobs.example.yaml`, `resumes/template.example.html`, memory templates, experience-bank examples, `.env.example`, `.cursor/mcp.example.json`). Copy them once; never commit `config.yaml` (it may hold a LinkedIn password). `applications/_tracker.md` is created at runtime.

@@ -8,7 +8,7 @@ import logging
 import re
 from pathlib import Path
 from typing import Callable, Optional, Union
-from urllib.parse import quote_plus
+from urllib.parse import parse_qs, quote_plus, urlencode, urlparse, urlunsplit
 
 import requests
 import yaml
@@ -497,10 +497,84 @@ def listing_key(listing: dict) -> str:
 
 
 def _norm_job_url(url: str) -> str:
-    raw = (url or "").strip().split("#")[0]
+    """Identity for a posting: host + path, plus Indeed/Greenhouse query ids. Tracking params dropped."""
+    raw = (url or "").strip()
     if not raw:
         return ""
-    return raw.rstrip("/").lower()
+    parts = urlparse(raw)
+    host = (parts.netloc or "").lower()
+    if host.startswith("www."):
+        host = host[4:]
+    path = (parts.path or "").rstrip("/").lower()
+    query = ""
+    if parts.query:
+        qs = parse_qs(parts.query, keep_blank_values=False)
+        keep = {}
+        for key in ("jk", "gh_jid"):
+            values = qs.get(key) or []
+            if values and values[0]:
+                keep[key] = values[0]
+        if keep:
+            query = urlencode(keep)
+    if not host and not path:
+        return raw.split("#")[0].rstrip("/").lower()
+    scheme = (parts.scheme or "https").lower()
+    return urlunsplit((scheme, host, path, query, "")).rstrip("/")
+
+
+def _url_id_suffix(url: str) -> str:
+    """Short folder suffix so two same-title postings on the same day do not share a directory."""
+    raw = (url or "").strip()
+    if not raw:
+        return ""
+    path = urlparse(raw).path.rstrip("/")
+    match = re.search(r"/jobs/view/(\d+)", path, re.I) or re.search(r"/jobs/(\d+)", path, re.I)
+    if match:
+        return match.group(1)
+    leaf = path.rsplit("/", 1)[-1]
+    if leaf and re.fullmatch(r"[a-zA-Z0-9_-]{4,32}", leaf):
+        return leaf.lower()
+    norm = _norm_job_url(raw)
+    return re.sub(r"[^a-z0-9]+", "", norm)[-8:] or ""
+
+
+def _folder_job_url(folder: Path) -> str:
+    path = folder / "job.json"
+    if not path.is_file():
+        return ""
+    try:
+        meta = json.loads(path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return ""
+    if not isinstance(meta, dict):
+        return ""
+    return _norm_job_url(str(meta.get("url") or ""))
+
+
+def unique_application_dir(cfg: Config, company: str, role: str, date_str: str, url: str = "") -> Path:
+    """applications/<company>-<role>-<date>, or a URL suffix when that name is a different posting."""
+    root = cfg.applications_dir
+    root.mkdir(parents=True, exist_ok=True)
+    base = f"{slug(company)}-{slug(role)}-{date_str}"
+    want = _norm_job_url(url)
+    candidate = root / base
+    if not candidate.exists():
+        return candidate
+    got = _folder_job_url(candidate)
+    if not want or not got or got == want:
+        return candidate
+    suffix = _url_id_suffix(url) or "alt"
+    name = f"{base}-{suffix}"
+    n = 2
+    while True:
+        candidate = root / name
+        if not candidate.exists():
+            return candidate
+        got = _folder_job_url(candidate)
+        if want and got == want:
+            return candidate
+        name = f"{base}-{suffix}-{n}"
+        n += 1
 
 
 def existing_job_urls(cfg: Config) -> set[str]:
@@ -511,43 +585,26 @@ def existing_job_urls(cfg: Config) -> set[str]:
     for folder in apps.iterdir():
         if not folder.is_dir() or folder.name.startswith(".") or folder.name.startswith("_"):
             continue
-        path = folder / "job.json"
-        if not path.exists():
-            continue
-        try:
-            meta = json.loads(path.read_text())
-        except (json.JSONDecodeError, OSError):
-            continue
-        if isinstance(meta, dict):
-            norm = _norm_job_url(str(meta.get("url") or ""))
-            if norm:
-                urls.add(norm)
+        norm = _folder_job_url(folder)
+        if norm:
+            urls.add(norm)
     return urls
 
 
 def find_existing_package(cfg: Config, job: dict) -> Path | None:
-    """Return the application folder if this company/role or job URL was already tailored."""
-    key = listing_key(job)
+    """Return the application folder if this job URL was already tailored. Same title, different URL is new."""
     url = _norm_job_url(job.get("url") or "")
+    if not url:
+        return None
     apps = cfg.applications_dir
     if not apps.is_dir():
         return None
-    key_hit = None
-    url_hit = None
     for folder in apps.iterdir():
         if not folder.is_dir() or folder.name.startswith(".") or folder.name.startswith("_"):
             continue
-        if key and key != "-" and folder_key(folder.name) == key:
-            key_hit = folder
-        path = folder / "job.json"
-        if url and path.exists():
-            try:
-                meta = json.loads(path.read_text())
-            except (json.JSONDecodeError, OSError):
-                meta = {}
-            if isinstance(meta, dict) and _norm_job_url(str(meta.get("url") or "")) == url:
-                url_hit = folder
-    return url_hit or key_hit
+        if _folder_job_url(folder) == url:
+            return folder
+    return None
 
 
 def existing_keys(cfg: Config) -> set[str]:
@@ -607,20 +664,22 @@ class HuntMatcher:
         self.cap = hunt_limit(cfg, limit)
         self.saved_cap = saved_jobs_max(cfg, limit)
         self.extra_saved = bool(cfg.get("hunt.saved_jobs.extra", False))
-        self.have = existing_keys(cfg)
         self.have_urls = existing_job_urls(cfg)
+        self.seen_urls: set[str] = set()
         self.seen_keys: set[str] = set()
         self.chosen: list[dict] = []
         self.saved_kept = 0
         self._cap_logged = False
 
     def offer(self, listing: dict) -> dict | None:
-        key = listing_key(listing)
         url = _norm_job_url(listing.get("url") or "")
-        if not key or key in self.seen_keys or key in self.have:
-            return None
-        if url and url in self.have_urls:
-            return None
+        key = listing_key(listing)
+        if url:
+            if url in self.seen_urls or url in self.have_urls:
+                return None
+        else:
+            if not key or key == "job-job" or key in self.seen_keys:
+                return None
         item = dict(listing)
         item["fit"] = score_listing(item, self.cfg)
         if item["fit"] <= 0:
@@ -663,7 +722,10 @@ class HuntMatcher:
                 item.get("role"),
             )
             return None
-        self.seen_keys.add(key)
+        if url:
+            self.seen_urls.add(url)
+        else:
+            self.seen_keys.add(key)
         if saved:
             log.info("Saved job counts as a match: %s — %s", item.get("company"), item.get("role"))
             self.saved_kept += 1

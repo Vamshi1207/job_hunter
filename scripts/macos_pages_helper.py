@@ -3,7 +3,7 @@
 
 The Docker UI cannot run Pages.app. Run this on the Mac (same repo checkout):
 
-    python3 scripts/macos_pages_helper.py          # convert existing, then serve Docker
+    python3 scripts/macos_pages_helper.py          # serve Docker; backfill missing .pages
     python3 scripts/macos_pages_helper.py --once   # convert existing and exit
 """
 
@@ -13,6 +13,7 @@ import argparse
 import json
 import os
 import sys
+import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -24,6 +25,7 @@ from pipeline.cv_export import docx_to_pages_via_app, is_native_pages  # noqa: E
 
 PORT = int(os.environ.get("JOB_SEARCH_PAGES_HELPER_PORT", "8765"))
 APPLICATIONS = (ROOT / "applications").resolve()
+_CONVERT_LOCK = threading.Lock()
 
 
 def _allowed(path: Path) -> bool:
@@ -37,7 +39,8 @@ def _allowed(path: Path) -> bool:
 def convert_one(docx: Path, pages: Path) -> None:
     if not _allowed(docx) or not _allowed(pages):
         raise ValueError(f"path is outside {APPLICATIONS}")
-    docx_to_pages_via_app(docx, pages)
+    with _CONVERT_LOCK:
+        docx_to_pages_via_app(docx, pages)
 
 
 def convert_existing() -> int:
@@ -49,7 +52,11 @@ def convert_existing() -> int:
         if is_native_pages(pages):
             continue
         print(f"converting {docx.relative_to(ROOT)}", flush=True)
-        convert_one(docx, pages)
+        try:
+            convert_one(docx, pages)
+        except Exception as exc:
+            print(f"failed {docx.relative_to(ROOT)}: {exc}", flush=True)
+            continue
         count += 1
     return count
 
@@ -80,6 +87,7 @@ class Handler(BaseHTTPRequestHandler):
             pages = Path(body["pages"])
             convert_one(docx, pages)
         except Exception as exc:
+            sys.stderr.write("convert failed: %s\n" % exc)
             payload = json.dumps({"ok": False, "error": str(exc)}).encode()
             self.send_response(400)
             self.send_header("Content-Type", "application/json")
@@ -99,12 +107,21 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--once", action="store_true", help="convert existing CVs and exit")
     args = parser.parse_args()
-    n = convert_existing()
-    print(f"converted {n} resume(s)", flush=True)
     if args.once:
+        n = convert_existing()
+        print(f"converted {n} resume(s)", flush=True)
         return
     server = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
     print(f"Pages helper listening on http://0.0.0.0:{PORT}/pages", flush=True)
+
+    def backfill() -> None:
+        try:
+            n = convert_existing()
+            print(f"converted {n} resume(s)", flush=True)
+        except Exception as exc:
+            print(f"backfill failed: {exc}", flush=True)
+
+    threading.Thread(target=backfill, daemon=True, name="pages-backfill").start()
     server.serve_forever()
 
 

@@ -7,6 +7,7 @@ import logging
 import os
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -21,6 +22,7 @@ SKIP_TAGS = {"script", "style", "head", "meta", "link", "title"}
 PAGES_HELPER_DEFAULT = "http://host.docker.internal:8765"
 _HELPER_OK: bool | None = None
 _HELPER_OK_UNTIL = 0.0
+_PAGES_APP_LOCK = threading.Lock()
 
 
 def write_editable_exports(html_path: Path, pdf_path: Path | None = None) -> dict[str, Path]:
@@ -265,15 +267,84 @@ def docx_to_pages_via_app(docx_path: Path, pages_path: Path) -> None:
     script = (
         f'set src to POSIX file "{src}"\n'
         f'set dest to POSIX file "{dest}"\n'
-        "tell application \"Pages\"\n"
+        'tell application "Pages"\n'
         "  set theDoc to open src\n"
         "  delay 1\n"
-        "  close theDoc saving in dest\n"
+        "  try\n"
+        "    close theDoc saving in dest\n"
+        "  on error errMsg\n"
+        "    try\n"
+        "      close theDoc saving no\n"
+        "    end try\n"
+        "    error errMsg\n"
+        "  end try\n"
         "end tell\n"
     )
-    subprocess.run(["osascript", "-e", script], check=True, timeout=90, capture_output=True)
+    with _PAGES_APP_LOCK:
+        last_err = ""
+        for attempt in range(3):
+            _ensure_pages_app()
+            if attempt:
+                time.sleep(0.8 * attempt)
+            try:
+                result = subprocess.run(
+                    ["osascript", "-e", script],
+                    capture_output=True,
+                    text=True,
+                    timeout=25,
+                )
+            except subprocess.TimeoutExpired:
+                last_err = "Pages AppleScript timed out"
+                continue
+            if result.returncode == 0:
+                break
+            last_err = (result.stderr or result.stdout or "").strip()
+            if not _pages_retryable(last_err):
+                raise RuntimeError(last_err or "Pages AppleScript failed")
+        else:
+            raise RuntimeError(last_err or "Pages.app did not start")
     if not is_native_pages(pages_path):
         raise RuntimeError(f"Pages.app did not write a native document at {pages_path}")
+
+
+def _ensure_pages_app() -> None:
+    """Start Pages.app without stealing focus. AppleScript `tell` will not launch it from a helper."""
+    subprocess.run(
+        ["open", "-g", "-a", "Pages"],
+        check=False,
+        timeout=20,
+        capture_output=True,
+    )
+    deadline = time.monotonic() + 12
+    while time.monotonic() < deadline:
+        try:
+            result = subprocess.run(
+                ["osascript", "-e", 'tell application "Pages" to get version'],
+                capture_output=True,
+                text=True,
+                timeout=4,
+            )
+        except subprocess.TimeoutExpired:
+            time.sleep(0.5)
+            continue
+        if result.returncode == 0:
+            return
+        if not _pages_retryable((result.stderr or result.stdout or "").strip()):
+            return
+        time.sleep(0.4)
+
+
+def _pages_retryable(message: str) -> bool:
+    text = message.lower()
+    return (
+        "-600" in message
+        or "-609" in message
+        or "-2700" in message
+        or "isn't running" in text
+        or "isn’t running" in text
+        or "not running" in text
+        or "connection is invalid" in text
+    )
 
 
 def _pages_app_enabled() -> bool:
@@ -332,6 +403,13 @@ def _docx_to_pages_via_helper(helper: str, docx_path: Path, pages_path: Path) ->
         with urllib.request.urlopen(req, timeout=90) as resp:
             if resp.status >= 400:
                 raise RuntimeError(f"Pages helper HTTP {resp.status}")
+    except urllib.error.HTTPError as exc:
+        detail = ""
+        try:
+            detail = exc.read().decode("utf-8", errors="replace").strip()[:500]
+        except Exception:
+            detail = str(exc.reason or exc)
+        raise RuntimeError(f"Pages helper HTTP {exc.code} at {url}: {detail or exc.reason}") from exc
     except urllib.error.URLError as exc:
         raise RuntimeError(f"Pages helper unreachable at {url}: {exc}") from exc
     if not is_native_pages(pages_path):
