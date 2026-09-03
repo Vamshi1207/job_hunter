@@ -22,7 +22,7 @@ from pipeline.jobs import (
     is_placeholder_company,
     parse_posting_meta,
 )
-from pipeline.search import html_to_text, hunt_queries, target_markets, target_roles
+from pipeline.search import html_to_text, hunt_location, hunt_locations, hunt_queries
 
 log = logging.getLogger(__name__)
 
@@ -184,19 +184,6 @@ def _as_list(raw) -> list[str]:
     if isinstance(raw, str):
         return [raw.strip()] if raw.strip() else []
     return [str(item).strip() for item in raw if str(item).strip()]
-
-
-def hunt_location(cfg: Config) -> str:
-    city = (cfg.get("user.city") or "").strip()
-    country = (cfg.get("user.country") or "").strip()
-    if city and country:
-        return f"{city}, {country}"
-    markets = target_markets(cfg)
-    if markets:
-        if city:
-            return f"{city}, {markets[0]}"
-        return markets[0]
-    return city or country or "Remote"
 
 
 def fill_search_url(template: str, cfg: Config, query: str, extra: dict | None = None) -> str:
@@ -586,13 +573,21 @@ async def _crawl_source(page, cfg: Config, source: dict, delay_ms: int, login_wa
     for query in queries:
         if _stopped():
             break
-        search_url = fill_search_url(template, cfg, query)
-        for item in await _collect_from_url(page, cfg, source, search_url, delay_ms, login_wait, max_per):
-            key = (item.get("url") or "").lower()
-            if key in seen:
-                continue
-            seen.add(key)
-            listings.append(item)
+        for location in hunt_locations(cfg):
+            if _stopped():
+                break
+            search_url = fill_search_url(
+                template,
+                cfg,
+                query,
+                extra={"location": quote_plus(location), "location_raw": location},
+            )
+            for item in await _collect_from_url(page, cfg, source, search_url, delay_ms, login_wait, max_per):
+                key = (item.get("url") or "").lower()
+                if key in seen:
+                    continue
+                seen.add(key)
+                listings.append(item)
     return listings
 
 
@@ -1229,6 +1224,20 @@ async def _extract_posting(page, cfg: Config, source: dict, url: str, delay_ms: 
         or [".job-details-jobs-unified-top-card__bullet", ".jobsearch-JobInfoHeader-subtitle", "[data-testid='job-location']"],
     )
     loc = loc or meta.get("location") or hunt_location(cfg)
+    from pipeline.apply_url import extract_apply_from_html, is_aggregator_url, is_ats_form_url
+
+    apply = extract_apply_from_html(html, final_url)
+    apply_url = apply.apply_url
+    apply_kind = apply.apply_kind
+    href = await _apply_href_from_page(page)
+    if href and not is_aggregator_url(href):
+        apply_url = href
+        apply_kind = "ats" if is_ats_form_url(href) else "company"
+    elif href and (not apply_url or is_aggregator_url(apply_url)):
+        followed = await _follow_apply_href(page, href)
+        if followed and not is_aggregator_url(followed):
+            apply_url = followed
+            apply_kind = "ats" if is_ats_form_url(followed) else "company"
     listing = {
         "company": (company or "Unknown").strip(),
         "role": title.strip()[:160],
@@ -1236,6 +1245,8 @@ async def _extract_posting(page, cfg: Config, source: dict, url: str, delay_ms: 
         "location": (loc or "").strip(),
         "jd": (jd or "").strip(),
         "source": f"camoufox:{_source_name(source)}",
+        "apply_url": apply_url,
+        "apply_kind": apply_kind,
     }
     from pipeline.jobs import decorate_listing
 
@@ -1256,6 +1267,122 @@ def _company_from_host(url: str) -> str:
             if path and path[0]:
                 return path[0].replace("-", " ").title()
     return ""
+
+
+_APPLY_HREF_JS = """() => {
+  const unescapeUrl = (value) => String(value || "").replace(/\\\\u0026/g, "&").replace(/\\\\//g, "/");
+  const hostOf = (value) => {
+    try { return new URL(value).hostname.replace(/^www\\./, "").toLowerCase(); }
+    catch { return ""; }
+  };
+  const offsite = (value) => {
+    const host = hostOf(value);
+    return Boolean(host) && !/(^|\\.)linkedin\\.com$|(^|\\.)indeed\\./i.test(host);
+  };
+  const html = document.documentElement ? document.documentElement.innerHTML : "";
+  const keyRe = /"(?:companyApplyUrl|companyApplicationUrl|externalApplyUrl|applyStartUrl|applyConnectUrl|jobApplyUrl)"\\s*:\\s*"(https?:[^"]+)"/gi;
+  let match;
+  while ((match = keyRe.exec(html))) {
+    const href = unescapeUrl(match[1]);
+    if (offsite(href)) return href;
+  }
+  const voyager = html.match(/OffsiteApply"\\s*:\\s*\\{[\\s\\S]{0,1500}?"(?:companyApplyUrl|companyApplicationUrl|applyUrl)"\\s*:\\s*"(https?:[^"]+)"/i);
+  if (voyager && offsite(unescapeUrl(voyager[1]))) return unescapeUrl(voyager[1]);
+  const textOf = (el) =>
+    `${el.getAttribute("aria-label") || ""} ${el.textContent || ""}`.replace(/\\s+/g, " ").trim();
+  const isApply = (text) =>
+    /^(easy apply|apply now|apply on company website|apply)$/i.test(text) ||
+    /apply on company/i.test(text);
+  for (const a of document.querySelectorAll("a[href]")) {
+    const href = a.href || "";
+    if (!href || /^(javascript:|#)/i.test(href)) continue;
+    if (offsite(href) && (isApply(textOf(a)) || /apply/i.test(a.className || ""))) return href;
+  }
+  for (const a of document.querySelectorAll("a[href]")) {
+    const href = a.href || "";
+    if (!href || /^(javascript:|#)/i.test(href)) continue;
+    if (isApply(textOf(a))) return href;
+  }
+  const code = document.querySelector("code#applyUrl, code[id*='applyUrl' i]");
+  if (code) {
+    const raw = (code.innerHTML || code.textContent || "").replace(/<!--\\s*"?|\\s*"?-->/g, " ").trim();
+    const href = unescapeUrl(raw.split(/\\s+/)[0]);
+    if (href.startsWith("http")) return href;
+  }
+  return "";
+}"""
+
+
+async def _apply_href_from_page(page) -> str:
+    """Read the Apply link href. Never clicks it."""
+    try:
+        href = str(await page.evaluate(_APPLY_HREF_JS) or "").strip()
+    except Exception as exc:
+        _raise_if_cancelled(exc)
+        return ""
+    return href
+
+
+async def _follow_apply_href(page, url: str) -> str:
+    """HTTP-follow an apply href with the same cookies. Does not click Apply."""
+    raw = (url or "").strip()
+    if not raw.startswith("http"):
+        return ""
+    try:
+        response = await page.request.get(raw, max_redirects=12, timeout=15000)
+        final = (response.url or raw).strip()
+        return final
+    except Exception as exc:
+        _raise_if_cancelled(exc)
+        log.info("Apply href follow failed for %s: %s", url, exc)
+        return ""
+
+
+async def resolve_apply_in_browser(cfg: Config, url: str):
+    """Open a signed-in posting and read the company form URL. Never clicks Apply."""
+    from pipeline.apply_url import ApplyTarget, canonicalize_form_url, extract_apply_from_html, is_aggregator_url, is_ats_form_url
+
+    raw = (url or "").strip()
+    if not raw.startswith("http"):
+        return ApplyTarget("", "unknown", "")
+    try:
+        from camoufox.async_api import AsyncCamoufox
+    except ImportError:
+        return ApplyTarget("", "unknown", "")
+    delay_ms = int(cfg.get("hunt.browser.page_delay_ms", 1500) or 1500)
+    launch = _camoufox_launch(cfg)
+    try:
+        async with AsyncCamoufox(**launch) as session:
+            page = await session.new_page()
+            await page.goto(raw, wait_until="domcontentloaded", timeout=45000)
+            if await _pause_ms(max(400, delay_ms)):
+                return ApplyTarget("", "unknown", "")
+            if await _needs_login(page):
+                await _try_configured_login(page, cfg, delay_ms)
+                if await _needs_login(page):
+                    return ApplyTarget("", "unknown", "login")
+                await page.goto(raw, wait_until="domcontentloaded", timeout=45000)
+                if await _pause_ms(max(400, delay_ms)):
+                    return ApplyTarget("", "unknown", "")
+            html = await page.content()
+            final = page.url or raw
+            target = extract_apply_from_html(html, final)
+            href = await _apply_href_from_page(page)
+            if href and not is_aggregator_url(href):
+                kind = "ats" if is_ats_form_url(href) else "company"
+                return ApplyTarget(canonicalize_form_url(href), kind, "camoufox")
+            if href and (not target.apply_url or is_aggregator_url(target.apply_url)):
+                followed = await _follow_apply_href(page, href)
+                if followed and not is_aggregator_url(followed):
+                    kind = "ats" if is_ats_form_url(followed) else "company"
+                    return ApplyTarget(canonicalize_form_url(followed), kind, "camoufox")
+            if target.apply_url and not is_aggregator_url(target.apply_url):
+                return ApplyTarget(target.apply_url, target.apply_kind or "company", "camoufox")
+            return target
+    except Exception as exc:
+        _raise_if_cancelled(exc)
+        log.info("Browser apply resolve failed for %s: %s", raw, exc)
+        return ApplyTarget("", "unknown", "")
 
 
 async def _first_text(page, selectors: list[str]) -> str:

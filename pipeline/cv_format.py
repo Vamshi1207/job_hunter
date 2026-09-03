@@ -81,6 +81,31 @@ def bullet_max_lines(cfg: Config) -> int:
         return 2
 
 
+def bullet_counts_dynamic(cfg: Config) -> bool:
+    raw = cfg.get("cv_format.bullets.dynamic")
+    if isinstance(raw, bool):
+        return raw
+    if raw is None:
+        return False
+    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def bullet_count_min(cfg: Config) -> int:
+    raw = cfg.get("cv_format.bullets.min", 3)
+    try:
+        return max(1, int(raw))
+    except (TypeError, ValueError):
+        return 3
+
+
+def bullet_count_max(cfg: Config) -> int:
+    raw = cfg.get("cv_format.bullets.max", 8)
+    try:
+        return max(bullet_count_min(cfg), int(raw))
+    except (TypeError, ValueError):
+        return 8
+
+
 def page_size(cfg: Config) -> str:
     raw = _str(cfg, "page_size", "letter").lower()
     return "A4" if raw == "a4" else "Letter"

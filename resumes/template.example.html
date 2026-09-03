@@ -4,7 +4,8 @@
     cp resumes/template.example.html resumes/template.html
 
   Placeholders {{JOB1_*}}, {{JOB2_*}}, {{JOB3_*}} must match config.yaml
-  experience.jobs[].prefix and bullet counts. Company names in this HTML are
+  experience.jobs[].prefix. Pad each job <ul> up to cv_format.bullets.max (default 8);
+  unused {{PREFIX_Bn}} rows are stripped after tailoring. Company names in this HTML are
   static; the tailor fills titles and bullets. Tokens like {{FULL_NAME}} and
   {{CV_*}} come from config.yaml cv_format / user.
 -->
@@ -326,6 +327,7 @@
         <li><span class="point">{{JOB1_B5}}</span></li>
         <li><span class="point">{{JOB1_B6}}</span></li>
         <li><span class="point">{{JOB1_B7}}</span></li>
+        <li><span class="point">{{JOB1_B8}}</span></li>
     </ul>
     </div>
 
@@ -343,6 +345,10 @@
         <li><span class="point">{{JOB2_B2}}</span></li>
         <li><span class="point">{{JOB2_B3}}</span></li>
         <li><span class="point">{{JOB2_B4}}</span></li>
+        <li><span class="point">{{JOB2_B5}}</span></li>
+        <li><span class="point">{{JOB2_B6}}</span></li>
+        <li><span class="point">{{JOB2_B7}}</span></li>
+        <li><span class="point">{{JOB2_B8}}</span></li>
     </ul>
     </div>
 
@@ -362,6 +368,8 @@
         <li><span class="point">{{JOB3_B4}}</span></li>
         <li><span class="point">{{JOB3_B5}}</span></li>
         <li><span class="point">{{JOB3_B6}}</span></li>
+        <li><span class="point">{{JOB3_B7}}</span></li>
+        <li><span class="point">{{JOB3_B8}}</span></li>
     </ul>
     </div>
     <!--/cv-section:experience-->

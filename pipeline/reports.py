@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 from pathlib import Path
 
 from pipeline.config import Config
+
+log = logging.getLogger(__name__)
 
 TEXT_FILES = {
     "analysis.md": "analysis",
@@ -16,6 +19,45 @@ TEXT_FILES = {
     "why_i_fit.txt": "why_i_fit",
     "playbook.md": "playbook",
 }
+
+
+def _truthy(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    return str(value).strip().lower() in {"1", "true", "yes", "on", "applied"}
+
+
+def _applied_from_tracker(
+    cfg: Config, folder_name: str, company: str, role: str, applied_at: str
+) -> tuple[bool, str]:
+    path = cfg.tracker_path
+    if not path.exists():
+        return False, applied_at
+    try:
+        lines = path.read_text().splitlines()
+    except OSError:
+        return False, applied_at
+    company_key = (company or "").strip().lower()
+    role_key = (role or "").strip().lower()
+    for line in lines:
+        if not line.strip().startswith("|"):
+            continue
+        parts = [part.strip() for part in line.strip().strip("|").split("|")]
+        if len(parts) < 5:
+            continue
+        status = parts[4].lower()
+        if "draft" in status:
+            continue
+        if "submitted" not in status and "applied" not in status:
+            continue
+        folder_cell = Path(parts[5]).name if len(parts) > 5 else ""
+        if folder_name and folder_cell == folder_name:
+            return True, applied_at or (parts[0] if parts else "")
+        if company_key and role_key and parts[1].lower() == company_key and parts[2].lower() == role_key:
+            return True, applied_at or (parts[0] if parts else "")
+    return False, applied_at
 
 
 def parse_evaluation(changes_md: str) -> dict:
@@ -83,7 +125,11 @@ def list_packages(cfg: Config) -> list[dict]:
     for folder in sorted(root.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
         if not folder.is_dir() or folder.name.startswith(".") or folder.name.startswith("_"):
             continue
-        packages.append(package_summary(cfg, folder))
+        try:
+            packages.append(package_summary(cfg, folder))
+        except Exception:
+            log.exception("Skipping unreadable package %s", folder.name)
+            continue
     return packages
 
 
@@ -115,23 +161,31 @@ def package_summary(cfg: Config, folder: Path) -> dict:
             if named and not is_placeholder_company(named.group(1)):
                 company = named.group(1).strip()
     url = (job_meta.get("url") or "").strip()
+    apply_url = (job_meta.get("apply_url") or "").strip()
+    apply_kind = (job_meta.get("apply_kind") or "").strip()
     from pipeline.jobs import display_location, infer_work_mode
 
     location = (job_meta.get("location") or "").strip()
     work_mode = (job_meta.get("work_mode") or "").strip().lower() or infer_work_mode(location)
+    applied = _truthy(job_meta.get("applied"))
+    applied_at = str(job_meta.get("applied_at") or "").strip()
+    if not applied:
+        applied, applied_at = _applied_from_tracker(cfg, folder.name, company, role, applied_at)
     if not eval_data.get("score"):
         changes = next(iter(sorted(folder.glob("*_changes.md"))), None)
         if changes and changes.exists():
             parsed = parse_evaluation(changes.read_text())
             eval_data = {**parsed, **{k: v for k, v in eval_data.items() if v not in (None, "", [])}}
-    from pipeline.cv_export import ensure_package_exports
+    from pipeline.cv_export import list_package_exports
 
-    exports = ensure_package_exports(folder)
+    exports = list_package_exports(folder)
     return {
         "id": folder.name,
         "company": company,
         "role": role,
         "url": url,
+        "apply_url": apply_url,
+        "apply_kind": apply_kind,
         "location": display_location(location, work_mode) or location,
         "work_mode": work_mode,
         "source": job_meta.get("source") or "",
@@ -147,6 +201,8 @@ def package_summary(cfg: Config, folder: Path) -> dict:
         "score": eval_data.get("score"),
         "ats_score": eval_data.get("score"),
         "honesty": eval_data.get("honesty"),
+        "applied": applied,
+        "applied_at": applied_at,
         "critique": eval_data.get("critique") or "",
         "evaluation": {
             "score": eval_data.get("score"),
@@ -175,6 +231,22 @@ def package_detail(cfg: Config, folder_id: str) -> dict | None:
     summary["files"] = texts
     summary["changes"] = changes_text
     return summary
+
+
+def update_job_meta(folder: Path, **fields) -> dict:
+    """Merge keys into job.json (apply_url, etc.)."""
+    meta = _job_meta(folder)
+    changed = False
+    for key, value in fields.items():
+        if value is None:
+            continue
+        text = value.strip() if isinstance(value, str) else value
+        if meta.get(key) != text:
+            meta[key] = text
+            changed = True
+    if changed:
+        (folder / "job.json").write_text(json.dumps(meta, indent=2))
+    return meta
 
 
 def _job_meta(folder: Path) -> dict:

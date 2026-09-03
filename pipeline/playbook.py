@@ -42,6 +42,7 @@ def render_playbook(
         "Fill the form yourself. **Do not** click Submit until you have reviewed every field.",
         "",
         f"- JD URL: {job.get('url') or '(none)'}",
+        f"- Form URL: {job.get('apply_url') or job.get('url') or '(none)'}",
         f"- Output folder: `{output_dir}`",
         "",
         "| Field | Paste |",

@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Newsreader:opsz,wght@6..72,500;6..72,600&family=Figtree:wght@400;500;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/app.css">
+  <link rel="stylesheet" href="/static/app.css?v=board7">
 </head>
 <body>
   <header class="mast">
@@ -61,20 +61,50 @@
           <button type="button" id="hunt">Hunt from profile</button>
         </div>
       </div>
+      <div class="board-toolbar">
+        <div class="board-tabs" role="tablist" aria-label="Job lists">
+          <button type="button" class="board-tab active" id="tab-queue" role="tab" aria-selected="true" aria-controls="board" data-tab="queue">Queue <span class="tab-count" id="queue-count"></span></button>
+          <button type="button" class="board-tab" id="tab-applied" role="tab" aria-selected="false" aria-controls="board" data-tab="applied">Applied <span class="tab-count" id="applied-count"></span></button>
+        </div>
+        <label class="board-search">
+          <span class="visually-hidden">Search jobs</span>
+          <input type="search" id="board-search" placeholder="Search job, company, or location" autocomplete="off">
+        </label>
+      </div>
+      <details class="apply-helper-wrap" id="apply-helper-wrap">
+        <summary>Apply in your browser</summary>
+        <p class="field-note">Apply opens the company form, not the LinkedIn/Indeed posting, when that URL is known. Install the helper once so fields fill themselves. You still click Submit.</p>
+        <p class="field-note">Chrome: <code>chrome://extensions</code> → Developer mode → Load unpacked → <code id="helper-path">web/apply-helper</code></p>
+        <p class="field-note">Or install the <a id="userscript-link" href="/static/fill-helper.user.js">userscript</a> (Tampermonkey). Drag this <a id="fill-bookmarklet" href="#">Fill this form</a> bookmarklet onto the bookmarks bar as a fallback.</p>
+      </details>
       <div class="table-wrap">
         <table class="board" id="board">
+          <colgroup>
+            <col class="col-role">
+            <col class="col-company">
+            <col class="col-location">
+            <col class="col-mode">
+            <col class="col-ats">
+            <col class="col-status">
+            <col class="col-resume">
+            <col class="col-edit">
+            <col class="col-link">
+            <col class="col-apply">
+            <col class="col-delete">
+          </colgroup>
           <thead>
             <tr>
-              <th scope="col">Job name</th>
-              <th scope="col">Company</th>
-              <th scope="col">Location</th>
-              <th scope="col">Mode</th>
-              <th scope="col">ATS</th>
-              <th scope="col">Status</th>
-              <th scope="col">Resume</th>
-              <th scope="col">Edit</th>
-              <th scope="col">Job link</th>
-              <th scope="col"><span class="visually-hidden">Delete</span></th>
+              <th scope="col" class="col-role"><button type="button" class="th-sort" data-key="role">Job name</button></th>
+              <th scope="col" class="col-company"><button type="button" class="th-sort" data-key="company">Company</button></th>
+              <th scope="col" class="col-location"><button type="button" class="th-sort" data-key="location">Location</button></th>
+              <th scope="col" class="col-mode"><button type="button" class="th-sort" data-key="mode">Mode</button></th>
+              <th scope="col" class="col-ats"><button type="button" class="th-sort" data-key="ats">ATS</button></th>
+              <th scope="col" class="col-status"><button type="button" class="th-sort" data-key="status">Status</button></th>
+              <th scope="col" class="col-resume"><button type="button" class="th-sort" data-key="resume">Resume</button></th>
+              <th scope="col" class="col-edit"><button type="button" class="th-sort" data-key="edit">Edit</button></th>
+              <th scope="col" class="col-link"><button type="button" class="th-sort" data-key="link">Job link</button></th>
+              <th scope="col" class="col-apply"><button type="button" class="th-sort" data-key="apply">Apply</button></th>
+              <th scope="col" class="col-delete"><button type="button" class="th-sort" data-key="del">Delete</button></th>
             </tr>
           </thead>
           <tbody id="package-list"></tbody>
@@ -105,6 +135,6 @@
       </article>
     </section>
   </main>
-  <script src="/static/app.js"></script>
+  <script src="/static/app.js?v=board7"></script>
 </body>
 </html>

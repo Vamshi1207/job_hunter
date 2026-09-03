@@ -100,7 +100,7 @@ Write to `applications/<company>-<role>-<date>/analysis.md`:
 2. **Edit ONLY placeholder content** (do not restructure):
    - **Tagline**: adjust to match the role.
    - **About / summary**: rewrite using `experience-bank/about-variants.md` matching the role type. Tweak the final sentence to name the role / company.
-   - **Job bullets**: for each employer, swap in bullets from `experience-bank/<employer>.md` that match the JD. Keep the template's bullet counts. Fill leftover slots from `cv_master.md`. Never invent.
+   - **Job bullets**: for each employer, swap in bullets from `experience-bank/<employer>.md` that match the JD. When `cv_format.bullets.dynamic` is true, give more bullets to the best-matching employer (within `min`–`max`) and leave unused slots empty. When it is false, keep the configured `bullets` count. Fill leftover slots from `cv_master.md`. Never invent.
    - **Skills section**: reorder so technologies most relevant to the JD appear first. Do not add skills absent from the master CV.
 3. Ask the user to render with the pipeline, or leave HTML for them to export.
 4. **Verify page count** against `config.yaml` `cv_format.pages`. If an extra page appears, drop the weakest bullet — do not shrink fonts.

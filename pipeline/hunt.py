@@ -14,7 +14,9 @@ from pipeline.search import hunt_limit, search_jobs_async
 log = logging.getLogger(__name__)
 
 OnEvent = Callable[[dict], None]
-_ROW_FIELDS = frozenset({"package_id", "detail", "location", "work_mode", "ats_score"})
+_ROW_FIELDS = frozenset(
+    {"package_id", "detail", "location", "work_mode", "ats_score", "apply_url", "apply_kind"}
+)
 
 
 def row_key(listing: dict) -> tuple[str, str, str]:
@@ -58,6 +60,8 @@ def job_row_event(listing: dict, *, status: str, event_type: str, **extra: Any) 
         "location": extra.get("location") or placed.get("location_display") or placed.get("location") or "",
         "work_mode": extra.get("work_mode") or placed.get("work_mode") or "",
         "ats_score": extra["ats_score"] if "ats_score" in extra else listing.get("ats_score"),
+        "apply_url": extra.get("apply_url") or listing.get("apply_url") or "",
+        "apply_kind": extra.get("apply_kind") or listing.get("apply_kind") or "",
     }
     payload.update(extra)
     if "line" not in payload:
@@ -150,6 +154,8 @@ class JobProgress:
         fields = {k: v for k, v in extra.items() if k in _ROW_FIELDS}
         fields.setdefault("location", placed.get("location_display") or placed.get("location") or "")
         fields.setdefault("work_mode", placed.get("work_mode") or "")
+        fields.setdefault("apply_url", listing.get("apply_url") or "")
+        fields.setdefault("apply_kind", listing.get("apply_kind") or "")
         if status != "working":
             fields["detail"] = extra.get("detail") or ""
         self._upsert(listing, status, **fields)
@@ -204,7 +210,18 @@ class JobProgress:
             if key in seen:
                 continue
             seen.add(key)
-            queued.append({"company": key[0], "role": key[1], "url": key[2], "status": "queued"})
+            queued.append(
+                {
+                    "company": key[0],
+                    "role": key[1],
+                    "url": key[2],
+                    "status": "queued",
+                    "apply_url": listing.get("apply_url") or "",
+                    "apply_kind": listing.get("apply_kind") or "",
+                    "location": listing.get("location") or "",
+                    "work_mode": listing.get("work_mode") or "",
+                }
+            )
         self.rows = queued
         count = len(self.rows)
         self._emit(
@@ -289,6 +306,8 @@ def _job_from_listing(listing: dict) -> dict:
         "jd": listing["jd"],
         "channel": "saved" if listing.get("saved") else "hunt",
         "source": listing.get("source") or ("saved" if listing.get("saved") else "hunt"),
+        "apply_url": listing.get("apply_url") or "",
+        "apply_kind": listing.get("apply_kind") or "",
     }
 
 

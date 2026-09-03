@@ -125,6 +125,9 @@ cv_format:
 
   bullets:
     max_lines: 2             # tailor prompt: keep each bullet this short
+    dynamic: false           # true = per-JD counts within min/max; unused {{PREFIX_Bn}} rows are dropped
+    min: 3                   # used when dynamic is true (or as default for experience.jobs[].bullets_min)
+    max: 8                   # HTML is padded up to this; leftover placeholders are stripped
 
   color:
     ink: "#1C1917"
@@ -146,6 +149,8 @@ cv_format:
 # ---------- Experience (template job slots) ----------
 # Prefixes must match placeholders in resumes/template.html ({{JOB1_TITLE}}, …).
 # Copy those employer names into your HTML template. Keep real employers only in config.yaml.
+# bullets: used when cv_format.bullets.dynamic is false (exact count). When dynamic is true it is
+# optional and only raises the per-job max. Override with bullets_min / bullets_max per job.
 experience:
   jobs:
     - prefix: JOB1
@@ -192,6 +197,10 @@ pipeline:
 hunt:
   max_jobs: 0                # 0 = tailor every match; >0 is a safety ceiling, not a ranking
   api_sources: true           # The Muse + Remotive public APIs (no extra keys). Fit gates still apply.
+  # Search the country, not the city. user.city (e.g. Montreal) only boosts ranking.
+  search_locations:
+    - Canada
+    - United States          # kept only when the posting is open to Canada applicants
   greenhouse_boards: []
   # Example: the Greenhouse board token from boards.greenhouse.io/<token>
   ats_boards: []
@@ -292,7 +301,7 @@ hunt:
     - id: google_ats
       enabled: true
       kind: google_ats
-      # Camoufox searches Google: query + site:ATS + Montreal, Canada
+      # Camoufox searches Google: query + site:ATS + Canada
       url: "https://www.google.com/search?q={dork}&hl=en&num=20"
       max_queries: 2          # how many hunt.browser.queries / roles to dork
       group_size: 3           # OR-clump site: operators to keep Google searches down

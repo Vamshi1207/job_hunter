@@ -8,7 +8,7 @@ import re
 from typing import Any
 
 from pipeline.config import Config
-from pipeline.search import html_to_text, hunt_queries
+from pipeline.search import html_to_text, hunt_location, hunt_queries
 
 log = logging.getLogger(__name__)
 
@@ -77,7 +77,9 @@ def listings_from_mcp_payload(payload: Any, source: str = "mcp:indeed") -> list[
         if not isinstance(item, dict):
             continue
         role = _first_str(item, DETAIL_KEYS)
-        url = _first_str(item, URL_KEYS)
+        posting = _first_str(item, ("url", "job_url", "link", "view_url", "absolute_url"))
+        apply_url = _first_str(item, ("apply_url", "application_url"))
+        url = posting or apply_url
         company = _first_str(item, COMPANY_KEYS) or "Unknown"
         if not role:
             continue
@@ -94,6 +96,7 @@ def listings_from_mcp_payload(payload: Any, source: str = "mcp:indeed") -> list[
                 "location": _first_str(item, LOC_KEYS),
                 "jd": html_to_text(jd) if jd else "",
                 "source": source,
+                "apply_url": apply_url if apply_url and apply_url != url else "",
             }
         )
     return listings
@@ -193,10 +196,10 @@ async def harvest_mcp_listings(cfg: Config) -> list[dict]:
         log.info("Indeed MCP skipped — install the mcp package, or connect Indeed in Cursor Settings → MCP.")
         return []
 
+        return []
+
     queries = hunt_queries(cfg)
-    city = (cfg.get("user.city") or "").strip()
-    country = (cfg.get("user.country") or "").strip()
-    location = f"{city}, {country}".strip(", ") or country or "Canada"
+    location = hunt_location(cfg)
     listings: list[dict] = []
     try:
         import asyncio

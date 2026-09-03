@@ -11,7 +11,15 @@ from pathlib import Path
 
 from pipeline.bank import load_experience_bank, load_optional
 from pipeline.config import Config, load_config
-from pipeline.cv_format import apply_cv_format, page_height_px, page_size, tailor_layout_instructions
+from pipeline.cv_format import (
+    apply_cv_format,
+    bullet_count_max,
+    bullet_count_min,
+    bullet_counts_dynamic,
+    page_height_px,
+    page_size,
+    tailor_layout_instructions,
+)
 from pipeline.llm import complete_prompt
 
 log = logging.getLogger(__name__)
@@ -38,30 +46,136 @@ DEFAULT_JOB_BLOCKS = [
 ]
 
 
+def _positive_int(value, default: int) -> int:
+    try:
+        return max(1, int(value))
+    except (TypeError, ValueError):
+        return default
+
+
 def job_blocks(cfg: Config | None = None) -> list[dict]:
     """Employer blocks come from config.yaml `experience.jobs` so personal employers stay local."""
     cfg = cfg or load_config()
+    dynamic = bullet_counts_dynamic(cfg)
+    floor = bullet_count_min(cfg)
+    ceiling = bullet_count_max(cfg)
     raw = cfg.get("experience.jobs")
     if isinstance(raw, list):
         out = []
         for item in raw:
             if not isinstance(item, dict) or not item.get("prefix"):
                 continue
-            try:
-                bullets = max(1, int(item.get("bullets") or 4))
-            except (TypeError, ValueError):
-                bullets = 4
+            configured = None
+            if item.get("bullets") not in (None, ""):
+                configured = _positive_int(item.get("bullets"), 4)
+            bullets_min = _positive_int(item.get("bullets_min"), floor)
+            if item.get("bullets_max") not in (None, ""):
+                bullets_max = _positive_int(item.get("bullets_max"), ceiling)
+            elif dynamic:
+                bullets_max = max(ceiling, configured or ceiling)
+            else:
+                bullets_max = configured or 4
+            if not dynamic:
+                bullets_min = bullets_max
+            bullets_min = min(bullets_min, bullets_max)
             out.append(
                 {
                     "prefix": str(item["prefix"]).upper().replace(" ", ""),
                     "employer": str(item.get("employer") or item["prefix"]),
                     "default_title": str(item.get("default_title") or "Software Engineer"),
-                    "bullets": bullets,
+                    "bullets": bullets_max,
+                    "bullets_min": bullets_min,
+                    "bullets_max": bullets_max,
+                    "dynamic": dynamic,
                 }
             )
         if out:
             return out
-    return [dict(block) for block in DEFAULT_JOB_BLOCKS]
+    out = []
+    for block in DEFAULT_JOB_BLOCKS:
+        configured = _positive_int(block.get("bullets"), 4)
+        bullets_max = max(ceiling, configured) if dynamic else configured
+        bullets_min = min(floor, bullets_max) if dynamic else bullets_max
+        out.append(
+            {
+                **block,
+                "bullets": bullets_max,
+                "bullets_min": bullets_min,
+                "bullets_max": bullets_max,
+                "dynamic": dynamic,
+            }
+        )
+    return out
+
+
+def _soft_bullet_total(cfg: Config, jobs: list[dict]) -> tuple[int, int]:
+    pages = cfg.cv_pages
+    floor = sum(int(job["bullets_min"]) for job in jobs)
+    ceiling = sum(int(job["bullets_max"]) for job in jobs)
+    target_lo = min(ceiling, max(floor, pages * 7))
+    target_hi = min(ceiling, max(target_lo, pages * 9))
+    return target_lo, target_hi
+
+
+def _bullet_count_instruction(cfg: Config) -> str:
+    jobs = job_blocks(cfg)
+    if not any(job.get("dynamic") for job in jobs):
+        counts = ", ".join(f"{job['employer']} {job['bullets']}" for job in jobs)
+        return f"Keep the exact bullet counts: {counts}."
+    ranges = ", ".join(
+        f"{job['employer']} {job['bullets_min']}–{job['bullets_max']}" for job in jobs
+    )
+    lo, hi = _soft_bullet_total(cfg, jobs)
+    pages = cfg.cv_pages
+    page_word = "page" if pages == 1 else "pages"
+    return (
+        "Bullet counts are dynamic for this JD. For each employer fill consecutive B1…Bk "
+        "(k within the range below) and leave later Bn tags empty. "
+        "Give more bullets to the employer whose work best matches the JD; keep weaker matches closer to the minimum. "
+        "Do not invent bullets to hit the maximum. "
+        f"Across all jobs aim for about {lo}–{hi} bullets total so the CV stays {pages} {page_word}. "
+        f"Per employer: {ranges}."
+    )
+
+
+_BULLET_LI_RE = re.compile(
+    r'(?P<full>(?P<indent>[ \t]*)<li>\s*(?:<span class="point">)?\{\{(?P<prefix>[A-Z][A-Z0-9]*)_B(?P<n>\d+)\}\}(?:</span>)?\s*</li>)',
+    re.IGNORECASE,
+)
+_UNUSED_BULLET_LI_RE = re.compile(
+    r'\n?[ \t]*<li>\s*(?:<span class="point">)?\{\{[A-Z][A-Z0-9]*_B\d+\}\}(?:</span>)?\s*</li>',
+    re.IGNORECASE,
+)
+_JOB_BULLET_TAG_RE = re.compile(r"^[A-Z][A-Z0-9]*_B\d+$")
+
+
+def ensure_bullet_slots(html: str, jobs: list[dict] | None = None) -> str:
+    """Pad each job <ul> so placeholders exist up to that job's max bullet count."""
+    for job in jobs or job_blocks():
+        prefix = job["prefix"]
+        needed = int(job["bullets"])
+        matches = [m for m in _BULLET_LI_RE.finditer(html) if m.group("prefix").upper() == prefix]
+        if not matches:
+            continue
+        highest = max(int(m.group("n")) for m in matches)
+        if highest >= needed:
+            continue
+        last = matches[-1]
+        extras = [
+            f'{last.group("indent")}<li><span class="point">{{{{{prefix}_B{i}}}}}</span></li>'
+            for i in range(highest + 1, needed + 1)
+        ]
+        html = html[: last.end()] + "\n" + "\n".join(extras) + html[last.end() :]
+    return html
+
+
+def strip_unused_bullet_placeholders(html: str) -> str:
+    """Drop leftover {{PREFIX_Bn}} list items after a dynamic tailor run."""
+    return _UNUSED_BULLET_LI_RE.sub("", html)
+
+
+def _is_job_bullet_tag(tag: str) -> bool:
+    return bool(_JOB_BULLET_TAG_RE.match(tag))
 
 
 SKILL_BLOCKS = [
@@ -104,7 +218,7 @@ def _tag_schema(cfg: Config | None = None) -> str:
         )
         for i in range(1, job["bullets"] + 1):
             lines.append(f"<R_{prefix}_B{i}>why this bullet / which bank variant</R_{prefix}_B{i}>")
-            lines.append(f"<{prefix}_B{i}>bullet text</{prefix}_B{i}>")
+            lines.append(f"<{prefix}_B{i}>bullet text, or empty if unused</{prefix}_B{i}>")
         lines.append("")
     for name, label in SKILL_BLOCKS:
         lines.append(f"<R_{name}>why this order</R_{name}>")
@@ -186,8 +300,8 @@ LinkedIn DM max words: {dm_words}
 
 ### INSTRUCTIONS
 {tailor_layout_instructions(cfg)}
-- Classify the JD into a role type, then SELECT bullets from the experience bank whose target matches. Keep the exact bullet counts: {", ".join(f"{j['employer']} {j['bullets']}" for j in job_blocks(cfg))}.
-- If the bank has fewer bullets than required, fill the rest from the master CV. Never pad with invented work.
+- Classify the JD into a role type, then SELECT bullets from the experience bank whose target matches. {_bullet_count_instruction(cfg)}
+- If the bank has fewer bullets than needed, fill the rest from the master CV. Never pad with invented work.
 - You MUST NOT invent technologies, domains, employers, job titles, metrics, or responsibilities.
 - Text changes only. Do not add/remove jobs, projects, education, or employers.
 - Inject JD keywords only where they describe work the candidate actually did.
@@ -216,7 +330,7 @@ def generate_tailored_materials(company: str, role: str, jd_text: str, feedback_
         return ""
 
 
-def parse_tagged_output(output: str) -> dict:
+def parse_tagged_output(output: str, cfg: Config | None = None) -> dict:
     if "<TITLE>" in output:
         # Keep reasoning that sits immediately above the last TITLE block.
         last = output.rfind("<R_TITLE>")
@@ -226,7 +340,7 @@ def parse_tagged_output(output: str) -> dict:
             output = "<TITLE>" + output.split("<TITLE>")[-1]
 
     result = {}
-    for tag in all_tags():
+    for tag in all_tags(cfg):
         matches = re.findall(rf"<{tag}>(.*?)</{tag}>", output, re.DOTALL)
         result[tag] = matches[-1].strip() if matches else ""
         r_matches = re.findall(rf"<R_{tag}>(.*?)</R_{tag}>", output, re.DOTALL)
@@ -383,6 +497,7 @@ def apply_changes_to_html(parsed: dict, output_path: Path, cfg: Config | None = 
     cfg = cfg or load_config()
     html_content = cfg.html_template_path.read_text()
     html_content = apply_cv_format(html_content, cfg)
+    html_content = ensure_bullet_slots(html_content, job_blocks(cfg))
     html_content = html_content.replace("{{FULL_NAME}}", escape_html(cfg.full_name))
     html_content = html_content.replace("{{CONTACT_LINE}}", contact_line_html(cfg))
 
@@ -391,12 +506,14 @@ def apply_changes_to_html(parsed: dict, output_path: Path, cfg: Config | None = 
     for tag in resume_tags(cfg):
         new_text = (parsed.get(tag) or "").strip()
         if not new_text:
-            log.warning("No content for tag <%s> — leaving placeholder", tag)
+            if not _is_job_bullet_tag(tag):
+                log.warning("No content for tag <%s> — leaving placeholder", tag)
             continue
         reasoning = parsed.get(f"R_{tag}") or "No specific reasoning provided."
         changes.append({"tag": tag, "new": new_text, "reasoning": reasoning})
         html_content = html_content.replace(f"{{{{{tag}}}}}", escape_html(new_text))
 
+    html_content = strip_unused_bullet_placeholders(html_content)
     output_path.write_text(html_content)
     log.info("Saved tailored HTML: %s", output_path)
     return changes
@@ -567,6 +684,8 @@ async def save_materials(
         "location": (job or {}).get("location") or "",
         "work_mode": (job or {}).get("work_mode") or "",
         "source": (job or {}).get("source") or (job or {}).get("channel") or "",
+        "apply_url": (job or {}).get("apply_url") or "",
+        "apply_kind": (job or {}).get("apply_kind") or "",
     }
     (output_dir / "job.json").write_text(json.dumps(meta, indent=2))
 

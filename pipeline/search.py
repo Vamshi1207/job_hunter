@@ -54,6 +54,202 @@ def target_markets(cfg: Config) -> list[str]:
     return [str(item).strip() for item in raw if str(item).strip()]
 
 
+def preferred_city(cfg: Config) -> str:
+    return (cfg.get("hunt.preferred_city") or cfg.get("user.city") or "").strip()
+
+
+def _unique_places(items) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        text = str(item or "").strip()
+        key = text.lower()
+        if not text or key in seen:
+            continue
+        seen.add(key)
+        out.append(text)
+    return out
+
+
+def _place_is_us(name: str) -> bool:
+    return name.lower() in {"us", "usa", "u.s.", "u.s.a.", "united states", "united states of america"}
+
+
+def _place_is_canada(name: str) -> bool:
+    return name.lower() in {"ca", "can", "canada"}
+
+
+def hunt_locations(cfg: Config) -> list[str]:
+    """Board search places. Country/market, not city — preferred city is a ranking boost only."""
+    raw = cfg.get("hunt.search_locations")
+    if isinstance(raw, str) and raw.strip():
+        raw = [raw]
+    if isinstance(raw, list) and any(str(item).strip() for item in raw):
+        return _unique_places(str(item).strip() for item in raw if str(item).strip())
+    places = list(target_markets(cfg))
+    country = (cfg.get("user.country") or "").strip()
+    if country:
+        places.append(country)
+    allow_us = cfg.get("hunt.search_us_if_canada_eligible")
+    if allow_us is None:
+        allow_us = True
+    if allow_us and any(_place_is_canada(item) for item in places) and not any(
+        _place_is_us(item) for item in places
+    ):
+        places.append("United States")
+    return _unique_places(places) or ["Canada"]
+
+
+def hunt_location(cfg: Config) -> str:
+    locs = hunt_locations(cfg)
+    return locs[0] if locs else (cfg.get("user.country") or "Canada")
+
+
+_CANADA_PLACES = {
+    "canada",
+    "canadian",
+    "canadians",
+    "ontario",
+    "quebec",
+    "québec",
+    "british columbia",
+    "alberta",
+    "manitoba",
+    "saskatchewan",
+    "nova scotia",
+    "new brunswick",
+    "newfoundland",
+    "prince edward",
+    "yukon",
+    "nunavut",
+    "northwest territories",
+    "montreal",
+    "montréal",
+    "toronto",
+    "vancouver",
+    "calgary",
+    "ottawa",
+    "edmonton",
+    "winnipeg",
+    "halifax",
+    "victoria",
+    "waterloo",
+    "kitchener",
+    "mississauga",
+    "brampton",
+    "markham",
+    "gatineau",
+    "hamilton",
+    "saskatoon",
+    "regina",
+    "kelowna",
+    "burnaby",
+    "surrey",
+    "windsor",
+    "london, on",
+    "québec city",
+    "quebec city",
+}
+
+_CANADA_REGION = re.compile(
+    r",\s*(?:on|qc|bc|ab|mb|sk|ns|nb|nl|pe|yt|nt|nu)\b",
+    re.I,
+)
+
+_US_PLACES = {
+    "united states",
+    "united states of america",
+    "usa",
+    "u.s.",
+    "u.s.a.",
+    "america",
+    "new york",
+    "san francisco",
+    "bay area",
+    "seattle",
+    "austin",
+    "boston",
+    "chicago",
+    "denver",
+    "los angeles",
+    "atlanta",
+    "miami",
+    "dallas",
+    "portland",
+    "washington dc",
+    "washington, dc",
+    "nyc",
+    "sf",
+}
+
+_US_STATE = re.compile(
+    r",\s*(?:AL|AK|AZ|AR|CO|CT|DE|FL|GA|HI|IA|ID|IL|KS|KY|LA|MA|MD|ME|"
+    r"MI|MN|MO|MS|MT|NC|ND|NE|NH|NJ|NM|NV|NY|OH|OK|OR|PA|RI|SC|SD|TN|TX|UT|VA|"
+    r"VT|WA|WI|WV|DC)\b",
+)
+
+_OTHER_COUNTRY = re.compile(
+    r"\b(united kingdom|u\.k\.|england|scotland|ireland|germany|france|spain|"
+    r"netherlands|australia|india|singapore|japan|mexico|brazil|sweden|norway|"
+    r"denmark|poland|italy|switzerland|israel|uae|dubai|philippines)\b",
+    re.I,
+)
+
+_US_ONLY = re.compile(
+    r"\b(?:must be|candidates must|only|hire only).{0,48}\b(?:united states|u\.s\.a?|usa)\b|"
+    r"\b(?:united states|u\.s\.a?|usa)\s+(?:only|based)\b|"
+    r"\b(?:us|u\.s\.) work authori[sz]ation (?:required|needed)\b|"
+    r"\bus citizenship required\b|"
+    r"\bno (?:remote )?canada\b",
+    re.I,
+)
+
+_CANADA_ELIGIBLE = re.compile(
+    r"\b(?:canada|canadian|canadians|canada applicants?|open to canada|"
+    r"work from canada|eligible in canada|canada or (?:the )?u\.?s|"
+    r"u\.?s\.? or canada|north america(?:n)?)\b",
+    re.I,
+)
+
+
+def _blob_has_canada(text: str) -> bool:
+    low = (text or "").lower()
+    if "canada" in low or "canadian" in low or "montréal" in low:
+        return True
+    if _CANADA_REGION.search(text or ""):
+        return True
+    return any(place in low for place in _CANADA_PLACES)
+
+
+def _blob_has_us(text: str) -> bool:
+    low = (text or "").lower()
+    if "united states" in low or "u.s.a" in low or re.search(r"\b(usa|u\.s\.)\b", low):
+        return True
+    if _US_STATE.search(text or ""):
+        return True
+    return any(place in low for place in _US_PLACES)
+
+
+def listing_in_scope(listing: dict, cfg: Config | None = None) -> bool:
+    """Canada anywhere, or US only when the posting is open to Canada applicants."""
+    loc = listing.get("location") or ""
+    title = listing.get("role") or ""
+    jd = listing.get("jd") or ""
+    blob = f"{loc}\n{title}\n{jd}"
+    if _blob_has_canada(blob):
+        return True
+    if _US_ONLY.search(blob):
+        return False
+    if _blob_has_us(loc) or _blob_has_us(title):
+        return bool(_CANADA_ELIGIBLE.search(blob))
+    if _OTHER_COUNTRY.search(loc) and not _blob_has_canada(blob):
+        return False
+    if jd and _blob_has_us(jd) and not _CANADA_ELIGIBLE.search(blob) and not _blob_has_canada(blob):
+        if re.search(r"\bremote\b|\banywhere\b", (loc or "").lower()):
+            return False
+    return True
+
+
 def hunt_limit(cfg: Config, override: int | None = None) -> int | None:
     """Safety ceiling for how many matches to tailor. None/0 = every match."""
     if override is not None:
@@ -248,6 +444,8 @@ def score_listing(listing: dict, cfg: Config) -> int:
         return 0
     if company_is_excluded(listing, cfg):
         return 0
+    if not listing_in_scope(listing, cfg):
+        return 0
     if listing.get("saved"):
         if not (listing.get("role") or "").strip():
             return 0
@@ -324,7 +522,7 @@ def score_listing(listing: dict, cfg: Config) -> int:
         return 0
 
     score = title_score or (2 if ic_hint else 0)
-    city = (cfg.get("user.city") or "").lower()
+    city = preferred_city(cfg).lower()
     country = (cfg.get("user.country") or "").lower()
     if city and city in loc:
         score += 3
@@ -370,14 +568,7 @@ def fetch_json(url: str, timeout: int = 20) -> dict | list | None:
 def search_muse(cfg: Config) -> list[dict]:
     listings = []
     categories = ["Software Engineering", "Data and Analytics"]
-    locations: list[str] = []
-    city = cfg.get("user.city") or ""
-    country = cfg.get("user.country") or ""
-    if city and country:
-        locations.append(f"{city}, {country}")
-    locations.extend(target_markets(cfg) or ([country] if country else []))
-    if not locations:
-        locations = ["United States"]
+    locations = hunt_locations(cfg)
     seen: set[tuple[str, str]] = set()
     for loc in locations[:3]:
         for category in categories:

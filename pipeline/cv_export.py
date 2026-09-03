@@ -48,15 +48,24 @@ def write_editable_exports(html_path: Path, pdf_path: Path | None = None) -> dic
     return written
 
 
-def ensure_package_exports(folder: Path) -> dict[str, str | None]:
-    """Create missing Word/Pages files for an application folder. Safe to call on list."""
+def list_package_exports(folder: Path) -> dict[str, str | None]:
+    """Names of resume files already on disk. Does not create Word/Pages."""
     folder = Path(folder)
     html = next(iter(sorted(folder.glob("*_CV.html"))), None)
-    names = {
+    docx = next(iter(sorted(folder.glob("*_CV.docx"))), None)
+    pages = next(iter(sorted(folder.glob("*_CV.pages"))), None)
+    return {
         "html_name": html.name if html else None,
-        "docx_name": None,
-        "pages_name": None,
+        "docx_name": docx.name if docx else None,
+        "pages_name": pages.name if pages and is_native_pages(pages) else None,
     }
+
+
+def ensure_package_exports(folder: Path) -> dict[str, str | None]:
+    """Create missing Word/Pages files for an application folder. Not for listing."""
+    folder = Path(folder)
+    html = next(iter(sorted(folder.glob("*_CV.html"))), None)
+    names = list_package_exports(folder)
     docx = html.with_suffix(".docx") if html else next(iter(sorted(folder.glob("*_CV.docx"))), None)
     pages = Path(str(html.with_suffix("")) + ".pages") if html else next(iter(sorted(folder.glob("*_CV.pages"))), None)
     if is_fake_pages(pages):
@@ -74,11 +83,7 @@ def ensure_package_exports(folder: Path) -> dict[str, str | None]:
             html_to_pages(html, Path(pages), docx_path=Path(docx))
         except Exception as exc:
             log.warning("Pages export failed for %s: %s", html.name, exc)
-    if docx and Path(docx).is_file():
-        names["docx_name"] = Path(docx).name
-    if is_native_pages(pages):
-        names["pages_name"] = Path(pages).name
-    return names
+    return list_package_exports(folder)
 
 
 def html_to_docx(html_path: Path, docx_path: Path) -> None:

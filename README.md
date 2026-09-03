@@ -54,7 +54,7 @@ Then edit the copies. Put your NVIDIA (and optional Gemini) keys in `.env`. Mini
 | You create / edit (gitignored) | Copy from (tracked) | Required? | What to configure |
 |---|---|---|---|
 | `config.yaml` | `config.example.yaml` | **Yes** | Identity, visa, CV layout, hunt filters, LinkedIn login. See [config.yaml keys](#configyaml-what-to-set) below. |
-| `cv_master.md` | `cv_master.example.md` | **Yes** | Canonical resume. The tailor may rephrase this; it must not invent jobs or metrics. Keep employer names and bullet counts aligned with `experience.jobs` and the HTML template. |
+| `cv_master.md` | `cv_master.example.md` | **Yes** | Canonical resume. The tailor may rephrase this; it must not invent jobs or metrics. Keep employer names aligned with `experience.jobs` and the HTML template. |
 | `resumes/template.html` | `resumes/template.example.html` | **Yes** | HTML layout and `{{JOB1_*}}` placeholders. Company names in the HTML are static; titles/bullets are filled per job. |
 | `jobs.yaml` | `jobs.example.yaml` | For CLI | Queue of postings. The desk appends here when you tailor. Each job needs `company`, `role`, and `jd` (or a public ATS `url`). |
 | `memory/project.md` | `memory/project.template.md` | Recommended | Profile narrative, visa wording, positioning. Loaded into the tailor prompt. Keep in sync with `config.yaml` `user` / `visa` / `career`. |
@@ -88,7 +88,9 @@ Open `config.example.yaml` for every key and comment. Below is what people actua
 |---|---|---|
 | `career.stage` | Tone | `junior` \| `mid` \| `senior` \| `career-changer` \| `academic`. |
 | `career.years_experience` | Hunt fit gate | Skip JDs that require more than this plus `hunt.years_buffer` (default 2). |
-| `career.target_markets` | Hunt location | e.g. `Canada`. |
+| `career.target_markets` | Hunt location | Country/market to search, e.g. `Canada`. City is not pinned. |
+| `hunt.search_locations` | Board search | Default: markets + United States. US jobs are kept only if open to Canada applicants. |
+| `hunt.preferred_city` / `user.city` | Ranking | Preferred city (Montreal) ranks higher; it is not a search filter. |
 | `career.target_roles` | Hunt queries (fallback) + title boost | Used in search keywords if `hunt.browser.queries` is empty. Titles do not have to match exactly; the JD stack decides keep/drop. |
 | `hunt.max_jobs` | Desk “Hunt from profile” | `0` = tailor every match. A positive number is a safety ceiling, not a “best N” rank. |
 | `hunt.exclude_levels` | Title veto | e.g. intern, junior, principal. `staff` still skips Staff Engineer; “Member of Technical Staff” / MTS is kept. |
@@ -113,9 +115,11 @@ Open `config.example.yaml` for every key and comment. Below is what people actua
 | `cv_format.header_align` / `body_align` | Layout | `left`/`center` and `left`/`justify`. |
 | `cv_format.keep_together` | Pagination | `skills`, `education` must not split. |
 | `cv_format.section_order` | Body order | `summary`, `experience`, `skills`, `education`, `projects`. |
-| `cv_format.bullets.max_lines` | Tailor prompt | Keep bullets short. |
+| `cv_format.bullets.max_lines` | Tailor prompt | Keep each bullet this short. |
+| `cv_format.bullets.dynamic` | Tailor + HTML | `true` = per-JD counts within `min`/`max`. Stronger-matching employers get more bullets; unused `{{PREFIX_Bn}}` rows are dropped. |
+| `cv_format.bullets.min` / `max` | Tailor + HTML | Range when `dynamic` is true. HTML is padded up to `max`. |
 | `cv_format.color` / `type` | HTML CSS tokens | Fonts and ink. |
-| `experience.jobs` | HTML slots | `prefix` must match `{{JOB1_TITLE}}` etc. in `resumes/template.html`. `bullets` is how many lines the tailor fills. `employer` is the real company name. |
+| `experience.jobs` | HTML slots | `prefix` must match `{{JOB1_TITLE}}` etc. in `resumes/template.html`. When `dynamic` is false, `bullets` is the exact count filled. When true, `bullets` is optional (raises the max if higher); use `bullets_min` / `bullets_max` to override per job. `employer` is the real company name. |
 
 If you add a fourth job, add a `JOB4` block in **both** `config.yaml` and `resumes/template.html`.
 
@@ -146,7 +150,7 @@ Open [http://127.0.0.1:8000](http://127.0.0.1:8000).
 1. **Add postings by URL** is at the top of the desk. Paste one or more job links (one per line). Paste the **job description** to tailor from that text (used with a single URL).
 2. Click **Hunt from profile**. Camoufox runs in the container. Each posting is tailored as soon as it matches; search keeps adding more. **Stop** cancels search and skips jobs not yet started. LinkedIn may need a one-time sign-in in that session (cookies live in `.camoufox-profile/`). Apply/Submit is never clicked.
 3. Status on each row is the current step (searching, Writing CV, Scoring ATS, Building PDF, Ready, Stopped, …), not a generic “working”. Already tailored **job URLs** are skipped. Two postings at the same company with the same title but different URLs are both tailored. If LinkedIn asks for sign-in or extra verification, the **Camoufox** panel opens — click and type there. Hunt waits until you finish (default 5 minutes).
-4. The table lists job name, company, status, **PDF**, **Edit** (Word / HTML / Pages / **Rebuild PDF**), and the posting link. Edit the HTML in Cursor, then **Rebuild PDF**. **Delete** removes that `applications/<folder>/`. Click a row for score, cover letter, and playbook.
+4. The table groups **Ready to apply** and **Applied**. Search by job, company, or location. Click a column header to sort A–Z or Z–A. **Apply** opens the company form when hunt could resolve it from LinkedIn/Indeed; the form URL sits under the button. **Mark applied** after you submit. Install `web/apply-helper` once so your regular browser fills matching fields. **Delete** removes that `applications/<folder>/`. Click a row for score, cover letter, and playbook.
 
 Python pipeline changes need a container restart (`docker compose up -d ui` or `--build` after `requirements.txt` / Dockerfile changes). HTML/CSS/JS update from the bind mount without a rebuild.
 

@@ -73,9 +73,19 @@ class DeskAPITests(unittest.TestCase):
         self.assertIn("camoufox-panel", res.text)
         self.assertIn('id="stop"', res.text)
         self.assertIn("Hunt from profile", res.text)
-        self.assertIn(">Location<", res.text)
-        self.assertIn(">Mode<", res.text)
-        self.assertIn(">ATS<", res.text)
+        self.assertIn("board-search", res.text)
+        self.assertIn("Job name", res.text)
+        self.assertIn("Location", res.text)
+        self.assertIn("Mode", res.text)
+        self.assertIn("ATS", res.text)
+        self.assertIn("Apply", res.text)
+        self.assertIn(">Delete<", res.text)
+        self.assertIn("th-sort", res.text)
+        self.assertNotIn('placeholder="Filter"', res.text)
+        self.assertIn("col-role", res.text)
+        self.assertIn("apply-helper-wrap", res.text)
+        self.assertIn("board-tabs", res.text)
+        self.assertIn('id="tab-applied"', res.text)
 
     def test_static_js_reconnects_and_opens_camoufox(self):
         js = (Path(__file__).resolve().parent / "static" / "app.js").read_text()
@@ -83,6 +93,27 @@ class DeskAPITests(unittest.TestCase):
         self.assertIn("function applyCamoufoxStage", js)
         self.assertIn("function workModeLabel", js)
         self.assertIn("/api/runs/active", js)
+        self.assertIn("function applyCell", js)
+        self.assertIn("/api/apply/launch", js)
+        self.assertIn("isAggregatorHost", js)
+        self.assertIn("edit-files", js)
+        self.assertIn("Finding form", js)
+        self.assertIn("Ready to apply", js)
+        self.assertIn("board-search", js)
+        self.assertIn("/api/packages/", js)
+        self.assertIn("/applied", js)
+        self.assertIn("heldUntilRefresh", js)
+        self.assertIn("applied-stamp", js)
+        self.assertIn("displayTab", js)
+        self.assertIn("board-tab", js)
+        css = (Path(__file__).resolve().parent / "static" / "app.css").read_text()
+        self.assertIn("min-height: 16rem", css)
+        self.assertIn("table-layout: fixed", css)
+        self.assertIn("overflow-wrap: anywhere", css)
+        self.assertIn(".edit-files", css)
+        self.assertIn("flex-direction: column", css)
+        self.assertIn(".applied-stamp", css)
+        self.assertIn(".board-tabs", css)
         self.assertIn("data.browser", js)
         self.assertNotIn('showCamoufox(mode !== "stopping")', js)
 
@@ -95,8 +126,11 @@ class DeskAPITests(unittest.TestCase):
         self.assertIn("Software Engineer", body["hunt"]["roles"])
         self.assertIn(body["hunt"]["max_jobs"], (0, None))
         self.assertIn("java", body["hunt"]["reject_skills"])
+        self.assertIn("Canada", body["hunt"]["search_locations"])
+        self.assertEqual(body["hunt"]["preferred_city"], "Montreal")
         self.assertGreaterEqual(body["hunt"]["login_wait_seconds"], 120)
         self.assertIn("6080", body["camoufox"]["vnc"])
+        self.assertIn("apply-helper", body["apply_helper"]["extension_path"])
 
     def test_inspect_linkedin_is_blocked_and_uses_pasted_jd(self):
         res = self.client.post(
@@ -135,6 +169,91 @@ class DeskAPITests(unittest.TestCase):
         self.assertEqual(deleted.status_code, 200)
         self.assertFalse(folder.exists())
         self.assertEqual(self.client.get(f"/api/packages/{folder.name}").status_code, 404)
+
+    def test_mark_package_applied(self):
+        folder = self._package()
+        listed = self.client.get("/api/packages")
+        self.assertFalse(listed.json()["packages"][0]["applied"])
+        marked = self.client.post(f"/api/packages/{folder.name}/applied", json={"applied": True})
+        self.assertEqual(marked.status_code, 200)
+        self.assertTrue(marked.json()["applied"])
+        self.assertTrue(marked.json()["applied_at"])
+        undone = self.client.post(f"/api/packages/{folder.name}/applied", json={"applied": False})
+        self.assertFalse(undone.json()["applied"])
+
+    def test_apply_launch_uses_stored_form_url_and_stores_pending_fill(self):
+        folder = self._package()
+        (folder / "job.json").write_text(
+            '{"company": "Acme", "role": "Software Engineer",'
+            ' "url": "https://www.linkedin.com/jobs/view/123",'
+            ' "apply_url": "https://boards.greenhouse.io/acme/jobs/1",'
+            ' "apply_kind": "ats"}'
+        )
+        res = self.client.post("/api/apply/launch", json={"package_id": folder.name})
+        self.assertEqual(res.status_code, 200)
+        body = res.json()
+        self.assertIn("greenhouse.io", body["apply_url"])
+        self.assertTrue(body["fields"]["first_name"])
+        self.assertTrue(body["fields"]["email"])
+        self.assertTrue(body["never_submit"])
+        pending = self.client.get("/api/apply/pending")
+        self.assertEqual(pending.status_code, 200)
+        self.assertEqual(pending.json()["package_id"], folder.name)
+        filled = self.client.get(f"/api/packages/{folder.name}/fill")
+        self.assertEqual(filled.status_code, 200)
+        self.assertIn("email", filled.json()["fields"])
+        consumed = self.client.post("/api/apply/consumed")
+        self.assertEqual(consumed.status_code, 200)
+        empty = self.client.get("/api/apply/pending").json()
+        self.assertIsNone(empty.get("payload"))
+
+    def test_apply_launch_unwraps_linkedin_to_company_form(self):
+        from unittest.mock import AsyncMock
+
+        from pipeline.apply_url import ApplyTarget
+
+        folder = self._package()
+        (folder / "job.json").write_text(
+            '{"company": "Acme", "role": "Software Engineer",'
+            ' "url": "https://www.linkedin.com/jobs/view/123"}'
+        )
+        with patch(
+            "pipeline.apply_url.resolve_apply_from_web",
+            return_value=ApplyTarget("https://www.linkedin.com/jobs/view/123", "aggregator", "web"),
+        ), patch(
+            "pipeline.browser_hunt.resolve_apply_in_browser",
+            new_callable=AsyncMock,
+            return_value=ApplyTarget("https://boards.greenhouse.io/acme/jobs/9", "ats", "camoufox"),
+        ), patch("web.app._browser_busy", return_value=False):
+            res = self.client.post("/api/apply/launch", json={"package_id": folder.name})
+        self.assertEqual(res.status_code, 200)
+        body = res.json()
+        self.assertIn("greenhouse.io", body["apply_url"])
+        self.assertNotIn("linkedin.com", body["apply_url"])
+
+    def test_apply_launch_does_not_return_linkedin_listing(self):
+        from unittest.mock import AsyncMock
+
+        from pipeline.apply_url import ApplyTarget
+
+        folder = self._package()
+        (folder / "job.json").write_text(
+            '{"company": "Acme", "role": "Software Engineer",'
+            ' "url": "https://www.linkedin.com/jobs/view/123"}'
+        )
+        with patch(
+            "pipeline.apply_url.resolve_apply_from_web",
+            return_value=ApplyTarget("https://www.linkedin.com/jobs/view/123", "aggregator", "web"),
+        ), patch(
+            "pipeline.browser_hunt.resolve_apply_in_browser",
+            new_callable=AsyncMock,
+            return_value=ApplyTarget("", "unknown", ""),
+        ), patch("web.app._browser_busy", return_value=False):
+            res = self.client.post("/api/apply/launch", json={"package_id": folder.name})
+        self.assertEqual(res.status_code, 200)
+        body = res.json()
+        self.assertEqual(body["apply_url"], "")
+        self.assertIn("linkedin.com", body["posting_url"])
 
     def test_rebuild_pdf_unknown_package(self):
         res = self.client.post("/api/packages/missing-package/rebuild-pdf")

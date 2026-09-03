@@ -8,11 +8,14 @@ import logging
 import os
 import queue
 import threading
+import time
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -21,18 +24,27 @@ from pipeline.config import load_config
 from pipeline.jobs import append_job, apply_pasted_job_text, infer_company_role, listing_has_identity, parse_job_urls
 from pipeline.reports import delete_package_dir, list_packages, package_detail, package_file, package_dir
 from pipeline.run_pipeline import process_job
-from pipeline.search import hunt_limit, target_markets, target_roles
+from pipeline.search import hunt_limit, hunt_locations, preferred_city, target_markets, target_roles
 
 WEB_ROOT = Path(__file__).resolve().parent
 STATIC = WEB_ROOT / "static"
 
 app = FastAPI(title="Job desk")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["*"],
+)
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
 log = logging.getLogger("jobdesk")
 
 _runs: dict[str, dict] = {}
 _run_lock = threading.Lock()
+_apply_lock = threading.Lock()
+_pending_apply: dict | None = None
+PENDING_APPLY_TTL = 30 * 60
 
 
 def _load_cfg():
@@ -40,6 +52,22 @@ def _load_cfg():
         return load_config(force=True)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def _public_base() -> str:
+    return (os.environ.get("JOB_DESK_URL") or "http://127.0.0.1:8000").rstrip("/")
+
+
+def _apply_helper_path(cfg) -> str:
+    from pipeline.reports import as_host_path
+
+    return as_host_path(cfg, WEB_ROOT / "apply-helper")
+
+
+def _remember_pending_apply(payload: dict) -> None:
+    global _pending_apply
+    with _apply_lock:
+        _pending_apply = {"payload": payload, "at": time.time()}
 
 
 def _new_run(run_id: str, sink: queue.Queue, *, kind: str) -> dict:
@@ -65,6 +93,11 @@ def _stop_requested(run_id: str) -> bool:
     with _run_lock:
         event = (_runs.get(run_id) or {}).get("stop")
     return bool(event is not None and event.is_set())
+
+
+def _browser_busy() -> bool:
+    with _run_lock:
+        return any(run.get("status") == "running" for run in _runs.values())
 
 
 def _remember_browser(run_id: str, item: dict) -> None:
@@ -165,6 +198,17 @@ class RunRequest(BaseModel):
     jd: str = Field(default="", min_length=0)
 
 
+class LaunchApplyRequest(BaseModel):
+    package_id: str = ""
+    url: str = ""
+    company: str = ""
+    role: str = ""
+
+
+class MarkAppliedRequest(BaseModel):
+    applied: bool = True
+
+
 class QueueLogHandler(logging.Handler):
     def __init__(self, sink: queue.Queue):
         super().__init__()
@@ -203,6 +247,8 @@ def me() -> dict:
             "max_jobs": hunt_limit(cfg),
             "roles": target_roles(cfg),
             "markets": target_markets(cfg),
+            "search_locations": hunt_locations(cfg),
+            "preferred_city": preferred_city(cfg),
             "years_experience": cfg.get("hunt.years_experience", cfg.get("career.years_experience")),
             "years_buffer": cfg.get("hunt.years_buffer", 2),
             "exclude_levels": cfg.get("hunt.exclude_levels") or [],
@@ -214,6 +260,10 @@ def me() -> dict:
                 "CAMOUFOX_VNC_URL",
                 "http://127.0.0.1:6080/vnc.html?autoconnect=1&resize=scale",
             ),
+        },
+        "apply_helper": {
+            "extension_path": _apply_helper_path(cfg),
+            "userscript": "/static/fill-helper.user.js",
         },
     }
 
@@ -318,6 +368,112 @@ def delete_package(package_id: str) -> dict:
     if not delete_package_dir(cfg, package_id):
         raise HTTPException(status_code=404, detail="Package not found")
     return {"ok": True, "id": package_id}
+
+
+@app.post("/api/packages/{package_id}/applied")
+def mark_package_applied(package_id: str, body: MarkAppliedRequest) -> dict:
+    cfg = _load_cfg()
+    folder = package_dir(cfg, package_id)
+    if folder is None:
+        raise HTTPException(status_code=404, detail="Package not found")
+    from pipeline.reports import package_summary, update_job_meta
+
+    fields = {"applied": body.applied}
+    if body.applied:
+        fields["applied_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    else:
+        fields["applied_at"] = ""
+    update_job_meta(folder, **fields)
+    return package_summary(cfg, folder)
+
+
+@app.get("/api/packages/{package_id}/fill")
+def package_fill(package_id: str) -> dict:
+    cfg = _load_cfg()
+    folder = package_dir(cfg, package_id)
+    if folder is None:
+        raise HTTPException(status_code=404, detail="Package not found")
+    from pipeline.fill import package_fill_payload
+
+    return package_fill_payload(cfg, package_id=package_id, public_base=_public_base())
+
+
+@app.post("/api/apply/launch")
+def launch_apply(body: LaunchApplyRequest) -> dict:
+    """Resolve the form URL, store a fill payload, and return both. Never submits."""
+    cfg = _load_cfg()
+    from pipeline.apply_url import is_aggregator_url, is_company_form_url, resolve_apply_from_web
+    from pipeline.fill import package_fill_payload
+    from pipeline.reports import _job_meta, update_job_meta
+
+    package_id = (body.package_id or "").strip()
+    job: dict = {}
+    folder = None
+    if package_id:
+        folder = package_dir(cfg, package_id)
+        if folder is None:
+            raise HTTPException(status_code=404, detail="Package not found")
+        job = dict(_job_meta(folder))
+    if body.company:
+        job["company"] = body.company
+    if body.role:
+        job["role"] = body.role
+    posting = (body.url or job.get("url") or "").strip()
+    if posting:
+        job["url"] = posting
+    apply_url = (job.get("apply_url") or "").strip()
+    apply_kind = (job.get("apply_kind") or "").strip()
+    if not is_company_form_url(apply_url) and apply_kind != "easy_apply":
+        try:
+            target = resolve_apply_from_web(posting or apply_url)
+            apply_url = target.apply_url or apply_url
+            apply_kind = target.apply_kind or apply_kind
+        except Exception as exc:
+            log.warning("Could not resolve form URL for %s: %s", posting, exc)
+        if (
+            posting
+            and is_aggregator_url(posting)
+            and not is_company_form_url(apply_url)
+            and apply_kind != "easy_apply"
+            and not _browser_busy()
+        ):
+            try:
+                from pipeline.browser_hunt import resolve_apply_in_browser
+
+                found = asyncio.run(resolve_apply_in_browser(cfg, posting))
+                if found.apply_url:
+                    apply_url = found.apply_url
+                    apply_kind = found.apply_kind or apply_kind
+            except Exception as exc:
+                log.warning("Camoufox could not read the form URL for %s: %s", posting, exc)
+        if folder:
+            update_job_meta(folder, apply_url=apply_url, apply_kind=apply_kind)
+    job["apply_url"] = apply_url
+    job["apply_kind"] = apply_kind
+    payload = package_fill_payload(
+        cfg, package_id=package_id, job=job, public_base=_public_base()
+    )
+    _remember_pending_apply(payload)
+    return payload
+
+
+@app.get("/api/apply/pending")
+def apply_pending() -> dict:
+    with _apply_lock:
+        data = _pending_apply
+    if not data:
+        return {"payload": None}
+    if time.time() - data["at"] > PENDING_APPLY_TTL:
+        return {"payload": None}
+    return data["payload"]
+
+
+@app.post("/api/apply/consumed")
+def apply_consumed() -> dict:
+    global _pending_apply
+    with _apply_lock:
+        _pending_apply = None
+    return {"ok": True}
 
 
 @app.post("/api/runs")
@@ -549,6 +705,8 @@ def _execute_run(run_id: str, urls: list[str], body: RunRequest, sink: queue.Que
                     "jd": jd,
                     "channel": "desk",
                     "source": listing.get("source") or "desk",
+                    "apply_url": listing.get("apply_url") or "",
+                    "apply_kind": listing.get("apply_kind") or "",
                 }
             )
             if not jd:

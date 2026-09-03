@@ -137,6 +137,130 @@ class ParseTests(unittest.TestCase):
         self.assertIn("Kafka", plain)
         self.assertIn(job["employer"], plain)
 
+    def test_job_blocks_dynamic_uses_min_max(self):
+        from pipeline.config import Config
+        from pipeline.tailor import job_blocks
+
+        cfg = Config(
+            {
+                "cv_format": {"bullets": {"dynamic": True, "min": 3, "max": 8}},
+                "experience": {
+                    "jobs": [
+                        {"prefix": "JOB1", "employer": "Alpha", "default_title": "SWE", "bullets": 7},
+                        {"prefix": "JOB2", "employer": "Beta", "default_title": "DE", "bullets": 4},
+                        {
+                            "prefix": "JOB3",
+                            "employer": "Gamma",
+                            "default_title": "SWE",
+                            "bullets_min": 2,
+                            "bullets_max": 5,
+                        },
+                    ]
+                },
+            },
+            Path("/tmp"),
+        )
+        jobs = job_blocks(cfg)
+        self.assertTrue(jobs[0]["dynamic"])
+        self.assertEqual(jobs[0]["bullets_min"], 3)
+        self.assertEqual(jobs[0]["bullets_max"], 8)
+        self.assertEqual(jobs[0]["bullets"], 8)
+        self.assertEqual(jobs[1]["bullets_min"], 3)
+        self.assertEqual(jobs[1]["bullets_max"], 8)
+        self.assertEqual(jobs[2]["bullets_min"], 2)
+        self.assertEqual(jobs[2]["bullets_max"], 5)
+
+    def test_job_blocks_fixed_keeps_configured_count(self):
+        from pipeline.config import Config
+        from pipeline.tailor import job_blocks
+
+        cfg = Config(
+            {
+                "cv_format": {"bullets": {"dynamic": False}},
+                "experience": {
+                    "jobs": [
+                        {"prefix": "JOB1", "employer": "Alpha", "default_title": "SWE", "bullets": 7},
+                        {"prefix": "JOB2", "employer": "Beta", "default_title": "DE", "bullets": 4},
+                    ]
+                },
+            },
+            Path("/tmp"),
+        )
+        jobs = job_blocks(cfg)
+        self.assertFalse(jobs[0]["dynamic"])
+        self.assertEqual(jobs[0]["bullets"], 7)
+        self.assertEqual(jobs[0]["bullets_min"], 7)
+        self.assertEqual(jobs[1]["bullets"], 4)
+
+    def test_ensure_and_strip_bullet_placeholders(self):
+        from pipeline.tailor import ensure_bullet_slots, strip_unused_bullet_placeholders
+
+        html = (
+            "<ul>\n"
+            '        <li><span class="point">{{JOB1_B1}}</span></li>\n'
+            '        <li><span class="point">{{JOB1_B2}}</span></li>\n'
+            "</ul>"
+        )
+        padded = ensure_bullet_slots(
+            html,
+            [{"prefix": "JOB1", "bullets": 4, "bullets_min": 2, "bullets_max": 4}],
+        )
+        self.assertIn("{{JOB1_B4}}", padded)
+        filled = padded.replace("{{JOB1_B1}}", "First").replace("{{JOB1_B2}}", "Second")
+        stripped = strip_unused_bullet_placeholders(filled)
+        self.assertIn("First", stripped)
+        self.assertNotIn("{{JOB1_B3}}", stripped)
+        self.assertNotIn("{{JOB1_B4}}", stripped)
+
+    def test_apply_changes_pads_and_strips_unused_bullets(self):
+        from pipeline.config import Config
+        from pipeline.tailor import apply_changes_to_html
+
+        tmp = tempfile.TemporaryDirectory()
+        root = Path(tmp.name)
+        (root / "resumes").mkdir()
+        (root / "resumes" / "template.html").write_text(
+            "<html><body>\n"
+            "<ul>\n"
+            '        <li><span class="point">{{JOB1_B1}}</span></li>\n'
+            '        <li><span class="point">{{JOB1_B2}}</span></li>\n'
+            '        <li><span class="point">{{JOB1_B3}}</span></li>\n'
+            "</ul>\n"
+            "</body></html>\n"
+        )
+        cfg = Config(
+            {
+                "user": {"full_name": "Test User"},
+                "cv_format": {"bullets": {"dynamic": True, "min": 2, "max": 5}},
+                "experience": {
+                    "jobs": [{"prefix": "JOB1", "employer": "Alpha", "default_title": "SWE"}]
+                },
+                "pipeline": {"html_template": "resumes/template.html"},
+            },
+            root,
+        )
+        parsed = {
+            "TITLE": "Software Engineer",
+            "SUMMARY": "Built systems.",
+            "JOB1_TITLE": "Engineer",
+            "JOB1_B1": "First",
+            "JOB1_B2": "Second",
+            "JOB1_B3": "Third",
+            "JOB1_B4": "Fourth",
+            "SKILL_LANG": "Python",
+            "SKILL_ML": "NLP",
+            "SKILL_DATA": "Kafka",
+            "SKILL_BACKEND": "FastAPI",
+            "SKILL_CLOUD": "AWS",
+        }
+        out = Path(tmp.name) / "out.html"
+        apply_changes_to_html(parsed, out, cfg)
+        text = out.read_text()
+        self.assertIn("Fourth", text)
+        self.assertNotIn("{{JOB1_B5}}", text)
+        self.assertNotIn("{{JOB1_B1}}", text)
+        tmp.cleanup()
+
     def test_last_complete_attempt_wins(self):
         raw = "<TITLE>first</TITLE> garbage <R_TITLE>r</R_TITLE><TITLE>second</TITLE>"
         parsed = parse_tagged_output(raw)
@@ -179,6 +303,47 @@ class HonestyPromptTests(unittest.TestCase):
         self.assertIn("Need Python agents", prompt)
         self.assertIn(f"Target length is {cfg.cv_pages}", prompt)
         self.assertIn("Keep these sections", prompt)
+
+    def test_tailor_prompt_dynamic_bullet_counts(self):
+        from pipeline.config import Config
+
+        cfg = Config(
+            {
+                "user": {"full_name": "Test User"},
+                "cv_format": {"pages": 2, "bullets": {"dynamic": True, "min": 3, "max": 8, "max_lines": 2}},
+                "experience": {
+                    "jobs": [
+                        {"prefix": "JOB1", "employer": "Alpha", "default_title": "SWE"},
+                        {"prefix": "JOB2", "employer": "Beta", "default_title": "DE"},
+                    ]
+                },
+            },
+            Path("/tmp"),
+        )
+        prompt = build_tailor_prompt(cfg, "Acme", "Engineer", "Need Kafka")
+        self.assertIn("Bullet counts are dynamic", prompt)
+        self.assertIn("Alpha 3–8", prompt)
+        self.assertNotIn("Keep the exact bullet counts", prompt)
+        self.assertIn("or empty if unused", prompt)
+
+    def test_tailor_prompt_fixed_bullet_counts(self):
+        from pipeline.config import Config
+
+        cfg = Config(
+            {
+                "user": {"full_name": "Test User"},
+                "cv_format": {"pages": 2, "bullets": {"dynamic": False, "max_lines": 2}},
+                "experience": {
+                    "jobs": [
+                        {"prefix": "JOB1", "employer": "Alpha", "default_title": "SWE", "bullets": 7},
+                        {"prefix": "JOB2", "employer": "Beta", "default_title": "DE", "bullets": 4},
+                    ]
+                },
+            },
+            Path("/tmp"),
+        )
+        prompt = build_tailor_prompt(cfg, "Acme", "Engineer", "Need Kafka")
+        self.assertIn("Keep the exact bullet counts: Alpha 7, Beta 4.", prompt)
 
 
 class JobsAndPlaybookTests(unittest.TestCase):
@@ -642,7 +807,68 @@ class HuntTests(unittest.TestCase):
                 "Software Engineer",
             )
             self.assertIn("Software+Engineer", url)
-            self.assertIn("Montreal", url)
+            self.assertIn("Canada", url)
+            self.assertNotIn("Montreal", url)
+            from pipeline.search import hunt_location, hunt_locations, listing_in_scope
+
+            self.assertEqual(hunt_location(cfg), "Canada")
+            self.assertIn("United States", hunt_locations(cfg))
+            self.assertTrue(
+                listing_in_scope(
+                    {"location": "Toronto, ON, Canada", "role": "Software Engineer", "jd": ""},
+                    cfg,
+                )
+            )
+            self.assertFalse(
+                listing_in_scope(
+                    {
+                        "location": "San Francisco, CA",
+                        "role": "Software Engineer",
+                        "jd": "Must be located in the United States.",
+                    },
+                    cfg,
+                )
+            )
+            self.assertTrue(
+                listing_in_scope(
+                    {
+                        "location": "New York, NY",
+                        "role": "Software Engineer",
+                        "jd": "Remote in the US or Canada. Python.",
+                    },
+                    cfg,
+                )
+            )
+            nyc = score_listing(
+                {
+                    "role": "Software Engineer",
+                    "url": "https://boards.greenhouse.io/acme/jobs/9",
+                    "location": "New York, NY",
+                    "jd": "Python Kafka. Must be based in the United States.",
+                },
+                cfg,
+            )
+            toronto = score_listing(
+                {
+                    "role": "Software Engineer",
+                    "url": "https://boards.greenhouse.io/acme/jobs/8",
+                    "location": "Toronto, ON, Canada",
+                    "jd": "Python Kafka distributed systems.",
+                },
+                cfg,
+            )
+            montreal = score_listing(
+                {
+                    "role": "Software Engineer",
+                    "url": "https://boards.greenhouse.io/acme/jobs/7",
+                    "location": "Montreal, QC, Canada",
+                    "jd": "Python Kafka distributed systems.",
+                },
+                cfg,
+            )
+            self.assertEqual(nyc, 0)
+            self.assertGreater(toronto, 0)
+            self.assertGreater(montreal, toronto)
         finally:
             os.environ.pop("JOB_SEARCH_ROOT", None)
             tmp.cleanup()
@@ -1006,10 +1232,41 @@ class HuntTests(unittest.TestCase):
             self.assertEqual(summary["company"], "Acme")
             self.assertEqual(summary["role"], "Software Engineer")
             self.assertEqual(summary["url"], "https://example.com/job")
+            self.assertEqual(summary.get("apply_url"), "")
             self.assertEqual(summary["location"], "Montreal")
             self.assertEqual(summary["work_mode"], "hybrid")
             self.assertTrue(summary["has_pdf"])
             self.assertTrue(summary["pdf_path"])
+            self.assertFalse(summary["applied"])
+            (folder / "job.json").write_text(
+                '{"company": "Acme", "role": "Software Engineer", "url": "https://example.com/job", "applied": true, "applied_at": "2026-09-02"}'
+            )
+            applied = package_summary(cfg, folder)
+            self.assertTrue(applied["applied"])
+            self.assertEqual(applied["applied_at"], "2026-09-02")
+        finally:
+            os.environ.pop("JOB_SEARCH_ROOT", None)
+            tmp.cleanup()
+            load_config(force=True)
+
+    def test_list_packages_does_not_rebuild_exports(self):
+        from unittest.mock import patch
+        from pipeline.reports import list_packages
+
+        tmp = tempfile.TemporaryDirectory()
+        root = Path(tmp.name)
+        folder = root / "applications" / "Acme-Software-Engineer-2026-08-29"
+        folder.mkdir(parents=True)
+        (folder / "job.json").write_text('{"company": "Acme", "role": "Engineer"}')
+        (folder / "Acme_CV.html").write_text("<html></html>")
+        try:
+            cfg = self._cfg(root)
+            with patch("pipeline.cv_export.html_to_pages") as pages, patch("pipeline.cv_export.html_to_docx") as docx:
+                listed = list_packages(cfg)
+            self.assertEqual(len(listed), 1)
+            self.assertEqual(listed[0]["company"], "Acme")
+            pages.assert_not_called()
+            docx.assert_not_called()
         finally:
             os.environ.pop("JOB_SEARCH_ROOT", None)
             tmp.cleanup()
@@ -1751,6 +2008,131 @@ class StopAndHuntLockTests(unittest.TestCase):
         with self.assertRaises(HTTPException) as ctx:
             self.desk.stop_run("missing")
         self.assertEqual(ctx.exception.status_code, 404)
+
+
+class ApplyUrlTests(unittest.TestCase):
+    def test_greenhouse_posting_is_already_the_form(self):
+        from pipeline.apply_url import canonicalize_form_url, form_url_for_posting
+
+        url = "https://boards.greenhouse.io/acme/jobs/123"
+        target = form_url_for_posting(url)
+        self.assertEqual(target.apply_kind, "ats")
+        self.assertIn("greenhouse.io", target.apply_url)
+        lever = canonicalize_form_url("https://jobs.lever.co/acme/abc-uuid")
+        self.assertTrue(lever.endswith("/apply"))
+
+    def test_linkedin_html_preserves_company_form_url(self):
+        from pipeline.apply_url import extract_apply_from_html
+
+        html = """
+        <html><body>
+          <script>{"companyApplyUrl":"https://jobs.ashbyhq.com/intact/job-uuid","easyApply":false}</script>
+          <a href="https://jobs.ashbyhq.com/intact/job-uuid">Apply</a>
+        </body></html>
+        """
+        target = extract_apply_from_html(html, "https://www.linkedin.com/jobs/view/4450738702")
+        self.assertEqual(target.apply_kind, "ats")
+        self.assertIn("ashbyhq.com", target.apply_url)
+
+    def test_voyager_offsite_json_and_html_comments(self):
+        from pipeline.apply_url import extract_apply_from_html
+
+        html = """
+        <html><body>
+          <code id="bpr-guid-1"><!--{"com.linkedin.voyager.dash.jobs.OffsiteApply":{"companyApplyUrl":"https:\\/\\/jobs.lever.co\\/acme\\/uuid"}}--></code>
+          <icon data-svg-class-name="apply-button__offsite-apply-icon-svg"></icon>
+        </body></html>
+        """
+        target = extract_apply_from_html(html, "https://www.linkedin.com/jobs/view/4450738702")
+        self.assertEqual(target.apply_kind, "ats")
+        self.assertIn("lever.co", target.apply_url)
+
+    def test_offsite_icon_is_not_treated_as_easy_apply(self):
+        from pipeline.apply_url import extract_apply_from_html
+
+        html = """
+        <button>Apply</button>
+        <icon data-svg-class-name="apply-button__offsite-apply-icon-svg"></icon>
+        """
+        target = extract_apply_from_html(html, "https://www.linkedin.com/jobs/view/4394315229")
+        self.assertEqual(target.apply_kind, "aggregator")
+        self.assertIn("linkedin.com", target.apply_url)
+
+    def test_easy_apply_is_not_overwritten_by_decorate(self):
+        from pipeline.jobs import decorate_listing
+
+        listing = decorate_listing(
+            {
+                "company": "Acme",
+                "role": "Engineer",
+                "url": "https://www.linkedin.com/jobs/view/4450738702",
+                "apply_url": "https://www.linkedin.com/jobs/view/4450738702",
+                "apply_kind": "easy_apply",
+                "location": "Montreal",
+            }
+        )
+        self.assertEqual(listing["apply_kind"], "easy_apply")
+        self.assertIn("linkedin.com", listing["apply_url"])
+        from pipeline.apply_url import extract_apply_from_html
+
+        html = """
+        <button class="jobs-apply-button" aria-label="Easy Apply">Easy Apply</button>
+        <script>{"easyApply": true}</script>
+        """
+        posting = "https://www.linkedin.com/jobs/view/4450738702"
+        target = extract_apply_from_html(html, posting)
+        self.assertEqual(target.apply_kind, "easy_apply")
+        self.assertEqual(target.apply_url, posting)
+
+    def test_fill_payload_and_playbook_include_form_url(self):
+        from pipeline.fill import package_fill_payload
+        from pipeline.playbook import render_playbook
+
+        tmp = tempfile.TemporaryDirectory()
+        root = Path(tmp.name)
+        (root / "applications").mkdir()
+        (root / "config.yaml").write_text(
+            "user:\n  full_name: Desk Tester\n  preferred_name: Desk\n  email: a@b.c\n  phone: 555\n"
+            "  city: Montreal\n  country: Canada\n  linkedin: https://linkedin.com/in/x\n"
+            "visa:\n  status: permanent-resident\n  description: PR, no sponsorship\n"
+        )
+        os.environ["JOB_SEARCH_ROOT"] = str(root)
+        try:
+            cfg = load_config(force=True)
+            folder = root / "applications" / "Acme-Engineer-2026-09-02"
+            folder.mkdir()
+            (folder / "job.json").write_text(
+                '{"company":"Acme","role":"Engineer","url":"https://www.linkedin.com/jobs/view/1",'
+                '"apply_url":"https://boards.greenhouse.io/acme/jobs/9","apply_kind":"ats"}'
+            )
+            (folder / "Desk_Tester_CV.pdf").write_text("pdf")
+            (folder / "cover_letter.md").write_text("Hello")
+            (folder / "why_i_fit.txt").write_text("Python")
+            payload = package_fill_payload(cfg, package_id=folder.name, public_base="http://127.0.0.1:8000")
+            self.assertEqual(payload["apply_kind"], "ats")
+            self.assertIn("greenhouse.io", payload["apply_url"])
+            self.assertEqual(payload["fields"]["email"], "a@b.c")
+            self.assertTrue(payload["never_submit"])
+            self.assertIn("Desk_Tester_CV.pdf", payload["files"]["resume"]["url"])
+            book = render_playbook(
+                cfg,
+                {
+                    "company": "Acme",
+                    "role": "Engineer",
+                    "url": "https://linkedin.com/jobs/view/1",
+                    "apply_url": "https://boards.greenhouse.io/acme/jobs/9",
+                },
+                folder,
+                folder / "Desk_Tester_CV.pdf",
+                folder / "cover_letter.md",
+                folder / "why_i_fit.txt",
+            )
+            self.assertIn("Form URL:", book)
+            self.assertIn("greenhouse.io", book)
+        finally:
+            os.environ.pop("JOB_SEARCH_ROOT", None)
+            tmp.cleanup()
+            load_config(force=True)
 
 
 class ConfigMergeTests(unittest.TestCase):

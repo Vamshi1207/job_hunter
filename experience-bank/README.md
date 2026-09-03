@@ -44,7 +44,7 @@ The tailor skips `README.md` and any filename containing `example`.
 When you paste a JD URL, cv-tailor:
 1. Reads the JD, classifies the role type (Growth, Engineering, Data, BizOps, etc.)
 2. For each project, picks the variant whose framing matches the role type.
-3. Keep the template bullet counts. Respect `config.yaml` `cv_format.pages` — do not trim just to squeeze onto fewer pages.
+3. When `cv_format.bullets.dynamic` is true, allocate more bullets to the best-matching employer (within min/max) instead of a fixed template count. Respect `config.yaml` `cv_format.pages` — do not trim just to squeeze onto fewer pages, and do not invent bullets to fill space.
 
 If your project has fewer variants than the skill needs, it falls back to the closest one. Add more variants when you notice repeated mismatches.
 

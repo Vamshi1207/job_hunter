@@ -312,7 +312,9 @@ def decorate_listing(listing: dict) -> dict:
     item["location"] = loc
     item["work_mode"] = mode
     item["location_display"] = display_location(loc, mode)
-    return item
+    from pipeline.apply_url import attach_apply_target
+
+    return attach_apply_target(item)
 
 
 def fetch_posting(url: str, timeout: int = 20) -> Optional[dict]:
@@ -333,6 +335,9 @@ def fetch_posting(url: str, timeout: int = 20) -> Optional[dict]:
     meta = parse_posting_meta(response.text, url)
     if not meta.get("jd"):
         return None
+    from pipeline.apply_url import extract_apply_from_html
+
+    apply = extract_apply_from_html(response.text, url)
     return {
         "company": meta["company"],
         "role": meta["role"],
@@ -340,6 +345,8 @@ def fetch_posting(url: str, timeout: int = 20) -> Optional[dict]:
         "location": meta["location"],
         "jd": meta["jd"],
         "source": "fetch",
+        "apply_url": apply.apply_url,
+        "apply_kind": apply.apply_kind,
     }
 
 
@@ -382,6 +389,8 @@ def load_jobs(cfg: Config, company_filter: Optional[str] = None) -> list[dict]:
                 "location": (entry.get("location") or "").strip(),
                 "jd": jd,
                 "folder": f"{slug(company)}-{slug(role)}",
+                "apply_url": (entry.get("apply_url") or "").strip(),
+                "apply_kind": (entry.get("apply_kind") or "").strip(),
             }
         )
     return jobs
@@ -491,15 +500,18 @@ def append_job(cfg: Config, job: dict) -> None:
     if path.exists():
         data = yaml.safe_load(path.read_text()) or {}
     jobs = list(data.get("jobs") or [])
-    jobs.append(
-        {
-            "company": job["company"],
-            "role": job["role"],
-            "location": job.get("location") or "",
-            "url": job.get("url") or "",
-            "jd": job["jd"],
-        }
-    )
+    row = {
+        "company": job["company"],
+        "role": job["role"],
+        "location": job.get("location") or "",
+        "url": job.get("url") or "",
+        "jd": job["jd"],
+    }
+    if job.get("apply_url"):
+        row["apply_url"] = job["apply_url"]
+    if job.get("apply_kind"):
+        row["apply_kind"] = job["apply_kind"]
+    jobs.append(row)
     data["jobs"] = jobs
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(yaml.safe_dump(data, sort_keys=False, allow_unicode=True, width=1000))
