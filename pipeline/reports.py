@@ -118,6 +118,12 @@ def as_host_path(cfg: Config, path: Path | None) -> str:
 
 
 def list_packages(cfg: Config) -> list[dict]:
+    try:
+        from pipeline.jobs import sync_applied_jobs
+
+        sync_applied_jobs(cfg)
+    except Exception as exc:
+        log.warning("Could not split applied jobs out of jobs.yaml: %s", exc)
     root = cfg.applications_dir
     if not root.exists():
         return []

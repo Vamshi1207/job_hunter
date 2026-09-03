@@ -374,6 +374,47 @@ class JobsAndPlaybookTests(unittest.TestCase):
             tmp.cleanup()
             load_config(force=True)
 
+    def test_applied_jobs_move_out_of_jobs_yaml(self):
+        from pipeline.jobs import append_job, applied_job_rows, queued_job_rows, set_job_applied, sync_applied_jobs
+
+        tmp = tempfile.TemporaryDirectory()
+        root = Path(tmp.name)
+        (root / "config.yaml").write_text("user:\n  full_name: Test User\n")
+        apps = root / "applications" / "Acme-Engineer-2026-09-02"
+        apps.mkdir(parents=True)
+        (root / "jobs.yaml").write_text(
+            "jobs:\n"
+            "  - company: Acme\n"
+            "    role: Engineer\n"
+            "    url: https://example.com/job\n"
+            "    jd: Python Kafka\n"
+            "  - company: Open\n"
+            "    role: Engineer\n"
+            "    jd: Still open\n"
+        )
+        (apps / "job.json").write_text(
+            '{"company": "Acme", "role": "Engineer", "url": "https://example.com/job", "applied": true, "applied_at": "2026-09-02"}'
+        )
+        os.environ["JOB_SEARCH_ROOT"] = str(root)
+        try:
+            cfg = load_config(force=True)
+            sync_applied_jobs(cfg)
+            queue = queued_job_rows(cfg)
+            applied = applied_job_rows(cfg)
+            self.assertEqual([job["company"] for job in queue], ["Open"])
+            self.assertEqual(len(applied), 1)
+            self.assertEqual(applied[0]["company"], "Acme")
+            self.assertTrue(applied[0].get("applied"))
+            append_job(cfg, {"company": "Acme", "role": "Engineer", "url": "https://example.com/job", "jd": "Python Kafka"})
+            self.assertEqual([job["company"] for job in queued_job_rows(cfg)], ["Open"])
+            set_job_applied(cfg, {"company": "Acme", "role": "Engineer", "url": "https://example.com/job"}, applied=False)
+            self.assertEqual({job["company"] for job in queued_job_rows(cfg)}, {"Open", "Acme"})
+            self.assertEqual(applied_job_rows(cfg), [])
+        finally:
+            os.environ.pop("JOB_SEARCH_ROOT", None)
+            tmp.cleanup()
+            load_config(force=True)
+
     def test_cv_pages_comes_from_config(self):
         tmp = tempfile.TemporaryDirectory()
         root = Path(tmp.name)

@@ -811,6 +811,10 @@ def existing_keys(cfg: Config) -> set[str]:
         for entry in data.get("jobs") or []:
             if isinstance(entry, dict):
                 keys.add(listing_key(entry))
+    from pipeline.jobs import applied_job_rows
+
+    for entry in applied_job_rows(cfg):
+        keys.add(listing_key(entry))
     return {key for key in keys if key and key != "-"}
 
 

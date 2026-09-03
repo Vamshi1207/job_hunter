@@ -383,7 +383,18 @@ def mark_package_applied(package_id: str, body: MarkAppliedRequest) -> dict:
         fields["applied_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     else:
         fields["applied_at"] = ""
-    update_job_meta(folder, **fields)
+    meta = update_job_meta(folder, **fields)
+    try:
+        from pipeline.jobs import set_job_applied
+
+        set_job_applied(
+            cfg,
+            meta,
+            applied=body.applied,
+            applied_at=str(fields.get("applied_at") or ""),
+        )
+    except Exception as exc:
+        log.warning("Could not move job between jobs.yaml and applied.yaml: %s", exc)
     return package_summary(cfg, folder)
 
 

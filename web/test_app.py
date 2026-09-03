@@ -172,14 +172,31 @@ class DeskAPITests(unittest.TestCase):
 
     def test_mark_package_applied(self):
         folder = self._package()
+        (self.root / "jobs.yaml").write_text(
+            "jobs:\n"
+            "  - company: Acme\n"
+            "    role: Software Engineer\n"
+            "    url: https://example.com/job\n"
+            "    jd: Python\n"
+        )
         listed = self.client.get("/api/packages")
         self.assertFalse(listed.json()["packages"][0]["applied"])
         marked = self.client.post(f"/api/packages/{folder.name}/applied", json={"applied": True})
         self.assertEqual(marked.status_code, 200)
         self.assertTrue(marked.json()["applied"])
         self.assertTrue(marked.json()["applied_at"])
+        import yaml
+
+        queue = yaml.safe_load((self.root / "jobs.yaml").read_text()) or {}
+        applied = yaml.safe_load((self.root / "applied.yaml").read_text()) or {}
+        self.assertEqual(queue.get("jobs") or [], [])
+        self.assertEqual(applied["jobs"][0]["company"], "Acme")
         undone = self.client.post(f"/api/packages/{folder.name}/applied", json={"applied": False})
         self.assertFalse(undone.json()["applied"])
+        queue = yaml.safe_load((self.root / "jobs.yaml").read_text()) or {}
+        applied = yaml.safe_load((self.root / "applied.yaml").read_text()) or {}
+        self.assertEqual(queue["jobs"][0]["company"], "Acme")
+        self.assertEqual(applied.get("jobs") or [], [])
 
     def test_apply_launch_uses_stored_form_url_and_stores_pending_fill(self):
         folder = self._package()

@@ -56,7 +56,8 @@ Then edit the copies. Put your NVIDIA (and optional Gemini) keys in `.env`. Mini
 | `config.yaml` | `config.example.yaml` | **Yes** | Identity, visa, CV layout, hunt filters, LinkedIn login. See [config.yaml keys](#configyaml-what-to-set) below. |
 | `cv_master.md` | `cv_master.example.md` | **Yes** | Canonical resume. The tailor may rephrase this; it must not invent jobs or metrics. Keep employer names aligned with `experience.jobs` and the HTML template. |
 | `resumes/template.html` | `resumes/template.example.html` | **Yes** | HTML layout and `{{JOB1_*}}` placeholders. Company names in the HTML are static; titles/bullets are filled per job. |
-| `jobs.yaml` | `jobs.example.yaml` | For CLI | Queue of postings. The desk appends here when you tailor. Each job needs `company`, `role`, and `jd` (or a public ATS `url`). |
+| `jobs.yaml` | `jobs.example.yaml` | For CLI | Active queue. Hunt/desk append here when you tailor. Applied postings are moved to `applied.yaml`. |
+| `applied.yaml` | `applied.example.yaml` | Auto | Jobs you marked applied. Separate from the queue so hunt does not treat them as still open. |
 | `memory/project.md` | `memory/project.template.md` | Recommended | Profile narrative, visa wording, positioning. Loaded into the tailor prompt. Keep in sync with `config.yaml` `user` / `visa` / `career`. |
 | `memory/feedback.md` | `memory/feedback.template.md` | Recommended | Writing rules. Add a rule whenever you correct a draft so the next tailor does not repeat it. |
 | `experience-bank/*.md` | `experience-bank/example-project.md`, `about-variants.example.md` | Recommended | Alternate bullets per employer/project. Filenames with `example` are skipped by the tailor. |

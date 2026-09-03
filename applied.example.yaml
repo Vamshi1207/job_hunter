@@ -1,0 +1,10 @@
+# Applied jobs are stored here, not in jobs.yaml.
+# Copy is optional. Marking a job applied on the desk (or the next desk refresh)
+# moves matching postings from jobs.yaml into applied.yaml.
+#
+#   jobs.yaml     = still to apply (the queue)
+#   applied.yaml  = already submitted
+#
+# Hunt and the CLI tailor skip applied.yaml. Undo Applied moves the row back.
+
+jobs: []

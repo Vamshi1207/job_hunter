@@ -1,10 +1,11 @@
-"""Load the job queue from jobs.yaml."""
+"""Load the job queue from jobs.yaml. Applied jobs live in applied.yaml."""
 
 from __future__ import annotations
 
 import json
 import logging
 import re
+from pathlib import Path
 from typing import Optional
 from urllib.parse import parse_qs, urlparse
 
@@ -352,6 +353,7 @@ def fetch_posting(url: str, timeout: int = 20) -> Optional[dict]:
 
 def load_jobs(cfg: Config, company_filter: Optional[str] = None) -> list[dict]:
     path = cfg.jobs_path
+    sync_applied_jobs(cfg)
     if not path.exists():
         example = cfg.root / "jobs.example.yaml"
         hint = f" Copy {example.name} to {path.name} and add job descriptions." if example.exists() else ""
@@ -491,27 +493,182 @@ def listing_has_identity(listing: dict) -> bool:
     return (not is_placeholder_company(company)) and bool(role) and role.lower() != "role"
 
 
-def append_job(cfg: Config, job: dict) -> None:
-    """Add a job to jobs.yaml so CLI and UI share the same queue."""
-    import yaml
+def _norm_job_url(url: str) -> str:
+    raw = (url or "").strip().split("#")[0]
+    if not raw:
+        return ""
+    parsed = urlparse(raw)
+    path = (parsed.path or "").rstrip("/")
+    return f"{parsed.scheme.lower()}://{parsed.netloc.lower()}{path}"
 
-    path = cfg.jobs_path
-    data = {}
-    if path.exists():
-        data = yaml.safe_load(path.read_text()) or {}
-    jobs = list(data.get("jobs") or [])
+
+def _job_identity(entry: dict) -> tuple[str, str, str]:
+    return (
+        _norm_job_url(str(entry.get("url") or "")),
+        (entry.get("company") or "").strip().lower(),
+        (entry.get("role") or "").strip().lower(),
+    )
+
+
+def _same_job(left: dict, right: dict) -> bool:
+    left_url, left_company, left_role = _job_identity(left)
+    right_url, right_company, right_role = _job_identity(right)
+    if left_url and right_url:
+        return left_url == right_url
+    return bool(left_company and left_role and left_company == right_company and left_role == right_role)
+
+
+def _queue_row(job: dict) -> dict:
     row = {
-        "company": job["company"],
-        "role": job["role"],
+        "company": job.get("company") or "",
+        "role": job.get("role") or "",
         "location": job.get("location") or "",
         "url": job.get("url") or "",
-        "jd": job["jd"],
+        "jd": job.get("jd") or job.get("jd_text") or "",
     }
     if job.get("apply_url"):
         row["apply_url"] = job["apply_url"]
     if job.get("apply_kind"):
         row["apply_kind"] = job["apply_kind"]
-    jobs.append(row)
-    data["jobs"] = jobs
+    return row
+
+
+def _load_yaml_jobs(path: Path) -> list[dict]:
+    import yaml
+
+    if not path.exists():
+        return []
+    data = yaml.safe_load(path.read_text()) or {}
+    return [dict(entry) for entry in (data.get("jobs") or []) if isinstance(entry, dict)]
+
+
+def _write_yaml_jobs(path: Path, jobs: list[dict]) -> None:
+    import yaml
+
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(yaml.safe_dump(data, sort_keys=False, allow_unicode=True, width=1000))
+    path.write_text(yaml.safe_dump({"jobs": jobs}, sort_keys=False, allow_unicode=True, width=1000))
+
+
+def queued_job_rows(cfg: Config) -> list[dict]:
+    return _load_yaml_jobs(cfg.jobs_path)
+
+
+def applied_job_rows(cfg: Config) -> list[dict]:
+    return _load_yaml_jobs(cfg.applied_jobs_path)
+
+
+def _find_job_index(jobs: list[dict], needle: dict) -> int:
+    for index, entry in enumerate(jobs):
+        if _same_job(entry, needle):
+            return index
+    return -1
+
+
+def _pop_job(jobs: list[dict], needle: dict) -> dict | None:
+    index = _find_job_index(jobs, needle)
+    if index < 0:
+        return None
+    return jobs.pop(index)
+
+
+def _package_job_flags(cfg: Config) -> tuple[list[dict], list[dict]]:
+    applied: list[dict] = []
+    queued: list[dict] = []
+    apps = cfg.applications_dir
+    if not apps.is_dir():
+        return applied, queued
+    for folder in apps.iterdir():
+        if not folder.is_dir() or folder.name.startswith(".") or folder.name.startswith("_"):
+            continue
+        path = folder / "job.json"
+        if not path.exists():
+            continue
+        try:
+            meta = json.loads(path.read_text())
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(meta, dict):
+            continue
+        flag = str(meta.get("applied") or "").strip().lower()
+        row = {
+            "company": meta.get("company") or "",
+            "role": meta.get("role") or "",
+            "url": meta.get("url") or "",
+            "location": meta.get("location") or "",
+            "apply_url": meta.get("apply_url") or "",
+            "apply_kind": meta.get("apply_kind") or "",
+            "applied_at": meta.get("applied_at") or "",
+        }
+        if flag in {"1", "true", "yes", "on", "applied"} or meta.get("applied") is True:
+            applied.append(row)
+        else:
+            queued.append(row)
+    return applied, queued
+
+
+def set_job_applied(cfg: Config, job: dict, *, applied: bool, applied_at: str = "") -> None:
+    """Move a posting between jobs.yaml (queue) and applied.yaml."""
+    queue = _load_yaml_jobs(cfg.jobs_path)
+    applied_rows = _load_yaml_jobs(cfg.applied_jobs_path)
+    taken = _pop_job(queue, job) or _pop_job(applied_rows, job) or _queue_row(job)
+    if applied:
+        taken["applied"] = True
+        if applied_at:
+            taken["applied_at"] = applied_at
+        applied_rows.append(taken)
+    else:
+        taken.pop("applied", None)
+        taken.pop("applied_at", None)
+        queue.append(taken)
+    if cfg.jobs_path.exists() or queue:
+        _write_yaml_jobs(cfg.jobs_path, queue)
+    _write_yaml_jobs(cfg.applied_jobs_path, applied_rows)
+
+
+def sync_applied_jobs(cfg: Config) -> None:
+    """Keep jobs.yaml = queue and applied.yaml = submitted. Safe to call often."""
+    applied_needles, queued_needles = _package_job_flags(cfg)
+    queue = _load_yaml_jobs(cfg.jobs_path)
+    applied_rows = _load_yaml_jobs(cfg.applied_jobs_path)
+    original_queue = len(queue)
+    original_applied = len(applied_rows)
+
+    for needle in applied_needles:
+        taken = _pop_job(queue, needle)
+        if taken:
+            taken["applied"] = True
+            taken["applied_at"] = needle.get("applied_at") or taken.get("applied_at") or ""
+            if _find_job_index(applied_rows, needle) < 0:
+                applied_rows.append(taken)
+        elif _find_job_index(applied_rows, needle) < 0:
+            row = _queue_row(needle)
+            row["applied"] = True
+            if needle.get("applied_at"):
+                row["applied_at"] = needle["applied_at"]
+            applied_rows.append(row)
+
+    for needle in queued_needles:
+        taken = _pop_job(applied_rows, needle)
+        if taken:
+            taken.pop("applied", None)
+            taken.pop("applied_at", None)
+            if _find_job_index(queue, needle) < 0:
+                queue.append(taken)
+
+    if len(queue) == original_queue and len(applied_rows) == original_applied:
+        return
+    if cfg.jobs_path.exists() or queue:
+        _write_yaml_jobs(cfg.jobs_path, queue)
+    _write_yaml_jobs(cfg.applied_jobs_path, applied_rows)
+
+
+def append_job(cfg: Config, job: dict) -> None:
+    """Add a job to jobs.yaml so CLI and UI share the same queue."""
+    row = _queue_row(job)
+    if _find_job_index(applied_job_rows(cfg), row) >= 0:
+        return
+    jobs = _load_yaml_jobs(cfg.jobs_path)
+    if _find_job_index(jobs, row) >= 0:
+        return
+    jobs.append(row)
+    _write_yaml_jobs(cfg.jobs_path, jobs)

@@ -3,6 +3,7 @@ config.yaml
 cv_master.md
 cv_master.tex
 jobs.yaml
+applied.yaml
 .env
 .camoufox-profile/
 .cursor/mcp.json

@@ -169,6 +169,7 @@ experience:
 # ---------- Pipeline ----------
 pipeline:
   jobs_file: jobs.yaml
+  applied_file: applied.yaml
   html_template: resumes/template.html
   ats_threshold: 80
   max_attempts: 3
