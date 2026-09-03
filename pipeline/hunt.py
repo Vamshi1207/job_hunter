@@ -377,6 +377,9 @@ async def hunt_and_tailor(
             if output_dir:
                 try:
                     append_job(cfg, job)
+                    from pipeline.jobs import remember_apply_target
+
+                    remember_apply_target(cfg, job)
                 except Exception as exc:
                     log.warning("Could not append jobs.yaml: %s", exc)
                 board.ready(job, output_dir.name, ats_score=_ats_score(output_dir))

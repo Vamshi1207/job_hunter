@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Newsreader:opsz,wght@6..72,500;6..72,600&family=Figtree:wght@400;500;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/app.css?v=board7">
+  <link rel="stylesheet" href="/static/app.css?v=board9">
 </head>
 <body>
   <header class="mast">
@@ -58,6 +58,7 @@
         <div class="board-actions">
           <button type="button" id="refresh" class="ghost">Refresh</button>
           <button type="button" id="stop" class="stop" hidden>Stop</button>
+          <button type="button" id="resolve-apply" class="ghost">Find apply links</button>
           <button type="button" id="hunt">Hunt from profile</button>
         </div>
       </div>
@@ -73,7 +74,7 @@
       </div>
       <details class="apply-helper-wrap" id="apply-helper-wrap">
         <summary>Apply in your browser</summary>
-        <p class="field-note">Apply opens the company form, not the LinkedIn/Indeed posting, when that URL is known. Install the helper once so fields fill themselves. You still click Submit.</p>
+        <p class="field-note">Apply opens the company form when Camoufox can read it from the posting. Easy Apply opens the LinkedIn page. Install the helper once so fields fill themselves. You still click Submit.</p>
         <p class="field-note">Chrome: <code>chrome://extensions</code> → Developer mode → Load unpacked → <code id="helper-path">web/apply-helper</code></p>
         <p class="field-note">Or install the <a id="userscript-link" href="/static/fill-helper.user.js">userscript</a> (Tampermonkey). Drag this <a id="fill-bookmarklet" href="#">Fill this form</a> bookmarklet onto the bookmarks bar as a fallback.</p>
       </details>
@@ -135,6 +136,21 @@
       </article>
     </section>
   </main>
-  <script src="/static/app.js?v=board7"></script>
+  <dialog id="delete-dialog" class="confirm-dialog">
+    <form method="dialog">
+      <h2 id="delete-dialog-title">Delete this package?</h2>
+      <p class="field-note">This removes the tailored folder from applications/.</p>
+      <label class="delete-keep">
+        <input type="checkbox" id="delete-keep">
+        Don't add this job again
+      </label>
+      <p class="field-note" id="delete-keep-note">Checked: it stays in jobs.yaml, so hunt skips it. Unchecked: it is removed from jobs.yaml, so hunt can add it if it finds it again.</p>
+      <div class="actions">
+        <button type="submit" value="cancel" class="ghost">Cancel</button>
+        <button type="submit" value="delete" class="stop">Delete</button>
+      </div>
+    </form>
+  </dialog>
+  <script src="/static/app.js?v=board9"></script>
 </body>
 </html>

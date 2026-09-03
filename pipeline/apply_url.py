@@ -186,11 +186,39 @@ def apply_label(kind: str) -> str:
     return "Apply"
 
 
+def is_resolved_apply(url: str, kind: str = "") -> bool:
+    """True when Apply can open this URL: company form, or LinkedIn Easy Apply."""
+    raw = (url or "").strip()
+    if not raw:
+        return False
+    if (kind or "").strip() == "easy_apply":
+        return True
+    return not is_aggregator_url(raw)
+
+
+def unwrap_outbound_url(url: str) -> str:
+    """Follow LinkedIn/Indeed wrapper URLs to the company form when present."""
+    raw = (url or "").strip()
+    if not raw.startswith("http"):
+        return raw
+    parsed = urlparse(raw.split("#")[0])
+    host = host_of(raw)
+    qs = parse_qs(parsed.query)
+    if "linkedin.com" in host or "lnkd.in" in host:
+        for key in ("url", "dest", "redirectUrl", "redirect_url"):
+            inner = (qs.get(key) or [""])[0]
+            if inner:
+                inner = unquote(inner)
+                if inner.startswith("http") and not is_aggregator_url(inner):
+                    return inner
+    return raw
+
+
 def _clean_extracted(url: str, base: str = "") -> str:
     raw = (url or "").strip()
     if not raw:
         return ""
-    raw = raw.replace("\\u0026", "&").replace("\\/", "/")
+    raw = raw.replace("\\u0026", "&").replace("\\u002f", "/").replace("\\/", "/")
     raw = unquote(raw)
     if raw.startswith("//"):
         raw = "https:" + raw
@@ -201,6 +229,7 @@ def _clean_extracted(url: str, base: str = "") -> str:
     parsed = urlparse(raw.split("#")[0])
     if parsed.scheme not in {"http", "https"}:
         return ""
+    raw = unwrap_outbound_url(urlunparse(parsed))
     return canonicalize_form_url(raw)
 
 
@@ -254,17 +283,19 @@ def _easy_apply_in_html(html: str) -> bool:
         return False
     if re.search(r'"easyApply"\s*:\s*true', blob, re.I):
         return True
+    if re.search(r'"easyApplyEnabled"\s*:\s*true', blob, re.I):
+        return True
+    if re.search(r'"applyType"\s*:\s*"EASY_APPLY"', blob, re.I):
+        return True
     if re.search(r'"indeedApplyEnabled"\s*:\s*true', blob, re.I):
         return True
     if re.search(r'"applyMethod"\s*:\s*\{[^}]{0,200}"@type"\s*:\s*"OnsiteApply"', blob, re.I):
         return True
     soup = BeautifulSoup(blob, "html.parser")
-    for el in soup.select(
-        ".jobs-apply-button, .jobs-apply-button--top-card, "
-        "[data-live-test-job-apply-button], .indeed-apply-button, "
-        ".jobsearch-IndeedApplyButton"
-    ):
+    for el in soup.find_all(["button", "a"]):
         text = f"{el.get('aria-label') or ''} {el.get_text(' ', strip=True)}"
+        if len(text) > 120:
+            continue
         if re.search(r"easy apply|indeed apply", text, re.I):
             return True
     return False

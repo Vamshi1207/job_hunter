@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import tempfile
 import unittest
@@ -410,6 +411,32 @@ class JobsAndPlaybookTests(unittest.TestCase):
             set_job_applied(cfg, {"company": "Acme", "role": "Engineer", "url": "https://example.com/job"}, applied=False)
             self.assertEqual({job["company"] for job in queued_job_rows(cfg)}, {"Open", "Acme"})
             self.assertEqual(applied_job_rows(cfg), [])
+            from pipeline.jobs import forget_job
+
+            forget_job(cfg, {"company": "Acme", "role": "Engineer", "url": "https://example.com/job"})
+            self.assertEqual([job["company"] for job in queued_job_rows(cfg)], ["Open"])
+            from pipeline.jobs import remember_apply_target
+
+            append_job(
+                cfg,
+                {
+                    "company": "Open",
+                    "role": "Engineer",
+                    "url": "https://www.linkedin.com/jobs/view/1",
+                    "jd": "Still open",
+                },
+            )
+            remember_apply_target(
+                cfg,
+                {
+                    "company": "Open",
+                    "role": "Engineer",
+                    "url": "https://www.linkedin.com/jobs/view/1",
+                    "apply_url": "https://www.linkedin.com/jobs/view/1",
+                    "apply_kind": "easy_apply",
+                },
+            )
+            self.assertEqual(queued_job_rows(cfg)[0]["apply_kind"], "easy_apply")
         finally:
             os.environ.pop("JOB_SEARCH_ROOT", None)
             tmp.cleanup()
@@ -1592,6 +1619,25 @@ class HuntTests(unittest.TestCase):
             self.assertEqual(len(chosen), 2)
             self.assertEqual({item["url"] for item in chosen}, {first["url"], second["url"]})
 
+            (root / "jobs.yaml").write_text(
+                "jobs:\n"
+                "  - company: GitLab\n"
+                "    role: Senior Backend Engineer\n"
+                "    url: https://boards.greenhouse.io/gitlab/jobs/999\n"
+                "    jd: 5+ years of Python and Kafka.\n"
+            )
+            from pipeline.search import existing_job_urls
+
+            blocked = {
+                "company": "GitLab",
+                "role": "Senior Backend Engineer",
+                "url": "https://boards.greenhouse.io/gitlab/jobs/999",
+                "location": "Montreal, Canada",
+                "jd": "5+ years of Python and Kafka.",
+            }
+            self.assertIn("https://boards.greenhouse.io/gitlab/jobs/999", existing_job_urls(cfg))
+            self.assertEqual(rank_and_select(cfg, [blocked]), [])
+
             taken = unique_application_dir(cfg, "Acme", "Software Engineer", "2026-08-29", "https://linkedin.com/jobs/view/222")
             self.assertEqual(taken.name, "Acme-Software-Engineer-2026-08-29-222")
             reuse = unique_application_dir(cfg, "Acme", "Software Engineer", "2026-08-29", "https://linkedin.com/jobs/view/111")
@@ -2124,6 +2170,95 @@ class ApplyUrlTests(unittest.TestCase):
         target = extract_apply_from_html(html, posting)
         self.assertEqual(target.apply_kind, "easy_apply")
         self.assertEqual(target.apply_url, posting)
+
+    def test_linkedin_safety_go_unwraps_to_company_form(self):
+        from pipeline.apply_url import extract_apply_from_html, unwrap_outbound_url
+
+        wrapped = "https://www.linkedin.com/safety/go?url=https%3A%2F%2Fjobs.ashbyhq.com%2Facme%2Fuuid"
+        self.assertIn("ashbyhq.com", unwrap_outbound_url(wrapped))
+        html = f'<a href="{wrapped}">Apply on company website</a>'
+        target = extract_apply_from_html(html, "https://www.linkedin.com/jobs/view/4450738702")
+        self.assertEqual(target.apply_kind, "ats")
+        self.assertIn("ashbyhq.com", target.apply_url)
+
+    def test_easy_apply_button_without_json_is_enough(self):
+        from pipeline.apply_url import extract_apply_from_html
+
+        html = '<button class="jobs-apply-button" aria-label="Easy Apply to Engineer at Acme">Easy Apply</button>'
+        posting = "https://www.linkedin.com/jobs/view/4450738702"
+        target = extract_apply_from_html(html, posting)
+        self.assertEqual(target.apply_kind, "easy_apply")
+        self.assertEqual(target.apply_url, posting)
+
+    def test_fill_payload_keeps_linkedin_for_easy_apply(self):
+        from pipeline.fill import package_fill_payload
+
+        tmp = tempfile.TemporaryDirectory()
+        root = Path(tmp.name)
+        (root / "applications").mkdir()
+        (root / "config.yaml").write_text(
+            "user:\n  full_name: Desk Tester\n  preferred_name: Desk\n  email: a@b.c\n"
+        )
+        os.environ["JOB_SEARCH_ROOT"] = str(root)
+        try:
+            cfg = load_config(force=True)
+            folder = root / "applications" / "Acme-Engineer-2026-09-02"
+            folder.mkdir()
+            posting = "https://www.linkedin.com/jobs/view/4450738702"
+            (folder / "job.json").write_text(
+                json.dumps(
+                    {
+                        "company": "Acme",
+                        "role": "Engineer",
+                        "url": posting,
+                        "apply_url": posting,
+                        "apply_kind": "easy_apply",
+                    }
+                )
+            )
+            payload = package_fill_payload(cfg, package_id=folder.name, public_base="http://127.0.0.1:8000")
+            self.assertEqual(payload["apply_kind"], "easy_apply")
+            self.assertIn("linkedin.com", payload["apply_url"])
+        finally:
+            os.environ.pop("JOB_SEARCH_ROOT", None)
+            tmp.cleanup()
+            load_config(force=True)
+
+    def test_packages_needing_apply_url_skips_resolved(self):
+        from pipeline.apply_resolve import packages_needing_apply_url
+
+        tmp = tempfile.TemporaryDirectory()
+        root = Path(tmp.name)
+        apps = root / "applications"
+        apps.mkdir()
+        (root / "config.yaml").write_text("user:\n  full_name: Test User\n")
+        linkedin = apps / "Li-Engineer-2026-09-03"
+        linkedin.mkdir()
+        (linkedin / "job.json").write_text(
+            '{"company":"Li","role":"Engineer","url":"https://www.linkedin.com/jobs/view/1",'
+            '"apply_url":"https://www.linkedin.com/jobs/view/1","apply_kind":"aggregator"}'
+        )
+        easy = apps / "Easy-Engineer-2026-09-03"
+        easy.mkdir()
+        (easy / "job.json").write_text(
+            '{"company":"Easy","role":"Engineer","url":"https://www.linkedin.com/jobs/view/2",'
+            '"apply_url":"https://www.linkedin.com/jobs/view/2","apply_kind":"easy_apply"}'
+        )
+        ats = apps / "Ats-Engineer-2026-09-03"
+        ats.mkdir()
+        (ats / "job.json").write_text(
+            '{"company":"Ats","role":"Engineer","url":"https://boards.greenhouse.io/acme/jobs/1",'
+            '"apply_url":"https://boards.greenhouse.io/acme/jobs/1","apply_kind":"ats"}'
+        )
+        os.environ["JOB_SEARCH_ROOT"] = str(root)
+        try:
+            cfg = load_config(force=True)
+            needed = packages_needing_apply_url(cfg)
+            self.assertEqual([job["package_id"] for job in needed], [linkedin.name])
+        finally:
+            os.environ.pop("JOB_SEARCH_ROOT", None)
+            tmp.cleanup()
+            load_config(force=True)
 
     def test_fill_payload_and_playbook_include_form_url(self):
         from pipeline.fill import package_fill_payload

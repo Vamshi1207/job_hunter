@@ -21,7 +21,14 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from pipeline.config import load_config
-from pipeline.jobs import append_job, apply_pasted_job_text, infer_company_role, listing_has_identity, parse_job_urls
+from pipeline.jobs import (
+    append_job,
+    apply_pasted_job_text,
+    infer_company_role,
+    listing_has_identity,
+    parse_job_urls,
+    remember_apply_target,
+)
 from pipeline.reports import delete_package_dir, list_packages, package_detail, package_file, package_dir
 from pipeline.run_pipeline import process_job
 from pipeline.search import hunt_limit, hunt_locations, preferred_city, target_markets, target_roles
@@ -97,7 +104,35 @@ def _stop_requested(run_id: str) -> bool:
 
 def _browser_busy() -> bool:
     with _run_lock:
-        return any(run.get("status") == "running" for run in _runs.values())
+        _reclaim_finished_runs_locked()
+        return any(
+            run.get("status") in {"running", "stopping"}
+            and run.get("kind") in {"hunt", "run", "resolve"}
+            for run in _runs.values()
+        )
+
+
+def _run_async(factory):
+    """Run a coroutine from a sync FastAPI route, even if a loop is already running."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(factory())
+    result: list = []
+    error: list = []
+
+    def worker() -> None:
+        try:
+            result.append(asyncio.run(factory()))
+        except Exception as exc:
+            error.append(exc)
+
+    thread = threading.Thread(target=worker)
+    thread.start()
+    thread.join()
+    if error:
+        raise error[0]
+    return result[0]
 
 
 def _remember_browser(run_id: str, item: dict) -> None:
@@ -203,6 +238,14 @@ class LaunchApplyRequest(BaseModel):
     url: str = ""
     company: str = ""
     role: str = ""
+
+
+class RememberJobRequest(BaseModel):
+    company: str = ""
+    role: str = ""
+    url: str = ""
+    location: str = ""
+    jd: str = ""
 
 
 class MarkAppliedRequest(BaseModel):
@@ -363,11 +406,43 @@ async def rebuild_pdf(package_id: str) -> dict:
 
 
 @app.delete("/api/packages/{package_id}")
-def delete_package(package_id: str) -> dict:
+def delete_package(package_id: str, keep: bool = False) -> dict:
     cfg = _load_cfg()
+    from pipeline.reports import _job_meta
+
+    folder = package_dir(cfg, package_id)
+    if folder is None:
+        raise HTTPException(status_code=404, detail="Package not found")
+    meta = _job_meta(folder)
     if not delete_package_dir(cfg, package_id):
         raise HTTPException(status_code=404, detail="Package not found")
-    return {"ok": True, "id": package_id}
+    if not keep:
+        try:
+            from pipeline.jobs import forget_job
+
+            forget_job(cfg, meta)
+        except Exception as exc:
+            log.warning("Could not remove deleted job from jobs.yaml: %s", exc)
+    return {"ok": True, "id": package_id, "keep": keep}
+
+
+@app.post("/api/jobs/remember")
+def remember_job(body: RememberJobRequest) -> dict:
+    """Keep a posting in jobs.yaml so hunt will not add it again."""
+    cfg = _load_cfg()
+    if not (body.company or "").strip() and not (body.url or "").strip():
+        raise HTTPException(status_code=400, detail="Need a company or URL to remember.")
+    append_job(
+        cfg,
+        {
+            "company": (body.company or "").strip() or "Unknown",
+            "role": (body.role or "").strip() or "Role",
+            "url": (body.url or "").strip(),
+            "location": (body.location or "").strip(),
+            "jd": (body.jd or "").strip(),
+        },
+    )
+    return {"ok": True}
 
 
 @app.post("/api/packages/{package_id}/applied")
@@ -413,7 +488,7 @@ def package_fill(package_id: str) -> dict:
 def launch_apply(body: LaunchApplyRequest) -> dict:
     """Resolve the form URL, store a fill payload, and return both. Never submits."""
     cfg = _load_cfg()
-    from pipeline.apply_url import is_aggregator_url, is_company_form_url, resolve_apply_from_web
+    from pipeline.apply_url import is_aggregator_url, is_resolved_apply, resolve_apply_from_web
     from pipeline.fill import package_fill_payload
     from pipeline.reports import _job_meta, update_job_meta
 
@@ -434,7 +509,7 @@ def launch_apply(body: LaunchApplyRequest) -> dict:
         job["url"] = posting
     apply_url = (job.get("apply_url") or "").strip()
     apply_kind = (job.get("apply_kind") or "").strip()
-    if not is_company_form_url(apply_url) and apply_kind != "easy_apply":
+    if not is_resolved_apply(apply_url, apply_kind):
         try:
             target = resolve_apply_from_web(posting or apply_url)
             apply_url = target.apply_url or apply_url
@@ -444,21 +519,23 @@ def launch_apply(body: LaunchApplyRequest) -> dict:
         if (
             posting
             and is_aggregator_url(posting)
-            and not is_company_form_url(apply_url)
-            and apply_kind != "easy_apply"
+            and not is_resolved_apply(apply_url, apply_kind)
             and not _browser_busy()
         ):
             try:
                 from pipeline.browser_hunt import resolve_apply_in_browser
 
-                found = asyncio.run(resolve_apply_in_browser(cfg, posting))
+                found = _run_async(lambda: resolve_apply_in_browser(cfg, posting))
                 if found.apply_url:
                     apply_url = found.apply_url
                     apply_kind = found.apply_kind or apply_kind
             except Exception as exc:
                 log.warning("Camoufox could not read the form URL for %s: %s", posting, exc)
+        job["apply_url"] = apply_url
+        job["apply_kind"] = apply_kind
         if folder:
             update_job_meta(folder, apply_url=apply_url, apply_kind=apply_kind)
+        remember_apply_target(cfg, job)
     job["apply_url"] = apply_url
     job["apply_kind"] = apply_kind
     payload = package_fill_payload(
@@ -589,10 +666,32 @@ def stop_run(run_id: str) -> dict:
     return {"id": run_id, "status": "stopping"}
 
 
+@app.post("/api/apply/resolve")
+def start_apply_resolve() -> dict:
+    """Read Apply links for existing packages. Does not rewrite CVs."""
+    if _browser_busy():
+        raise HTTPException(status_code=409, detail="Camoufox is already in use. Stop hunt first.")
+    cfg = _load_cfg()
+    from pipeline.apply_resolve import packages_needing_apply_url
+
+    needed = packages_needing_apply_url(cfg)
+    if not needed:
+        return {"id": None, "count": 0, "line": "Every tailored posting already has an Apply link."}
+    run_id = uuid.uuid4().hex[:10]
+    sink: queue.Queue = queue.Queue()
+    thread = threading.Thread(target=_execute_apply_resolve, args=(run_id, sink), daemon=True)
+    with _run_lock:
+        run = _new_run(run_id, sink, kind="resolve")
+        run["thread"] = thread
+        _runs[run_id] = run
+    thread.start()
+    return {"id": run_id, "count": len(needed)}
+
+
 @app.post("/api/hunt")
 def start_hunt(body: HuntRequest) -> dict:
     with _run_lock:
-        busy = _active_run_locked(kind="hunt")
+        busy = _active_run_locked()
         thread = (busy or {}).get("thread")
         stopping = bool(
             busy
@@ -607,7 +706,7 @@ def start_hunt(body: HuntRequest) -> dict:
         if thread is not None and thread.is_alive():
             thread.join(timeout=8)
         with _run_lock:
-            busy = _active_run_locked(kind="hunt")
+            busy = _active_run_locked()
         if busy:
             raise HTTPException(
                 status_code=409,
@@ -624,6 +723,75 @@ def start_hunt(body: HuntRequest) -> dict:
         _runs[run_id] = run
     thread.start()
     return {"id": run_id, "max_jobs": cap}
+
+
+def _execute_apply_resolve(run_id: str, sink: queue.Queue) -> None:
+    import asyncio as aio
+
+    from pipeline.apply_resolve import resolve_stored_apply_urls
+    from pipeline.apply_url import is_resolved_apply
+
+    handler = QueueLogHandler(sink)
+    root = logging.getLogger()
+    root.addHandler(handler)
+    if root.level > logging.INFO:
+        root.setLevel(logging.INFO)
+    try:
+        sink.put(
+            {
+                "type": "stage",
+                "line": "Reading Apply links on already-tailored postings. CVs are not rewritten. Apply is never clicked.",
+            }
+        )
+        cfg = load_config(force=True)
+
+        def on_event(item: dict) -> None:
+            _emit_run_event(run_id, sink, item)
+
+        async def _run():
+            _bind_run_task(run_id)
+            return await resolve_stored_apply_urls(
+                cfg,
+                on_event=on_event,
+                should_stop=lambda: _stop_requested(run_id),
+            )
+
+        results = aio.run(_run())
+        ready = [
+            item.get("package_id")
+            for item in results
+            if item.get("package_id")
+            and is_resolved_apply(item.get("apply_url") or "", item.get("apply_kind") or "")
+        ]
+        with _run_lock:
+            _runs[run_id]["packages"] = [pid for pid in ready if pid]
+            _runs[run_id]["package_id"] = ready[0] if ready else None
+            stopped = _runs[run_id]["stop"].is_set() or _runs[run_id]["status"] == "stopping"
+            if stopped:
+                _runs[run_id]["status"] = "stopped"
+                _runs[run_id]["error"] = "Stopped"
+            else:
+                _runs[run_id]["status"] = "done"
+        if stopped:
+            sink.put({"type": "stage", "line": "Stopped reading Apply links. Links already found are kept."})
+        else:
+            sink.put(
+                {
+                    "type": "stage",
+                    "line": f"Apply links ready for {len(ready)} posting(s). Easy Apply opens LinkedIn; others open the company form.",
+                }
+            )
+    except aio.CancelledError:
+        _mark_stopped(run_id)
+        sink.put({"type": "stage", "line": "Stopped reading Apply links. Links already found are kept."})
+    except Exception as exc:
+        with _run_lock:
+            _runs[run_id]["status"] = "error"
+            _runs[run_id]["error"] = str(exc)
+        sink.put({"type": "log", "line": f"ERROR: {exc}"})
+    finally:
+        root.removeHandler(handler)
+        sink.put(None)
 
 
 def _execute_run(run_id: str, urls: list[str], body: RunRequest, sink: queue.Queue) -> None:

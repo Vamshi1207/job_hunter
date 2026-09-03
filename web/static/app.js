@@ -43,6 +43,8 @@ function setControls(mode) {
   const running = mode === "running";
   $("hunt").disabled = !idle;
   $("run").disabled = !idle;
+  const resolveBtn = $("resolve-apply");
+  if (resolveBtn) resolveBtn.disabled = !idle;
   $("stop").hidden = idle;
   $("stop").disabled = !running;
   $("stop").textContent = running || idle ? "Stop" : "Stopping…";
@@ -381,7 +383,30 @@ function bindDelete(tr, packageId, liveRow) {
   btn.addEventListener("click", async (ev) => {
     ev.preventDefault();
     ev.stopPropagation();
+    const who = liveRow
+      ? `${liveRow.company || ""} — ${liveRow.role || ""}`
+      : packageId || btn.dataset.id || "this package";
+    const choice = await askDelete(who.trim() || "this package");
+    if (!choice.ok) return;
     if (btn.dataset.forget) {
+      if (choice.keep && liveRow) {
+        try {
+          await api("/api/jobs/remember", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              company: liveRow.company || "",
+              role: liveRow.role || "",
+              url: liveRow.url || "",
+              location: liveRow.location || "",
+              jd: liveRow.jd || "",
+            }),
+          });
+        } catch (err) {
+          setStrip(err.message);
+          return;
+        }
+      }
       if (liveRow) {
         state.jobs = state.jobs.filter((row) => row !== liveRow && jobKey(row) !== jobKey(liveRow));
       }
@@ -390,14 +415,9 @@ function bindDelete(tr, packageId, liveRow) {
     }
     const id = packageId || btn.dataset.id;
     if (!id) return;
-    const who = liveRow
-      ? `${liveRow.company || ""} — ${liveRow.role || ""}`
-      : id;
-    if (!window.confirm(`Delete ${who.trim() || id}? This removes the folder from applications/.`)) {
-      return;
-    }
     try {
-      await api("/api/packages/" + encodeURIComponent(id), { method: "DELETE" });
+      const path = "/api/packages/" + encodeURIComponent(id) + (choice.keep ? "?keep=true" : "");
+      await api(path, { method: "DELETE" });
       state.jobs = state.jobs.filter((row) => row.package_id !== id);
       if (state.activeId === id) {
         state.activeId = null;
@@ -407,6 +427,26 @@ function bindDelete(tr, packageId, liveRow) {
     } catch (err) {
       setStrip(err.message);
     }
+  });
+}
+
+function askDelete(who) {
+  const dialog = $("delete-dialog");
+  const keep = $("delete-keep");
+  const title = $("delete-dialog-title");
+  if (!dialog || !keep || typeof dialog.showModal !== "function") {
+    const ok = window.confirm(`Delete ${who}? This removes the folder from applications/.`);
+    return Promise.resolve({ ok, keep: ok && window.confirm("Don't add this job again? It will stay in jobs.yaml so hunt skips it.") });
+  }
+  keep.checked = false;
+  title.textContent = `Delete ${who}?`;
+  return new Promise((resolve) => {
+    const onClose = () => {
+      dialog.removeEventListener("close", onClose);
+      resolve({ ok: dialog.returnValue === "delete", keep: keep.checked });
+    };
+    dialog.addEventListener("close", onClose);
+    dialog.showModal();
   });
 }
 
@@ -524,13 +564,13 @@ function bindApply(tr) {
         btn.textContent = applyKindLabel(kind);
         setStrip(
           kind === "easy_apply"
-            ? "This posting is LinkedIn Easy Apply — that is the form. If the helper is installed, matching fields fill themselves. You click Submit."
+            ? "This posting is Easy Apply — opened the LinkedIn job page. If the helper is installed, matching fields fill themselves. You click Submit."
             : "Opened the company form, not the LinkedIn posting. If the helper is installed, matching fields fill themselves. You click Submit. Mark applied when you have submitted."
         );
       } else {
         btn.textContent = label;
         setStrip(
-          "No company form URL yet. LinkedIn hid it on the public page. Open Posting while signed in, or hunt again so Camoufox can read the Apply link. Apply never opens the LinkedIn listing."
+          "No Apply link yet. Use Find apply links so Camoufox can read Easy Apply vs the company form. Apply is never clicked for you."
         );
       }
     } catch (err) {
@@ -990,7 +1030,7 @@ function watchRun(runId, mode) {
       }
       if (data.type === "processing" && (data.company || data.role)) {
         upsertJob({ ...data, status: data.status || "working" });
-        $("run-state").textContent = "tailoring";
+        $("run-state").textContent = data.detail || "tailoring";
         renderBoard(state.activeId);
       }
       if (data.type === "package") {
@@ -1059,6 +1099,27 @@ $("hunt").addEventListener("click", async () => {
     setControls("idle");
   }
 });
+const resolveApplyBtn = $("resolve-apply");
+if (resolveApplyBtn) {
+  resolveApplyBtn.addEventListener("click", async () => {
+    setControls("running");
+    try {
+      const run = await api("/api/apply/resolve", { method: "POST" });
+      if (!run.id) {
+        setStrip(run.line || "Every tailored posting already has an Apply link.");
+        setControls("idle");
+        return;
+      }
+      state.runId = run.id;
+      watchRun(run.id);
+      setStrip(`Reading Apply links for ${run.count} posting(s). CVs are not rewritten.`);
+    } catch (err) {
+      setStrip(err.message);
+      setLamp("");
+      setControls("idle");
+    }
+  });
+}
 $("stop").addEventListener("click", async () => {
   if (!state.runId) return;
   setControls("stopping");

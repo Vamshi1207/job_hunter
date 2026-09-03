@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import tempfile
 import unittest
@@ -86,6 +87,10 @@ class DeskAPITests(unittest.TestCase):
         self.assertIn("apply-helper-wrap", res.text)
         self.assertIn("board-tabs", res.text)
         self.assertIn('id="tab-applied"', res.text)
+        self.assertIn("delete-dialog", res.text)
+        self.assertIn("delete-keep", res.text)
+        self.assertIn("resolve-apply", res.text)
+        self.assertIn("Find apply links", res.text)
 
     def test_static_js_reconnects_and_opens_camoufox(self):
         js = (Path(__file__).resolve().parent / "static" / "app.js").read_text()
@@ -102,6 +107,11 @@ class DeskAPITests(unittest.TestCase):
         self.assertIn("board-search", js)
         self.assertIn("/api/packages/", js)
         self.assertIn("/applied", js)
+        self.assertIn("function askDelete", js)
+        self.assertIn("keep=true", js)
+        self.assertIn("/api/jobs/remember", js)
+        self.assertIn("/api/apply/resolve", js)
+        self.assertIn("Find apply links", (Path(__file__).resolve().parent / "static" / "index.html").read_text())
         self.assertIn("heldUntilRefresh", js)
         self.assertIn("applied-stamp", js)
         self.assertIn("displayTab", js)
@@ -169,6 +179,34 @@ class DeskAPITests(unittest.TestCase):
         self.assertEqual(deleted.status_code, 200)
         self.assertFalse(folder.exists())
         self.assertEqual(self.client.get(f"/api/packages/{folder.name}").status_code, 404)
+
+    def test_delete_package_can_keep_or_drop_jobs_yaml_row(self):
+        import yaml
+
+        folder = self._package()
+        (self.root / "jobs.yaml").write_text(
+            "jobs:\n"
+            "  - company: Acme\n"
+            "    role: Software Engineer\n"
+            "    url: https://example.com/job\n"
+            "    jd: Python\n"
+            "  - company: Other\n"
+            "    role: Engineer\n"
+            "    jd: Still open\n"
+        )
+        kept = self.client.delete(f"/api/packages/{folder.name}?keep=true")
+        self.assertEqual(kept.status_code, 200)
+        self.assertTrue(kept.json()["keep"])
+        queue = yaml.safe_load((self.root / "jobs.yaml").read_text())["jobs"]
+        self.assertEqual({row["company"] for row in queue}, {"Acme", "Other"})
+        self.assertFalse(folder.exists())
+
+        folder = self._package()
+        dropped = self.client.delete(f"/api/packages/{folder.name}")
+        self.assertEqual(dropped.status_code, 200)
+        self.assertFalse(dropped.json()["keep"])
+        queue = yaml.safe_load((self.root / "jobs.yaml").read_text())["jobs"]
+        self.assertEqual([row["company"] for row in queue], ["Other"])
 
     def test_mark_package_applied(self):
         folder = self._package()
@@ -247,6 +285,56 @@ class DeskAPITests(unittest.TestCase):
         body = res.json()
         self.assertIn("greenhouse.io", body["apply_url"])
         self.assertNotIn("linkedin.com", body["apply_url"])
+
+    def test_apply_launch_opens_linkedin_for_easy_apply(self):
+        from unittest.mock import AsyncMock
+
+        from pipeline.apply_url import ApplyTarget
+
+        folder = self._package()
+        posting = "https://www.linkedin.com/jobs/view/123"
+        (folder / "job.json").write_text(
+            json.dumps(
+                {
+                    "company": "Acme",
+                    "role": "Software Engineer",
+                    "url": posting,
+                }
+            )
+        )
+        with patch(
+            "pipeline.apply_url.resolve_apply_from_web",
+            return_value=ApplyTarget(posting, "aggregator", "web"),
+        ), patch(
+            "pipeline.browser_hunt.resolve_apply_in_browser",
+            new_callable=AsyncMock,
+            return_value=ApplyTarget(posting, "easy_apply", "camoufox"),
+        ), patch("web.app._browser_busy", return_value=False):
+            res = self.client.post("/api/apply/launch", json={"package_id": folder.name})
+        self.assertEqual(res.status_code, 200)
+        body = res.json()
+        self.assertEqual(body["apply_kind"], "easy_apply")
+        self.assertIn("linkedin.com", body["apply_url"])
+        meta = json.loads((folder / "job.json").read_text())
+        self.assertEqual(meta["apply_kind"], "easy_apply")
+
+    def test_apply_resolve_starts_run_for_unresolved_linkedin(self):
+        folder = self._package()
+        (folder / "job.json").write_text(
+            '{"company": "Acme", "role": "Software Engineer",'
+            ' "url": "https://www.linkedin.com/jobs/view/123",'
+            ' "apply_url": "https://www.linkedin.com/jobs/view/123",'
+            ' "apply_kind": "aggregator"}'
+        )
+        with patch("web.app.threading.Thread") as thread_cls:
+            mock_thread = thread_cls.return_value
+            mock_thread.ident = 21
+            mock_thread.is_alive.return_value = True
+            res = self.client.post("/api/apply/resolve")
+        self.assertEqual(res.status_code, 200)
+        body = res.json()
+        self.assertTrue(body["id"])
+        self.assertEqual(body["count"], 1)
 
     def test_apply_launch_does_not_return_linkedin_listing(self):
         from unittest.mock import AsyncMock

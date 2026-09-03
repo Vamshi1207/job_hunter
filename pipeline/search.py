@@ -771,12 +771,17 @@ def unique_application_dir(cfg: Config, company: str, role: str, date_str: str, 
 def existing_job_urls(cfg: Config) -> set[str]:
     urls: set[str] = set()
     apps = cfg.applications_dir
-    if not apps.is_dir():
-        return urls
-    for folder in apps.iterdir():
-        if not folder.is_dir() or folder.name.startswith(".") or folder.name.startswith("_"):
-            continue
-        norm = _folder_job_url(folder)
+    if apps.is_dir():
+        for folder in apps.iterdir():
+            if not folder.is_dir() or folder.name.startswith(".") or folder.name.startswith("_"):
+                continue
+            norm = _folder_job_url(folder)
+            if norm:
+                urls.add(norm)
+    from pipeline.jobs import applied_job_rows, queued_job_rows
+
+    for entry in queued_job_rows(cfg) + applied_job_rows(cfg):
+        norm = _norm_job_url(str(entry.get("url") or ""))
         if norm:
             urls.add(norm)
     return urls

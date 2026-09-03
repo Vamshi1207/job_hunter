@@ -1224,20 +1224,14 @@ async def _extract_posting(page, cfg: Config, source: dict, url: str, delay_ms: 
         or [".job-details-jobs-unified-top-card__bullet", ".jobsearch-JobInfoHeader-subtitle", "[data-testid='job-location']"],
     )
     loc = loc or meta.get("location") or hunt_location(cfg)
-    from pipeline.apply_url import extract_apply_from_html, is_aggregator_url, is_ats_form_url
-
-    apply = extract_apply_from_html(html, final_url)
+    await _wait_for_apply_controls(page, delay_ms)
+    try:
+        html = await page.content()
+    except Exception as exc:
+        _raise_if_cancelled(exc)
+    apply = await apply_target_from_page(page, final_url, html=html)
     apply_url = apply.apply_url
     apply_kind = apply.apply_kind
-    href = await _apply_href_from_page(page)
-    if href and not is_aggregator_url(href):
-        apply_url = href
-        apply_kind = "ats" if is_ats_form_url(href) else "company"
-    elif href and (not apply_url or is_aggregator_url(apply_url)):
-        followed = await _follow_apply_href(page, href)
-        if followed and not is_aggregator_url(followed):
-            apply_url = followed
-            apply_kind = "ats" if is_ats_form_url(followed) else "company"
     listing = {
         "company": (company or "Unknown").strip(),
         "role": title.strip()[:160],
@@ -1269,8 +1263,19 @@ def _company_from_host(url: str) -> str:
     return ""
 
 
-_APPLY_HREF_JS = """() => {
-  const unescapeUrl = (value) => String(value || "").replace(/\\\\u0026/g, "&").replace(/\\\\//g, "/");
+_APPLY_READY_JS = """() => {
+  const text = document.body ? document.body.innerText : "";
+  if (/easy apply/i.test(text) || /apply on company/i.test(text)) return true;
+  return Boolean(document.querySelector(
+    ".jobs-apply-button, [data-live-test-job-apply-button], .indeed-apply-button, .jobsearch-IndeedApplyButton"
+  ));
+}"""
+
+_APPLY_TARGET_JS = """() => {
+  const unescapeUrl = (value) => String(value || "")
+    .replace(/\\\\u0026/g, "&")
+    .replace(/\\\\u002f/g, "/")
+    .replace(/\\\\//g, "/");
   const hostOf = (value) => {
     try { return new URL(value).hostname.replace(/^www\\./, "").toLowerCase(); }
     catch { return ""; }
@@ -1279,48 +1284,137 @@ _APPLY_HREF_JS = """() => {
     const host = hostOf(value);
     return Boolean(host) && !/(^|\\.)linkedin\\.com$|(^|\\.)indeed\\./i.test(host);
   };
+  const unwrap = (value) => {
+    const raw = unescapeUrl(value);
+    try {
+      const parsed = new URL(raw);
+      const host = hostOf(raw);
+      if (/(^|\\.)linkedin\\.com$|(^|\\.)lnkd\\.in$/i.test(host)) {
+        const inner = parsed.searchParams.get("url") || parsed.searchParams.get("dest") || parsed.searchParams.get("redirectUrl");
+        if (inner && inner.startsWith("http") && offsite(inner)) return inner;
+      }
+    } catch {}
+    return raw;
+  };
   const html = document.documentElement ? document.documentElement.innerHTML : "";
-  const keyRe = /"(?:companyApplyUrl|companyApplicationUrl|externalApplyUrl|applyStartUrl|applyConnectUrl|jobApplyUrl)"\\s*:\\s*"(https?:[^"]+)"/gi;
-  let match;
-  while ((match = keyRe.exec(html))) {
-    const href = unescapeUrl(match[1]);
-    if (offsite(href)) return href;
-  }
-  const voyager = html.match(/OffsiteApply"\\s*:\\s*\\{[\\s\\S]{0,1500}?"(?:companyApplyUrl|companyApplicationUrl|applyUrl)"\\s*:\\s*"(https?:[^"]+)"/i);
-  if (voyager && offsite(unescapeUrl(voyager[1]))) return unescapeUrl(voyager[1]);
   const textOf = (el) =>
     `${el.getAttribute("aria-label") || ""} ${el.textContent || ""}`.replace(/\\s+/g, " ").trim();
   const isApply = (text) =>
     /^(easy apply|apply now|apply on company website|apply)$/i.test(text) ||
     /apply on company/i.test(text);
-  for (const a of document.querySelectorAll("a[href]")) {
-    const href = a.href || "";
-    if (!href || /^(javascript:|#)/i.test(href)) continue;
-    if (offsite(href) && (isApply(textOf(a)) || /apply/i.test(a.className || ""))) return href;
+  let href = "";
+  let easyApply = false;
+  for (const el of document.querySelectorAll("button, a, [role='button']")) {
+    const text = textOf(el);
+    if (text.length > 120) continue;
+    if (/easy apply|indeed apply/i.test(text)) easyApply = true;
   }
-  for (const a of document.querySelectorAll("a[href]")) {
-    const href = a.href || "";
-    if (!href || /^(javascript:|#)/i.test(href)) continue;
-    if (isApply(textOf(a))) return href;
+  const keyRe = /"(?:companyApplyUrl|companyApplicationUrl|externalApplyUrl|applyStartUrl|applyConnectUrl|jobApplyUrl)"\\s*:\\s*"(https?:[^"]+)"/gi;
+  let match;
+  while ((match = keyRe.exec(html))) {
+    const found = unwrap(match[1]);
+    if (offsite(found)) { href = found; break; }
   }
-  const code = document.querySelector("code#applyUrl, code[id*='applyUrl' i]");
-  if (code) {
-    const raw = (code.innerHTML || code.textContent || "").replace(/<!--\\s*"?|\\s*"?-->/g, " ").trim();
-    const href = unescapeUrl(raw.split(/\\s+/)[0]);
-    if (href.startsWith("http")) return href;
+  if (!href) {
+    const voyager = html.match(/OffsiteApply"\\s*:\\s*\\{[\\s\\S]{0,1500}?"(?:companyApplyUrl|companyApplicationUrl|applyUrl)"\\s*:\\s*"(https?:[^"]+)"/i);
+    if (voyager && offsite(unwrap(voyager[1]))) href = unwrap(voyager[1]);
   }
-  return "";
+  if (!href) {
+    for (const a of document.querySelectorAll("a[href]")) {
+      const found = unwrap(a.href || "");
+      if (!found || /^(javascript:|#)/i.test(found)) continue;
+      if (offsite(found) && (isApply(textOf(a)) || /apply/i.test(a.className || ""))) {
+        href = found;
+        break;
+      }
+    }
+  }
+  if (!href) {
+    for (const a of document.querySelectorAll("a[href]")) {
+      const found = unwrap(a.href || "");
+      if (!found || /^(javascript:|#)/i.test(found)) continue;
+      if (isApply(textOf(a))) { href = found; break; }
+    }
+  }
+  if (!href) {
+    const code = document.querySelector("code#applyUrl, code[id*='applyUrl' i]");
+    if (code) {
+      const raw = (code.innerHTML || code.textContent || "").replace(/<!--\\s*"?|\\s*"?-->/g, " ").trim();
+      const found = unwrap(raw.split(/\\s+/)[0]);
+      if (found.startsWith("http")) href = found;
+    }
+  }
+  return { href, easyApply };
 }"""
+
+
+async def _wait_for_apply_controls(page, delay_ms: int) -> None:
+    """Wait for LinkedIn/Indeed Apply to hydrate. Never clicks it."""
+    timeout = max(5000, int(delay_ms or 0) * 3)
+    try:
+        await page.wait_for_function(_APPLY_READY_JS, timeout=timeout)
+    except Exception as exc:
+        _raise_if_cancelled(exc)
+    await _pause_ms(max(300, min(int(delay_ms or 0), 1200)))
+
+
+async def _apply_live_from_page(page) -> dict:
+    try:
+        raw = await page.evaluate(_APPLY_TARGET_JS)
+    except Exception as exc:
+        _raise_if_cancelled(exc)
+        return {"href": "", "easyApply": False}
+    if isinstance(raw, dict):
+        return {
+            "href": str(raw.get("href") or "").strip(),
+            "easyApply": bool(raw.get("easyApply")),
+        }
+    return {"href": str(raw or "").strip(), "easyApply": False}
 
 
 async def _apply_href_from_page(page) -> str:
     """Read the Apply link href. Never clicks it."""
-    try:
-        href = str(await page.evaluate(_APPLY_HREF_JS) or "").strip()
-    except Exception as exc:
-        _raise_if_cancelled(exc)
-        return ""
-    return href
+    return str((await _apply_live_from_page(page)).get("href") or "").strip()
+
+
+async def apply_target_from_page(page, posting_url: str, html: str = ""):
+    """Read Easy Apply vs company form from the live page. Never clicks Apply."""
+    from pipeline.apply_url import (
+        ApplyTarget,
+        canonicalize_form_url,
+        extract_apply_from_html,
+        is_aggregator_url,
+        is_ats_form_url,
+        unwrap_outbound_url,
+    )
+
+    posting = (posting_url or "").strip()
+    blob = html or ""
+    if not blob:
+        try:
+            blob = await page.content()
+        except Exception as exc:
+            _raise_if_cancelled(exc)
+            blob = ""
+    target = extract_apply_from_html(blob, posting)
+    live = await _apply_live_from_page(page)
+    href = unwrap_outbound_url(live.get("href") or "")
+    if href and not is_aggregator_url(href):
+        kind = "ats" if is_ats_form_url(href) else "company"
+        return ApplyTarget(canonicalize_form_url(href), kind, "camoufox")
+    if href and (not target.apply_url or is_aggregator_url(target.apply_url)):
+        followed = await _follow_apply_href(page, href)
+        followed = unwrap_outbound_url(followed)
+        if followed and not is_aggregator_url(followed):
+            kind = "ats" if is_ats_form_url(followed) else "company"
+            return ApplyTarget(canonicalize_form_url(followed), kind, "camoufox")
+    if target.apply_kind in {"ats", "company"} and target.apply_url and not is_aggregator_url(target.apply_url):
+        return ApplyTarget(target.apply_url, target.apply_kind, "camoufox")
+    if live.get("easyApply") or target.apply_kind == "easy_apply":
+        return ApplyTarget(posting, "easy_apply", "camoufox")
+    if target.apply_url and not is_aggregator_url(target.apply_url):
+        return target
+    return target
 
 
 async def _follow_apply_href(page, url: str) -> str:
@@ -1338,51 +1432,119 @@ async def _follow_apply_href(page, url: str) -> str:
         return ""
 
 
+async def _open_posting_for_apply(page, cfg: Config, url: str, delay_ms: int) -> str:
+    """Navigate to a posting and wait for Apply. Empty string if stop/login-fail."""
+    raw = (url or "").strip()
+    if not raw.startswith("http"):
+        return ""
+    await page.goto(raw, wait_until="domcontentloaded", timeout=45000)
+    if await _pause_ms(max(400, delay_ms)):
+        return ""
+    if await _needs_login(page):
+        await _try_configured_login(page, cfg, delay_ms)
+        wait = int(cfg.get("hunt.browser.login_wait_seconds", 300) or 0)
+        if await _needs_login(page):
+            await _wait_for_manual_auth(
+                page,
+                wait,
+                "Sign in or extra verification — use the Camoufox panel",
+            )
+        if _stopped() or await _needs_login(page):
+            return ""
+        await page.goto(raw, wait_until="domcontentloaded", timeout=45000)
+        if await _pause_ms(max(400, delay_ms)):
+            return ""
+    await _wait_for_apply_controls(page, delay_ms)
+    return (page.url or raw).strip()
+
+
 async def resolve_apply_in_browser(cfg: Config, url: str):
-    """Open a signed-in posting and read the company form URL. Never clicks Apply."""
-    from pipeline.apply_url import ApplyTarget, canonicalize_form_url, extract_apply_from_html, is_aggregator_url, is_ats_form_url
+    """Open a signed-in posting and read Easy Apply or the company form. Never clicks Apply."""
+    from pipeline.apply_url import ApplyTarget
 
     raw = (url or "").strip()
     if not raw.startswith("http"):
         return ApplyTarget("", "unknown", "")
+    results = await resolve_apply_jobs_in_browser(cfg, [{"url": raw}])
+    if results:
+        item = results[0]
+        return ApplyTarget(item.get("apply_url") or "", item.get("apply_kind") or "unknown", "camoufox")
+    return ApplyTarget("", "unknown", "")
+
+
+async def resolve_apply_jobs_in_browser(
+    cfg: Config,
+    jobs: list[dict],
+    on_progress=None,
+    on_stage=None,
+    should_stop=None,
+) -> list[dict]:
+    """Visit each posting once and read Apply. Does not tailor CVs or click Apply."""
+    from pipeline.apply_url import ApplyTarget
+
+    listing_token = _on_listing.set(None)
+    stage_token = _on_stage.set(on_stage)
+    stop_token = _should_stop.set(should_stop)
+    pending = [dict(job) for job in jobs if str(job.get("url") or "").startswith("http")]
+    if not pending:
+        _on_listing.reset(listing_token)
+        _on_stage.reset(stage_token)
+        _should_stop.reset(stop_token)
+        return []
     try:
         from camoufox.async_api import AsyncCamoufox
     except ImportError:
-        return ApplyTarget("", "unknown", "")
+        log.error("Camoufox is not installed. Run: python3 -m pip install camoufox && python3 -m camoufox fetch")
+        _on_listing.reset(listing_token)
+        _on_stage.reset(stage_token)
+        _should_stop.reset(stop_token)
+        return []
     delay_ms = int(cfg.get("hunt.browser.page_delay_ms", 1500) or 1500)
     launch = _camoufox_launch(cfg)
+    out: list[dict] = []
     try:
+        _notify_stage("Opening job pages in Camoufox to read Apply links")
         async with AsyncCamoufox(**launch) as session:
             page = await session.new_page()
-            await page.goto(raw, wait_until="domcontentloaded", timeout=45000)
-            if await _pause_ms(max(400, delay_ms)):
-                return ApplyTarget("", "unknown", "")
-            if await _needs_login(page):
-                await _try_configured_login(page, cfg, delay_ms)
-                if await _needs_login(page):
-                    return ApplyTarget("", "unknown", "login")
-                await page.goto(raw, wait_until="domcontentloaded", timeout=45000)
-                if await _pause_ms(max(400, delay_ms)):
-                    return ApplyTarget("", "unknown", "")
-            html = await page.content()
-            final = page.url or raw
-            target = extract_apply_from_html(html, final)
-            href = await _apply_href_from_page(page)
-            if href and not is_aggregator_url(href):
-                kind = "ats" if is_ats_form_url(href) else "company"
-                return ApplyTarget(canonicalize_form_url(href), kind, "camoufox")
-            if href and (not target.apply_url or is_aggregator_url(target.apply_url)):
-                followed = await _follow_apply_href(page, href)
-                if followed and not is_aggregator_url(followed):
-                    kind = "ats" if is_ats_form_url(followed) else "company"
-                    return ApplyTarget(canonicalize_form_url(followed), kind, "camoufox")
-            if target.apply_url and not is_aggregator_url(target.apply_url):
-                return ApplyTarget(target.apply_url, target.apply_kind or "company", "camoufox")
-            return target
+            for job in pending:
+                if _stopped():
+                    break
+                raw = (job.get("url") or "").strip()
+                if on_progress:
+                    try:
+                        on_progress(job, None)
+                    except Exception as exc:
+                        _raise_if_cancelled(exc)
+                try:
+                    final = await _open_posting_for_apply(page, cfg, raw, delay_ms)
+                    if not final:
+                        target = ApplyTarget("", "unknown", "login" if await _needs_login(page) else "")
+                    else:
+                        target = await apply_target_from_page(page, final)
+                except Exception as exc:
+                    _raise_if_cancelled(exc)
+                    log.info("Browser apply resolve failed for %s: %s", raw, exc)
+                    target = ApplyTarget("", "unknown", "")
+                item = {
+                    **job,
+                    "apply_url": target.apply_url,
+                    "apply_kind": target.apply_kind,
+                }
+                out.append(item)
+                if on_progress:
+                    try:
+                        on_progress(item, target)
+                    except Exception as exc:
+                        _raise_if_cancelled(exc)
+        return out
     except Exception as exc:
         _raise_if_cancelled(exc)
-        log.info("Browser apply resolve failed for %s: %s", raw, exc)
-        return ApplyTarget("", "unknown", "")
+        log.info("Browser apply resolve failed: %s", exc)
+        return out
+    finally:
+        _on_listing.reset(listing_token)
+        _on_stage.reset(stage_token)
+        _should_stop.reset(stop_token)
 
 
 async def _first_text(page, selectors: list[str]) -> str:

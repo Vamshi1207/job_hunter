@@ -89,12 +89,11 @@ def package_fill_payload(
     apply_url = (meta.get("apply_url") or "").strip()
     posting = (meta.get("url") or "").strip()
     kind = (meta.get("apply_kind") or "").strip()
-    if apply_url:
-        from pipeline.apply_url import is_aggregator_url
+    from pipeline.apply_url import is_resolved_apply
 
-        if is_aggregator_url(apply_url) and kind != "easy_apply":
-            apply_url = ""
-    elif kind == "easy_apply":
+    if apply_url and not is_resolved_apply(apply_url, kind):
+        apply_url = ""
+    elif not apply_url and kind == "easy_apply":
         apply_url = posting
     return {
         "package_id": package_id,

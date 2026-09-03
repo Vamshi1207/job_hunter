@@ -662,6 +662,23 @@ def sync_applied_jobs(cfg: Config) -> None:
     _write_yaml_jobs(cfg.applied_jobs_path, applied_rows)
 
 
+def forget_job(cfg: Config, job: dict) -> None:
+    """Drop a posting from jobs.yaml and applied.yaml so hunt can add it again."""
+    queue = _load_yaml_jobs(cfg.jobs_path)
+    applied_rows = _load_yaml_jobs(cfg.applied_jobs_path)
+    changed = False
+    if _pop_job(queue, job) is not None:
+        changed = True
+    if _pop_job(applied_rows, job) is not None:
+        changed = True
+    if not changed:
+        return
+    if cfg.jobs_path.exists() or queue:
+        _write_yaml_jobs(cfg.jobs_path, queue)
+    if cfg.applied_jobs_path.exists() or applied_rows:
+        _write_yaml_jobs(cfg.applied_jobs_path, applied_rows)
+
+
 def append_job(cfg: Config, job: dict) -> None:
     """Add a job to jobs.yaml so CLI and UI share the same queue."""
     row = _queue_row(job)
@@ -672,3 +689,25 @@ def append_job(cfg: Config, job: dict) -> None:
         return
     jobs.append(row)
     _write_yaml_jobs(cfg.jobs_path, jobs)
+
+
+def remember_apply_target(cfg: Config, job: dict) -> None:
+    """Write apply_url / apply_kind onto a matching jobs.yaml or applied.yaml row."""
+    apply_url = (job.get("apply_url") or "").strip()
+    apply_kind = (job.get("apply_kind") or "").strip()
+    if not apply_url and not apply_kind:
+        return
+    for path in (cfg.jobs_path, cfg.applied_jobs_path):
+        rows = _load_yaml_jobs(path)
+        index = _find_job_index(rows, job)
+        if index < 0:
+            continue
+        changed = False
+        if apply_url and rows[index].get("apply_url") != apply_url:
+            rows[index]["apply_url"] = apply_url
+            changed = True
+        if apply_kind and rows[index].get("apply_kind") != apply_kind:
+            rows[index]["apply_kind"] = apply_kind
+            changed = True
+        if changed:
+            _write_yaml_jobs(path, rows)
