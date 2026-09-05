@@ -15,12 +15,33 @@ The desk, hunt, Camoufox, and tailor all run **inside Docker**. Do not start uvi
 The Job Search Pipeline is an automated, containerized job discovery, tailoring, and application-prep platform. It operates strictly on a **human-in-the-loop** model: it automates discovery, stack evaluation, CV customization, ATS scoring, and form autofill, but **never clicks Submit**.
 
 <p align="center">
-  <a href="docs/architecture/job-search-runtime.html">
-    <img src="docs/architecture/job-search-runtime.png" alt="Job Search Pipeline Architecture Map (Archify)" width="100%"/>
+  <a href="docs/architecture/job-search-runtime.png">
+    <img src="docs/architecture/job-search-runtime.png" alt="Job Search Pipeline Architecture Map (Dark Theme)" width="100%"/>
   </a>
   <br/>
-  <sub>Interactive runtime map (compiled with <a href="https://github.com/tt-a1i/archify">Archify</a>): open <a href="docs/architecture/job-search-runtime.html"><code>docs/architecture/job-search-runtime.html</code></a> in a browser for interactive views, source links, and route probing. Typed source: <a href="docs/architecture/job-search-runtime.architecture.json"><code>docs/architecture/job-search-runtime.architecture.json</code></a>.</sub>
+  <em>🔍 <b>Click the diagram to view in full resolution (2048×1320) or right-click to save.</b></em>
 </p>
+
+<p align="center">
+  <a href="docs/architecture/job-search-runtime.png"><b>Dark Theme (2048×1320 PNG)</b></a> ·
+  <a href="docs/architecture/job-search-runtime-light.png"><b>Light Theme (2048×1320 PNG)</b></a> ·
+  <a href="docs/architecture/job-search-runtime.html"><b>Interactive Runtime Map (HTML)</b></a> ·
+  <a href="docs/architecture/job-search-runtime.architecture.json"><b>Typed Source (JSON)</b></a>
+</p>
+
+<details>
+<summary><b>☀️ View Light Theme Architecture Diagram</b></summary>
+<p align="center">
+  <a href="docs/architecture/job-search-runtime-light.png">
+    <img src="docs/architecture/job-search-runtime-light.png" alt="Job Search Pipeline Architecture Map (Light Theme)" width="100%"/>
+  </a>
+  <br/>
+  <em>🔍 <b>Click the diagram to view in full resolution (2048×1320) or right-click to save.</b></em>
+</p>
+</details>
+
+<details>
+<summary><b>📐 View Mermaid Component Topology</b></summary>
 
 ```mermaid
 graph TB
@@ -101,6 +122,8 @@ graph TB
   Exporting --> Packages
   FastAPI --> AnswerCache
 ```
+
+</details>
 
 ### Core Subsystems
 
