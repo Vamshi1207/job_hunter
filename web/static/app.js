@@ -9,7 +9,7 @@ const state = {
   hunt: { max_jobs: 0, roles: [], markets: [], search_locations: [], preferred_city: "" },
   huntStage: "",
   camoufoxUrl: "http://127.0.0.1:6080/vnc.html?autoconnect=1&resize=scale",
-  helperPath: "web/apply-helper",
+  helperPath: "extension",
   board: { query: "", sortKey: "modified", sortDir: "desc", tab: "queue" },
   heldUntilRefresh: new Map(),
 };
@@ -389,9 +389,10 @@ function bindDelete(tr, packageId, liveRow) {
     const choice = await askDelete(who.trim() || "this package");
     if (!choice.ok) return;
     if (btn.dataset.forget) {
-      if (choice.keep && liveRow) {
+      if (liveRow) {
         try {
-          await api("/api/jobs/remember", {
+          const endpoint = choice.keep ? "/api/jobs/remember" : "/api/jobs/delete";
+          await api(endpoint, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -517,6 +518,7 @@ function applyCell(row, pkg) {
         <input type="checkbox" class="mark-applied" data-id="${escapeAttr(id)}" ${applied ? "checked" : ""} aria-label="${applied ? "Undo applied" : "Mark applied"}">
         <span class="applied-box" aria-hidden="true"><span class="applied-tick"></span></span>
         <span class="applied-text">Applied</span>
+        <span class="applied-timer" aria-live="polite"></span>
       </label>`
     : "";
   return `<div class="apply-cell">
@@ -524,6 +526,165 @@ function applyCell(row, pkg) {
     ${caption}
     ${mark}
   </div>`;
+}
+
+const activeApplyTimers = new Map();
+
+function scheduleAutoMoveToApplied(pkgId, tr, btn, role, company, source = "apply") {
+  if (typeof pkgId === "object" && pkgId !== null) {
+    const opts = pkgId;
+    pkgId = opts.pkgId;
+    tr = opts.tr;
+    btn = opts.btn;
+    role = opts.role;
+    company = opts.company;
+    source = opts.source || "apply";
+  }
+  if (!pkgId) return;
+
+  if (activeApplyTimers.has(pkgId)) {
+    const existing = activeApplyTimers.get(pkgId);
+    clearInterval(existing.interval);
+    clearTimeout(existing.timeout);
+    activeApplyTimers.delete(pkgId);
+  }
+
+  const input = tr ? tr.querySelector(".mark-applied") : null;
+  const stamp = tr ? tr.querySelector(".applied-stamp") : null;
+  const status = tr ? tr.querySelector(".job-status") : null;
+  const timerSpan = stamp ? stamp.querySelector(".applied-timer") : null;
+  const textSpan = stamp ? stamp.querySelector(".applied-text") : null;
+
+  if (input) input.checked = true;
+  if (stamp) {
+    stamp.classList.add("is-applied");
+    stamp.classList.remove("is-checking", "is-unchecking");
+  }
+
+  state.heldUntilRefresh.set(pkgId, state.board.tab || "queue");
+
+  let remaining = 5;
+  const updateStatus = () => {
+    if (status) {
+      status.textContent = `Applied (${remaining}s)`;
+      status.className = "job-status job-status-applied";
+    }
+    if (timerSpan) {
+      timerSpan.textContent = `(${remaining}s)`;
+    } else if (textSpan) {
+      textSpan.textContent = `Applied (${remaining}s)`;
+    }
+  };
+  updateStatus();
+
+  const who = [role, company].filter(Boolean).join(" at ");
+  const updateStrip = () => {
+    setStrip(
+      `Marked applied. Moving ${who ? `“${who}”` : "job"} to Applied tab in ${remaining}s… ` +
+        `<button type="button" class="strip-cancel-btn" style="background:none;border:none;color:var(--forest,#1f6b4a);font-weight:600;cursor:pointer;text-decoration:underline;margin-left:6px;">Cancel</button>`
+    );
+    const stripEl = $("status-strip");
+    const cancelBtn = stripEl ? stripEl.querySelector(".strip-cancel-btn") : null;
+    if (cancelBtn) {
+      cancelBtn.addEventListener("click", (e) => {
+        e.preventDefault();
+        cancelMove();
+      });
+    }
+  };
+  updateStrip();
+
+  const cancelMove = async () => {
+    if (activeApplyTimers.has(pkgId)) {
+      const t = activeApplyTimers.get(pkgId);
+      clearInterval(t.interval);
+      clearTimeout(t.timeout);
+      activeApplyTimers.delete(pkgId);
+    }
+    state.heldUntilRefresh.delete(pkgId);
+    if (input) input.checked = false;
+    if (stamp) stamp.classList.remove("is-applied");
+    if (timerSpan) timerSpan.textContent = "";
+    if (textSpan) textSpan.textContent = "Applied";
+    if (status) {
+      status.textContent = "Ready";
+      status.className = "job-status job-status-ready";
+    }
+    try {
+      const updated = await api("/api/packages/" + encodeURIComponent(pkgId) + "/applied", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ applied: false }),
+      });
+      const idx = state.packages.findIndex((item) => item.id === pkgId);
+      if (idx >= 0) state.packages[idx] = { ...state.packages[idx], ...updated };
+      const jobRow = state.jobs.find((item) => item.package_id === pkgId);
+      if (jobRow) {
+        jobRow.status = "ready";
+        jobRow.applied = false;
+      }
+    } catch (_) {}
+    setStrip("Cancelled move to Applied. Job remains in Queue.");
+  };
+
+  const interval = setInterval(() => {
+    remaining -= 1;
+    if (remaining > 0) {
+      updateStatus();
+      updateStrip();
+    }
+  }, 1000);
+
+  const timeout = setTimeout(async () => {
+    clearInterval(interval);
+    activeApplyTimers.delete(pkgId);
+    if (timerSpan) timerSpan.textContent = "";
+    if (textSpan) textSpan.textContent = "Applied";
+
+    try {
+      const updated = await api("/api/packages/" + encodeURIComponent(pkgId) + "/applied", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ applied: true }),
+      });
+      const idx = state.packages.findIndex((item) => item.id === pkgId);
+      if (idx >= 0) state.packages[idx] = { ...state.packages[idx], ...updated };
+      else state.packages.unshift(updated);
+
+      state.heldUntilRefresh.delete(pkgId);
+
+      const jobRow = state.jobs.find((item) => item.package_id === pkgId);
+      if (jobRow) {
+        jobRow.status = "applied";
+        jobRow.applied = true;
+      }
+
+      if (tr && tr.parentNode) {
+        tr.style.transition = "opacity 0.3s ease, transform 0.3s ease";
+        tr.style.opacity = "0";
+        tr.style.transform = "translateX(16px)";
+      }
+
+      setTimeout(() => {
+        renderBoard();
+        setStrip(
+          who ? `Moved “${who}” to Applied tab.` : "Moved job to Applied tab."
+        );
+      }, 300);
+    } catch (err) {
+      if (input) input.checked = false;
+      if (stamp) stamp.classList.remove("is-applied");
+      if (timerSpan) timerSpan.textContent = "";
+      if (textSpan) textSpan.textContent = "Applied";
+      if (status) {
+        status.textContent = "Ready";
+        status.className = "job-status job-status-ready";
+      }
+      setStrip(`Failed to mark applied: ${err.message}`);
+    }
+  }, 5000);
+
+  activeApplyTimers.set(pkgId, { timeout, interval, cancel: cancelMove });
 }
 
 function bindApply(tr) {
@@ -564,8 +725,8 @@ function bindApply(tr) {
         btn.textContent = applyKindLabel(kind);
         setStrip(
           kind === "easy_apply"
-            ? "This posting is Easy Apply — opened the LinkedIn job page. If the helper is installed, matching fields fill themselves. You click Submit."
-            : "Opened the company form, not the LinkedIn posting. If the helper is installed, matching fields fill themselves. You click Submit. Mark applied when you have submitted."
+            ? "This posting is Easy Apply — opened the LinkedIn job page. Click the Job desk fill toolbar icon to fill fields and upload this job's CV. You click Submit. Mark applied when you have submitted."
+            : "Opened the company form. Click the Job desk fill toolbar icon to fill fields and upload this job's CV. You click Submit. Mark applied when you have submitted."
         );
       } else {
         btn.textContent = label;
@@ -600,34 +761,72 @@ function bindMarkApplied(tr) {
       input.checked = !input.checked;
       return;
     }
+
+    if (activeApplyTimers.has(id)) {
+      const timerObj = activeApplyTimers.get(id);
+      if (!input.checked) {
+        timerObj.cancel();
+        return;
+      } else {
+        clearInterval(timerObj.interval);
+        clearTimeout(timerObj.timeout);
+        activeApplyTimers.delete(id);
+        const timerSpan = stamp ? stamp.querySelector(".applied-timer") : null;
+        if (timerSpan) timerSpan.textContent = "";
+      }
+    }
+
     const next = input.checked;
+    const currentTab = state.board.tab || "queue";
+
+    if (next && currentTab === "queue") {
+      const row = state.jobs.find((j) => j.package_id === id);
+      const pkg = state.packages.find((p) => p.id === id);
+      const role = (row && row.role) || (pkg && pkg.role) || "";
+      const company = (row && row.company) || (pkg && pkg.company) || "";
+      scheduleAutoMoveToApplied(id, tr, null, role, company, "checkbox");
+      return;
+    }
+
+    const nextState = input.checked;
     input.disabled = true;
     if (stamp) {
-      stamp.classList.toggle("is-checking", next);
-      stamp.classList.toggle("is-unchecking", !next);
-      stamp.classList.toggle("is-applied", next);
+      stamp.classList.toggle("is-checking", nextState);
+      stamp.classList.toggle("is-unchecking", !nextState);
+      stamp.classList.toggle("is-applied", nextState);
+      const timerSpan = stamp.querySelector(".applied-timer");
+      if (timerSpan) timerSpan.textContent = "";
     }
     try {
       const updated = await api("/api/packages/" + encodeURIComponent(id) + "/applied", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ applied: next }),
+        body: JSON.stringify({ applied: nextState }),
       });
       const idx = state.packages.findIndex((item) => item.id === id);
       if (idx >= 0) state.packages[idx] = { ...state.packages[idx], ...updated };
       else state.packages.unshift(updated);
-      state.heldUntilRefresh.set(id, state.board.tab || "queue");
+
+      const jobRow = state.jobs.find((item) => item.package_id === id);
+      if (jobRow) {
+        jobRow.status = nextState ? "applied" : "ready";
+        jobRow.applied = nextState;
+      }
+
+      state.heldUntilRefresh.delete(id);
       const status = tr.querySelector(".job-status");
       if (status) {
-        status.textContent = next ? "Applied" : "Ready";
-        status.className = "job-status job-status-" + (next ? "applied" : "ready");
+        status.textContent = nextState ? "Applied" : "Ready";
+        status.className = "job-status job-status-" + (nextState ? "applied" : "ready");
       }
-      input.setAttribute("aria-label", next ? "Undo applied" : "Mark applied");
-      await new Promise((resolve) => setTimeout(resolve, appliedMotionMs(next)));
+      input.setAttribute("aria-label", nextState ? "Undo applied" : "Mark applied");
+      await new Promise((resolve) => setTimeout(resolve, appliedMotionMs(nextState)));
+      renderBoard();
+      setStrip(nextState ? "Marked applied." : "Unmarked applied. Moved back to Queue.");
     } catch (err) {
-      input.checked = !next;
+      input.checked = !nextState;
       if (stamp) {
-        stamp.classList.toggle("is-applied", !next);
+        stamp.classList.toggle("is-applied", !nextState);
         stamp.classList.remove("is-checking", "is-unchecking");
       }
       setStrip(err.message);

@@ -85,6 +85,10 @@ class DeskAPITests(unittest.TestCase):
         self.assertNotIn('placeholder="Filter"', res.text)
         self.assertIn("col-role", res.text)
         self.assertIn("apply-helper-wrap", res.text)
+        self.assertIn("Job desk fill", res.text)
+        self.assertIn("Answer this question", res.text)
+        self.assertIn("Cmd+Shift+G", res.text)
+        self.assertIn(">extension<", res.text)
         self.assertIn("board-tabs", res.text)
         self.assertIn('id="tab-applied"', res.text)
         self.assertIn("delete-dialog", res.text)
@@ -114,6 +118,7 @@ class DeskAPITests(unittest.TestCase):
         self.assertIn("Find apply links", (Path(__file__).resolve().parent / "static" / "index.html").read_text())
         self.assertIn("heldUntilRefresh", js)
         self.assertIn("applied-stamp", js)
+        self.assertIn("applied-timer", js)
         self.assertIn("displayTab", js)
         self.assertIn("board-tab", js)
         css = (Path(__file__).resolve().parent / "static" / "app.css").read_text()
@@ -123,6 +128,7 @@ class DeskAPITests(unittest.TestCase):
         self.assertIn(".edit-files", css)
         self.assertIn("flex-direction: column", css)
         self.assertIn(".applied-stamp", css)
+        self.assertIn(".applied-timer", css)
         self.assertIn(".board-tabs", css)
         self.assertIn("data.browser", js)
         self.assertNotIn('showCamoufox(mode !== "stopping")', js)
@@ -140,7 +146,7 @@ class DeskAPITests(unittest.TestCase):
         self.assertEqual(body["hunt"]["preferred_city"], "Montreal")
         self.assertGreaterEqual(body["hunt"]["login_wait_seconds"], 120)
         self.assertIn("6080", body["camoufox"]["vnc"])
-        self.assertIn("apply-helper", body["apply_helper"]["extension_path"])
+        self.assertIn("/extension", body["apply_helper"]["extension_path"].replace("\\", "/"))
 
     def test_inspect_linkedin_is_blocked_and_uses_pasted_jd(self):
         res = self.client.post(
@@ -261,6 +267,127 @@ class DeskAPITests(unittest.TestCase):
         self.assertEqual(consumed.status_code, 200)
         empty = self.client.get("/api/apply/pending").json()
         self.assertIsNone(empty.get("payload"))
+
+    def test_apply_for_page_returns_matching_package_and_cv_url(self):
+        folder = self._package()
+        (folder / "job.json").write_text(
+            '{"company": "Acme", "role": "Software Engineer",'
+            ' "url": "https://job-boards.greenhouse.io/acme/jobs/11111",'
+            ' "apply_url": "https://job-boards.greenhouse.io/acme/jobs/11111",'
+            ' "apply_kind": "ats"}'
+        )
+        res = self.client.get(
+            "/api/apply/for-page",
+            params={"url": "https://job-boards.greenhouse.io/acme/jobs/11111?gh_src=x"},
+        )
+        self.assertEqual(res.status_code, 200)
+        body = res.json()
+        self.assertEqual(body["package_id"], folder.name)
+        self.assertIn("Desk_Tester_CV.pdf", body["files"]["resume"]["url"])
+        miss = self.client.get(
+            "/api/apply/for-page",
+            params={"url": "https://jobs.ashbyhq.com/nope/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"},
+        )
+        self.assertEqual(miss.status_code, 404)
+
+    def test_apply_answer_returns_llm_answers_for_package(self):
+        from unittest.mock import patch
+
+        folder = self._package()
+        (folder / "job.json").write_text(
+            '{"company": "Acme", "role": "Software Engineer",'
+            ' "url": "https://job-boards.greenhouse.io/acme/jobs/11111",'
+            ' "apply_url": "https://job-boards.greenhouse.io/acme/jobs/11111",'
+            ' "apply_kind": "ats"}'
+        )
+        with patch(
+            "pipeline.llm.complete_prompt",
+            return_value='[{"key":"q0","value":"About 70 percent coding","skip":false}]',
+        ) as mock_llm:
+            res = self.client.post(
+                "/api/apply/answer",
+                json={
+                    "url": "https://job-boards.greenhouse.io/acme/jobs/11111",
+                    "package_id": folder.name,
+                    "questions": [
+                        {
+                            "key": "q0",
+                            "label": "What percentage of time do you generally enjoy spending coding?",
+                            "kind": "text",
+                        }
+                    ],
+                },
+            )
+            self.assertEqual(res.status_code, 200)
+            body = res.json()
+            self.assertEqual(body["package_id"], folder.name)
+            self.assertEqual(body["answers"][0]["value"], "About 70 percent coding")
+            self.assertTrue(body["never_submit"])
+            self.assertEqual(mock_llm.call_count, 1)
+
+            # Answers cache file was created
+            cache_file = folder / "answers_cache.json"
+            self.assertTrue(cache_file.exists())
+
+            # Second call (e.g. page refresh) retrieves from cache with 0 additional LLM calls
+            res2 = self.client.post(
+                "/api/apply/answer",
+                json={
+                    "url": "https://job-boards.greenhouse.io/acme/jobs/11111",
+                    "package_id": folder.name,
+                    "questions": [
+                        {
+                            "key": "q0_again",
+                            "label": "What percentage of time do you generally enjoy spending coding? *",
+                            "kind": "text",
+                        }
+                    ],
+                },
+            )
+            self.assertEqual(res2.status_code, 200)
+            body2 = res2.json()
+            self.assertEqual(body2["answers"][0]["value"], "About 70 percent coding")
+            self.assertTrue(body2.get("stats", {}).get("from_cache"))
+            self.assertEqual(mock_llm.call_count, 1)
+
+            # Marking the package applied clears the answers cache
+            mark_res = self.client.post(f"/api/packages/{folder.name}/applied", json={"applied": True})
+            self.assertEqual(mark_res.status_code, 200)
+            self.assertFalse(cache_file.exists())
+
+            # Verify questions mentioning 1Password are not skipped by the password filter
+            res_1pwd = self.client.post(
+                "/api/apply/answer",
+                json={
+                    "url": "https://job-boards.greenhouse.io/acme/jobs/11111",
+                    "package_id": folder.name,
+                    "questions": [
+                        {
+                            "key": "q_1pwd",
+                            "label": "Why 1Password? There are a lot of great companies out there. What makes you excited to work at 1Password?",
+                            "kind": "text",
+                        }
+                    ],
+                },
+            )
+            self.assertEqual(res_1pwd.status_code, 200)
+            self.assertEqual(res_1pwd.json()["answers"][0]["key"], "q_1pwd")
+            self.assertEqual(mock_llm.call_count, 2)
+
+    def test_extension_lives_at_repo_extension_dir(self):
+        root = Path(__file__).resolve().parents[1]
+        manifest = (root / "extension" / "manifest.json").read_text()
+        self.assertIn("Fill this form", manifest)
+        self.assertIn("contextMenus", manifest)
+        self.assertIn('"all_frames": true', manifest)
+        fill_js = (root / "extension" / "fill.js").read_text()
+        self.assertIn("jobDeskAnswerSelected", fill_js)
+        self.assertIn("queryAllDeep", fill_js)
+        self.assertIn("offerResumeFallback", fill_js)
+        self.assertNotIn("answerCustom", fill_js)
+        self.assertIn("background.js", manifest)
+        self.assertTrue((root / "extension" / "fill.js").exists())
+        self.assertNotIn("web/apply-helper", (root / "web" / "static" / "app.js").read_text())
 
     def test_apply_launch_unwraps_linkedin_to_company_form(self):
         from unittest.mock import AsyncMock
@@ -421,6 +548,21 @@ class DeskAPITests(unittest.TestCase):
         self.assertEqual(res.json()["count"], 2)
         self.assertTrue(res.json()["id"])
         thread_cls.return_value.start.assert_called()
+
+    def test_delete_job_records_in_deleted_yaml(self):
+        res = self.client.post(
+            "/api/jobs/delete",
+            json={
+                "company": "DiscardCo",
+                "role": "Software Engineer",
+                "url": "https://www.linkedin.com/jobs/view/9998887776",
+            },
+        )
+        self.assertEqual(res.status_code, 200)
+        from pipeline.config import load_config
+        from pipeline.jobs import deleted_linkedin_ids
+
+        self.assertIn("9998887776", deleted_linkedin_ids(load_config()))
 
 
 if __name__ == "__main__":

@@ -95,6 +95,10 @@
     });
   }
 
+  function fileInputs(root) {
+    return [...(root || document).querySelectorAll("input[type=file]")].filter((el) => !el.disabled);
+  }
+
   function pick(text, key) {
     const t = text;
     if (key === "first_name") return /\bfirst\b|\bgiven\b|fname|first_name|firstname/.test(t) && !/\blast\b/.test(t);
@@ -202,13 +206,14 @@
     }
     const values = payload.fields;
     let filled = 0;
+    for (const el of fileInputs()) {
+      const text = labelOf(el);
+      const kind = /\bcover/.test(text) ? "cover_letter" : "resume";
+      if (await setFile(el, (payload.files || {})[kind] || (payload.files || {}).resume)) filled += 1;
+    }
     for (const el of fields()) {
       const text = labelOf(el);
-      if (el.type === "file") {
-        const kind = /\bcover/.test(text) ? "cover_letter" : "resume";
-        if (await setFile(el, (payload.files || {})[kind] || (payload.files || {}).resume)) filled += 1;
-        continue;
-      }
+      if (el.type === "file") continue;
       if (pick(text, "first_name") && setValue(el, values.first_name)) filled += 1;
       else if (pick(text, "last_name") && setValue(el, values.last_name)) filled += 1;
       else if (pick(text, "email") && setValue(el, values.email)) filled += 1;
@@ -229,9 +234,6 @@
     }
     if (filled) {
       toast("Filled " + filled + " field(s) from the job desk. Review, finish the rest, and click Submit yourself.");
-      try {
-        await request("/api/apply/consumed", { method: "POST" });
-      } catch (_) {}
     }
     return filled;
   }
@@ -239,25 +241,27 @@
   async function run() {
     let payload = null;
     try {
-      payload = await request("/api/apply/pending");
+      payload = await request("/api/apply/for-page?url=" + encodeURIComponent(location.href));
     } catch (_) {
+      try {
+        payload = await request("/api/apply/pending");
+      } catch (__) {
+        toast("No tailored package matches this form. Open it with Apply on the desk first.");
+        return;
+      }
+    }
+    if (!payload || payload.payload === null || !payload.fields) {
+      toast("No tailored package matches this form. Open it with Apply on the desk first.");
       return;
     }
-    if (!payload || payload.payload === null || !payload.fields) return;
-    if (!pageMatches(payload)) return;
     await fill(payload);
   }
 
-  if (document.readyState === "loading") {
+  if (typeof GM !== "undefined" && typeof GM.registerMenuCommand === "function") {
+    GM.registerMenuCommand("Fill this form", run);
+  } else if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", () => setTimeout(run, 400));
   } else {
     setTimeout(run, 500);
   }
-  let last = location.href;
-  setInterval(() => {
-    if (location.href !== last) {
-      last = location.href;
-      setTimeout(run, 700);
-    }
-  }, 1200);
 })();

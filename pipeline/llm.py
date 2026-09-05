@@ -107,39 +107,58 @@ def _looks_like_nvidia_model(model: str) -> bool:
     )
 
 
+_last_used_model: str = ""
+
+
+def get_last_used_model() -> str:
+    global _last_used_model
+    return _last_used_model
+
+
 def complete_prompt(prompt: str, *, effort: str = "high") -> str:
     """Return model text. Tries Nemotron, then NVIDIA gpt-oss, then agy."""
+    global _last_used_model
     cfg = load_config()
     timeout = int(cfg.get("pipeline.llm_timeout_seconds", 600))
     primary = primary_provider(cfg)
     last = (cfg.get("pipeline.fallback_provider") or "agy").strip().lower()
     if primary == "nvidia":
-        text = _try_nvidia_models(prompt, cfg, timeout=timeout, effort=effort)
+        text, model_name = _try_nvidia_models_with_model(prompt, cfg, timeout=timeout, effort=effort)
         if text.strip():
+            _last_used_model = model_name
             return text
         if last == "agy":
             log.warning("NVIDIA models failed; falling back to agy")
+            _last_used_model = str(cfg.get("pipeline.fallback_model") or "gemini-3.1-pro")
             return call_agy(prompt, effort=effort)
         return ""
     try:
+        _last_used_model = str(cfg.get("pipeline.model") or "gemini-3.1-pro")
         return call_agy(prompt, effort=effort)
     except Exception as exc:
         log.warning("agy failed (%s)", exc)
         if last == "nvidia" or nvidia_api_key():
-            return _try_nvidia_models(prompt, cfg, timeout=timeout, effort=effort)
+            text, model_name = _try_nvidia_models_with_model(prompt, cfg, timeout=timeout, effort=effort)
+            _last_used_model = model_name
+            return text
         raise
 
 
-def _try_nvidia_models(prompt: str, cfg, *, timeout: int, effort: str) -> str:
+def _try_nvidia_models_with_model(prompt: str, cfg, *, timeout: int, effort: str) -> tuple[str, str]:
     for model in nvidia_model_chain(cfg):
         try:
             text = _call_nvidia(prompt, cfg, timeout=timeout, effort=effort, model=model)
             if text.strip():
-                return text
+                return text, model
             log.warning("NVIDIA %s returned empty output", model)
         except Exception as exc:
             log.warning("NVIDIA %s failed (%s)", model, exc)
-    return ""
+    return "", ""
+
+
+def _try_nvidia_models(prompt: str, cfg, *, timeout: int, effort: str) -> str:
+    text, _ = _try_nvidia_models_with_model(prompt, cfg, timeout=timeout, effort=effort)
+    return text
 
 
 def call_agy(prompt: str, effort: str = "high") -> str:

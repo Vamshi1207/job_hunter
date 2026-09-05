@@ -141,6 +141,10 @@ class Config:
         return self.path("pipeline.applied_file", "applied.yaml")
 
     @property
+    def deleted_jobs_path(self) -> Path:
+        return self.path("pipeline.deleted_file", "deleted.yaml")
+
+    @property
     def experience_bank_dir(self) -> Path:
         return self.path("workspace.experience_bank", "experience-bank/")
 

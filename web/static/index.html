@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Newsreader:opsz,wght@6..72,500;6..72,600&family=Figtree:wght@400;500;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/app.css?v=board9">
+  <link rel="stylesheet" href="/static/app.css?v=board10">
 </head>
 <body>
   <header class="mast">
@@ -75,8 +75,8 @@
       <details class="apply-helper-wrap" id="apply-helper-wrap">
         <summary>Apply in your browser</summary>
         <p class="field-note">Apply opens the company form when Camoufox can read it from the posting. Easy Apply opens the LinkedIn page. Install the helper once so fields fill themselves. You still click Submit.</p>
-        <p class="field-note">Chrome: <code>chrome://extensions</code> → Developer mode → Load unpacked → <code id="helper-path">web/apply-helper</code></p>
-        <p class="field-note">Or install the <a id="userscript-link" href="/static/fill-helper.user.js">userscript</a> (Tampermonkey). Drag this <a id="fill-bookmarklet" href="#">Fill this form</a> bookmarklet onto the bookmarks bar as a fallback.</p>
+        <p class="field-note">Chrome: <code>chrome://extensions</code> → Developer mode → Load unpacked → <code id="helper-path">extension</code>. On the form page, click the <strong>Job desk fill</strong> icon to upload that job's tailored CV and fill known fields. It looks inside iframes and shadow roots. If the site has no file field it can attach to, it downloads that job's PDF and copies the path (Cmd+Shift+G in the file picker, then paste). Custom questions: click or highlight the field, then the icon again — or right-click → <strong>Answer this question</strong>. It never clicks Submit.</p>
+        <p class="field-note">Or Tampermonkey: <a id="userscript-link" href="/static/fill-helper.user.js">userscript</a> → menu → Fill this form. Bookmarklet fallback: drag <a id="fill-bookmarklet" href="#">Fill this form</a> onto the bookmarks bar.</p>
       </details>
       <div class="table-wrap">
         <table class="board" id="board">
@@ -151,6 +151,6 @@
       </div>
     </form>
   </dialog>
-  <script src="/static/app.js?v=board9"></script>
+  <script src="/static/app.js?v=board13"></script>
 </body>
 </html>

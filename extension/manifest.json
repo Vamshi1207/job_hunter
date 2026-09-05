@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "Job desk fill",
+  "version": "2.6",
+  "description": "Click to fill the open application form from your job desk and upload that job's CV. Answer a leftover question only after you select it. Never clicks Submit.",
+  "action": {
+    "default_title": "Fill this form — or the selected question"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "permissions": ["activeTab", "scripting", "contextMenus", "clipboardWrite"],
+  "host_permissions": [
+    "http://127.0.0.1:8000/*",
+    "http://localhost:8000/*",
+    "https://*/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": ["https://*/*"],
+      "js": ["fill.js", "content.js"],
+      "run_at": "document_idle",
+      "all_frames": true
+    }
+  ]
+}

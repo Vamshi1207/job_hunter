@@ -47,4 +47,4 @@ services:
       - seccomp:unconfined
     cap_add:
       - SYS_ADMIN
-    command: ["python3", "-m", "uvicorn", "web.app:app", "--host", "0.0.0.0", "--port", "8000"]
+    command: ["python3", "-m", "uvicorn", "web.app:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]

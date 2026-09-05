@@ -101,7 +101,7 @@ Write to `applications/<company>-<role>-<date>/analysis.md`:
    - **Tagline**: adjust to match the role.
    - **About / summary**: rewrite using `experience-bank/about-variants.md` matching the role type. Tweak the final sentence to name the role / company.
    - **Job bullets**: for each employer, swap in bullets from `experience-bank/<employer>.md` that match the JD. When `cv_format.bullets.dynamic` is true, give more bullets to the best-matching employer (within `min`–`max`) and leave unused slots empty. When it is false, keep the configured `bullets` count. Fill leftover slots from `cv_master.md`. Never invent.
-   - **Skills section**: reorder so technologies most relevant to the JD appear first. Do not add skills absent from the master CV.
+   - **Skills section**: reorder so technologies most relevant to the JD appear first. You may also add more skills, libraries, tools, and frameworks to the Key Skills section to support claims and boost ATS score, provided they are closely related to the candidate's actual work and stack (never completely out of the blue).
 3. Ask the user to render with the pipeline, or leave HTML for them to export.
 4. **Verify page count** against `config.yaml` `cv_format.pages`. If an extra page appears, drop the weakest bullet — do not shrink fonts.
 

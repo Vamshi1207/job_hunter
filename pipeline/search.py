@@ -54,8 +54,16 @@ def target_markets(cfg: Config) -> list[str]:
     return [str(item).strip() for item in raw if str(item).strip()]
 
 
+def preferred_cities(cfg: Config) -> list[str]:
+    raw = cfg.get("hunt.preferred_cities") or cfg.get("hunt.preferred_city") or cfg.get("user.city") or []
+    if isinstance(raw, str):
+        return [c.strip() for c in raw.split(",") if c.strip()]
+    return [str(c).strip() for c in raw if str(c).strip()]
+
+
 def preferred_city(cfg: Config) -> str:
-    return (cfg.get("hunt.preferred_city") or cfg.get("user.city") or "").strip()
+    cities = preferred_cities(cfg)
+    return cities[0] if cities else ""
 
 
 def _unique_places(items) -> list[str]:
@@ -198,9 +206,11 @@ _OTHER_COUNTRY = re.compile(
 _US_ONLY = re.compile(
     r"\b(?:must be|candidates must|only|hire only).{0,48}\b(?:united states|u\.s\.a?|usa)\b|"
     r"\b(?:united states|u\.s\.a?|usa)\s+(?:only|based)\b|"
+    r"\b(?:for\s+)?(?:us|u\.s\.|usa)\s+candidates\b|"
     r"\b(?:us|u\.s\.) work authori[sz]ation (?:required|needed)\b|"
     r"\bus citizenship required\b|"
-    r"\bno (?:remote )?canada\b",
+    r"\bno (?:remote )?canada\b|"
+    r"\(\s*usa\s*\)",
     re.I,
 )
 
@@ -236,14 +246,25 @@ def listing_in_scope(listing: dict, cfg: Config | None = None) -> bool:
     title = listing.get("role") or ""
     jd = listing.get("jd") or ""
     blob = f"{loc}\n{title}\n{jd}"
-    if _blob_has_canada(blob):
-        return True
+
+    # Explicit US-only or US-candidate requirements are always out of scope
     if _US_ONLY.search(blob):
         return False
-    if _blob_has_us(loc) or _blob_has_us(title):
-        return bool(_CANADA_ELIGIBLE.search(blob))
-    if _OTHER_COUNTRY.search(loc) and not _blob_has_canada(blob):
+    if _blob_has_us(title) and not _blob_has_canada(title) and not _CANADA_ELIGIBLE.search(blob):
         return False
+    if _blob_has_us(loc) and not _blob_has_canada(loc) and not _CANADA_ELIGIBLE.search(blob):
+        return False
+    if _OTHER_COUNTRY.search(loc) and not _blob_has_canada(loc) and not _CANADA_ELIGIBLE.search(blob):
+        return False
+
+    # Check first lines of JD in case loc was defaulted to Canada but JD top line has US location
+    jd_top = "\n".join((jd or "").splitlines()[:5])
+    if _blob_has_us(jd_top) and not _blob_has_canada(jd_top) and not _CANADA_ELIGIBLE.search(blob):
+        return False
+
+    if _blob_has_canada(blob):
+        return True
+
     if jd and _blob_has_us(jd) and not _CANADA_ELIGIBLE.search(blob) and not _blob_has_canada(blob):
         if re.search(r"\bremote\b|\banywhere\b", (loc or "").lower()):
             return False
@@ -522,9 +543,9 @@ def score_listing(listing: dict, cfg: Config) -> int:
         return 0
 
     score = title_score or (2 if ic_hint else 0)
-    city = preferred_city(cfg).lower()
+    cities = [c.lower() for c in preferred_cities(cfg)]
     country = (cfg.get("user.country") or "").lower()
-    if city and city in loc:
+    if any(c in loc for c in cities):
         score += 3
     for market in target_markets(cfg):
         if market.lower() in loc:

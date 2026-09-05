@@ -2224,6 +2224,96 @@ class ApplyUrlTests(unittest.TestCase):
             tmp.cleanup()
             load_config(force=True)
 
+    def test_fill_payload_for_page_matches_job_id_not_other_greenhouse(self):
+        from pipeline.fill import fill_payload_for_page
+
+        tmp = tempfile.TemporaryDirectory()
+        root = Path(tmp.name)
+        apps = root / "applications"
+        apps.mkdir()
+        (root / "config.yaml").write_text(
+            "user:\n  full_name: Desk Tester\n  preferred_name: Desk\n  email: a@b.c\n"
+        )
+        one = apps / "Acme-Engineer-2026-09-02"
+        one.mkdir()
+        (one / "job.json").write_text(
+            '{"company":"Acme","role":"Engineer","url":"https://job-boards.greenhouse.io/acme/jobs/11111",'
+            '"apply_url":"https://job-boards.greenhouse.io/acme/jobs/11111","apply_kind":"ats"}'
+        )
+        (one / "Desk_Tester_CV.pdf").write_text("pdf")
+        two = apps / "Beta-Engineer-2026-09-02"
+        two.mkdir()
+        (two / "job.json").write_text(
+            '{"company":"Beta","role":"Engineer","url":"https://job-boards.greenhouse.io/beta/jobs/22222",'
+            '"apply_url":"https://job-boards.greenhouse.io/beta/jobs/22222","apply_kind":"ats"}'
+        )
+        os.environ["JOB_SEARCH_ROOT"] = str(root)
+        try:
+            cfg = load_config(force=True)
+            payload = fill_payload_for_page(
+                cfg,
+                "https://job-boards.greenhouse.io/acme/jobs/11111/application",
+                public_base="http://127.0.0.1:8000",
+            )
+            self.assertIsNotNone(payload)
+            self.assertEqual(payload["company"], "Acme")
+            self.assertIn("Desk_Tester_CV.pdf", payload["files"]["resume"]["url"])
+            miss = fill_payload_for_page(
+                cfg, "https://jobs.ashbyhq.com/other/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+            )
+            self.assertIsNone(miss)
+        finally:
+            os.environ.pop("JOB_SEARCH_ROOT", None)
+            tmp.cleanup()
+            load_config(force=True)
+
+    def test_answer_form_questions_uses_tailored_cv_and_skips_eeo(self):
+        from unittest.mock import patch
+
+        from pipeline.fill import answer_form_questions
+
+        tmp = tempfile.TemporaryDirectory()
+        root = Path(tmp.name)
+        apps = root / "applications"
+        folder = apps / "Acme-Engineer-2026-09-02"
+        folder.mkdir(parents=True)
+        (root / "config.yaml").write_text(
+            "user:\n  full_name: Desk Tester\n  preferred_name: Desk\n  email: a@b.c\n"
+            "visa:\n  status: permanent-resident\n  description: PR, no sponsorship\n"
+        )
+        (root / "memory").mkdir()
+        (root / "memory" / "project.md").write_text("Senior Python engineer. Enjoys coding most of the week.\n")
+        (folder / "job.json").write_text(
+            '{"company":"Acme","role":"Engineer","url":"https://job-boards.greenhouse.io/acme/jobs/11111"}'
+        )
+        (folder / "Desk_Tester_CV.html").write_text("<p>Python, Kafka, real-time pipelines</p>")
+        os.environ["JOB_SEARCH_ROOT"] = str(root)
+        try:
+            cfg = load_config(force=True)
+            with patch("pipeline.llm.complete_prompt", return_value='[{"key":"q0","value":"About 70%","skip":false}]') as llm:
+                answers = answer_form_questions(
+                    cfg,
+                    [
+                        {
+                            "key": "q0",
+                            "label": "What percentage of time do you generally enjoy spending coding?",
+                            "kind": "text",
+                        },
+                        {"key": "q1", "label": "Gender / race (EEO)", "kind": "text"},
+                    ],
+                    package_id=folder.name,
+                )
+            self.assertEqual(len(answers), 1)
+            self.assertEqual(answers[0]["value"], "About 70%")
+            prompt = llm.call_args[0][0]
+            self.assertIn("Python, Kafka", prompt)
+            self.assertIn("Senior Python engineer", prompt)
+            self.assertNotIn("Gender / race", prompt)
+        finally:
+            os.environ.pop("JOB_SEARCH_ROOT", None)
+            tmp.cleanup()
+            load_config(force=True)
+
     def test_packages_needing_apply_url_skips_resolved(self):
         from pipeline.apply_resolve import packages_needing_apply_url
 
@@ -2361,6 +2451,113 @@ class ConfigMergeTests(unittest.TestCase):
         with self.assertRaises(ValueError) as ctx:
             _read_yaml(path)
         self.assertIn("Invalid YAML", str(ctx.exception))
+        tmp.cleanup()
+
+
+    def test_extract_linkedin_job_id(self):
+        from pipeline.jobs import extract_linkedin_job_id
+
+        self.assertEqual(extract_linkedin_job_id("https://www.linkedin.com/jobs/view/4458639184/"), "4458639184")
+        self.assertEqual(extract_linkedin_job_id("https://www.linkedin.com/jobs/view/software-eng-4458639184?ref=1"), "4458639184")
+        self.assertEqual(extract_linkedin_job_id("https://www.linkedin.com/jobs/search/?currentJobId=4458639184"), "4458639184")
+        self.assertEqual(extract_linkedin_job_id("urn:li:fsd_jobPosting:4458639184"), "4458639184")
+        self.assertEqual(extract_linkedin_job_id("https://example.com/jobs/123"), "")
+
+    def test_deleted_jobs_tracking(self):
+        from pipeline.config import Config
+        from pipeline.jobs import (
+            record_deleted_job,
+            deleted_job_rows,
+            deleted_job_urls,
+            deleted_linkedin_ids,
+        )
+
+        tmp = tempfile.TemporaryDirectory()
+        root = Path(tmp.name)
+        cfg = Config({"workspace": {"root": str(root)}}, root)
+
+        job = {
+            "company": "DiscardCo",
+            "role": "Bad Role",
+            "url": "https://www.linkedin.com/jobs/view/9998887776",
+        }
+        record_deleted_job(cfg, job)
+        rows = deleted_job_rows(cfg)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["company"], "DiscardCo")
+        self.assertTrue(rows[0].get("deleted_at"))
+        self.assertIn("9998887776", deleted_linkedin_ids(cfg))
+        self.assertTrue(any("9998887776" in u for u in deleted_job_urls(cfg)))
+        tmp.cleanup()
+
+    def test_tailor_prompt_and_critic_allow_related_skills(self):
+        from pipeline.config import Config
+        from pipeline.tailor import build_tailor_prompt, build_critic_prompt
+
+        cfg = Config({"user": {"name": "Test User"}}, Path("."))
+        prompt = build_tailor_prompt(cfg, "TechCorp", "SWE", "We need Kafka, Python, Pydantic, and Uvicorn")
+        self.assertIn("Key skills", prompt)
+        self.assertIn("add more skills", prompt)
+        self.assertIn("closely related", prompt)
+        self.assertIn("out-of-the-blue", prompt)
+
+        critic = build_critic_prompt("JD text", "Resume text", "Truth text")
+        self.assertIn("Key Skills", critic)
+        self.assertIn("penalized as dishonesty", critic)
+
+    def test_clean_and_unsave_linkedin_saved_jobs_mock(self):
+        import asyncio
+        from unittest.mock import AsyncMock
+        from pipeline.config import Config
+        from pipeline.browser_hunt import _clean_and_unsave_linkedin_saved_jobs
+        from pipeline.jobs import record_deleted_job, set_job_applied
+
+        tmp = tempfile.TemporaryDirectory()
+        root = Path(tmp.name)
+        cfg = Config({"workspace": {"root": str(root)}}, root)
+
+        record_deleted_job(cfg, {"company": "OldCo", "role": "Dev", "url": "https://www.linkedin.com/jobs/view/1111111111"})
+        set_job_applied(cfg, {"company": "AppCo", "role": "Dev", "url": "https://www.linkedin.com/jobs/view/2222222222"}, applied=True)
+
+        page = AsyncMock()
+        page.url = "https://www.linkedin.com/my-items/saved-jobs/"
+
+        async def evaluate_mock(script, *args):
+            text = str(script)
+            if "querySelectorAll" in text and "reusable-search" in text:
+                return [
+                    {
+                        "index": 0,
+                        "href": "https://www.linkedin.com/jobs/view/1111111111",
+                        "text": "OldCo Dev Closed",
+                        "hasDirect": True,
+                        "hasMore": False,
+                    },
+                    {
+                        "index": 1,
+                        "href": "https://www.linkedin.com/jobs/view/2222222222",
+                        "text": "AppCo Dev Applied",
+                        "hasDirect": False,
+                        "hasMore": True,
+                    },
+                    {
+                        "index": 2,
+                        "href": "https://www.linkedin.com/jobs/view/3333333333",
+                        "text": "NewCo Dev",
+                        "hasDirect": True,
+                        "hasMore": False,
+                    },
+                ]
+            if "dropdown_opened" in text:
+                return {"success": True, "method": "dropdown_opened"}
+            return {"success": True, "method": "direct"}
+
+        page.evaluate = evaluate_mock
+
+        unsaved = asyncio.run(_clean_and_unsave_linkedin_saved_jobs(page, cfg, 50))
+        self.assertIn("1111111111", unsaved)
+        self.assertIn("2222222222", unsaved)
+        self.assertNotIn("3333333333", unsaved)
         tmp.cleanup()
 
 

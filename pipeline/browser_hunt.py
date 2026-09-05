@@ -570,19 +570,33 @@ async def _crawl_source(page, cfg: Config, source: dict, delay_ms: int, login_wa
         return []
     listings = []
     seen = set()
-    for query in queries:
+    locations = hunt_locations(cfg)
+    # Balance max_per across locations so the first location doesn't starve the others
+    per_location = max(5, min(max_per, (max_per // max(1, len(locations))) + 2)) if locations else max_per
+    for location in locations:
         if _stopped():
             break
-        for location in hunt_locations(cfg):
+        is_remote = "remote" in location.lower()
+        clean_loc = re.sub(r"\bremote\b", "", location, flags=re.I).strip() or "Canada"
+        for query in queries:
             if _stopped():
                 break
             search_url = fill_search_url(
                 template,
                 cfg,
                 query,
-                extra={"location": quote_plus(location), "location_raw": location},
+                extra={"location": quote_plus(clean_loc), "location_raw": clean_loc},
             )
-            for item in await _collect_from_url(page, cfg, source, search_url, delay_ms, login_wait, max_per):
+            # Inject remote filter parameters when searching for remote roles
+            if is_remote:
+                if "linkedin.com" in search_url:
+                    # In LinkedIn, f_WT=2 specifies Remote work
+                    if "f_WT=2" not in search_url:
+                        search_url += "&f_WT=2"
+                elif "indeed.com" in search_url:
+                    search_url = re.sub(r"l=[^&]+", "l=Remote", search_url)
+
+            for item in await _collect_from_url(page, cfg, source, search_url, delay_ms, login_wait, per_location):
                 key = (item.get("url") or "").lower()
                 if key in seen:
                     continue
@@ -601,7 +615,7 @@ async def _crawl_google_ats(page, cfg: Config, source: dict, delay_ms: int, logi
     max_queries = max(1, min(8, int(source.get("max_queries") or 1)))
     group_size = max(1, min(8, int(source.get("group_size") or 1)))
     queries = hunt_queries(cfg)[:max_queries]
-    location = hunt_location(cfg)
+    locations = hunt_locations(cfg)
     groups = [ats_ops[i : i + group_size] for i in range(0, len(ats_ops), group_size)]
     listings = []
     seen = set()
@@ -609,24 +623,27 @@ async def _crawl_google_ats(page, cfg: Config, source: dict, delay_ms: int, logi
     for query in queries:
         if _stopped():
             break
-        for group in groups:
+        for location in locations:
             if _stopped():
                 break
-            if group_size == 1:
-                dork = build_google_dork(query, group[0], location)
-                extra = {"ats": quote_plus(group[0]), "dork": quote_plus(dork)}
-            else:
-                joined = " OR ".join(group)
-                dork = build_google_dork(query, f"({joined})", location)
-                extra = {"ats": quote_plus(joined), "dork": quote_plus(dork)}
-            search_url = fill_search_url(template, cfg, query, extra)
-            log.info("Google ATS dork: %s", dork)
-            for item in await _collect_from_url(page, cfg, source, search_url, delay_ms, login_wait, per_page):
-                key = (item.get("url") or "").lower()
-                if key in seen:
-                    continue
-                seen.add(key)
-                listings.append(item)
+            for group in groups:
+                if _stopped():
+                    break
+                if group_size == 1:
+                    dork = build_google_dork(query, group[0], location)
+                    extra = {"ats": quote_plus(group[0]), "dork": quote_plus(dork)}
+                else:
+                    joined = " OR ".join(group)
+                    dork = build_google_dork(query, f"({joined})", location)
+                    extra = {"ats": quote_plus(joined), "dork": quote_plus(dork)}
+                search_url = fill_search_url(template, cfg, query, extra)
+                log.info("Google ATS dork: %s", dork)
+                for item in await _collect_from_url(page, cfg, source, search_url, delay_ms, login_wait, per_page):
+                    key = (item.get("url") or "").lower()
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    listings.append(item)
     return listings
 
 
@@ -773,6 +790,161 @@ async def _click_next_listings_page(page, delay_ms: int) -> bool:
     return after_html != before_html
 
 
+async def _clean_and_unsave_linkedin_saved_jobs(
+    page,
+    cfg: Config,
+    delay_ms: int,
+) -> set[str]:
+    """Inspect LinkedIn saved jobs on the active page.
+    Unsave any job that is already applied or deleted/closed.
+    Returns set of job identifiers (IDs and URLs) that were skipped/unsaved.
+    """
+    from pipeline.jobs import (
+        applied_job_urls,
+        applied_linkedin_ids,
+        deleted_job_urls,
+        deleted_linkedin_ids,
+        extract_linkedin_job_id,
+        record_deleted_job,
+        set_job_applied,
+    )
+
+    known_applied_urls = applied_job_urls(cfg)
+    known_applied_ids = applied_linkedin_ids(cfg)
+    known_deleted_urls = deleted_job_urls(cfg)
+    known_deleted_ids = deleted_linkedin_ids(cfg)
+
+    scan_js = """
+    () => {
+      const cards = Array.from(document.querySelectorAll(
+        'li.reusable-search__result-container, div.entity-result, li[data-chameleon-result-urn], .job-card-container, .my-items-job-card'
+      ));
+      return cards.map((card, idx) => {
+        const link = card.querySelector('a[href*="/jobs/view/"]');
+        const href = link ? link.href : '';
+        const text = (card.innerText || '').trim();
+        const directBtn = card.querySelector('button[aria-label*="unsave" i], button.jobs-save-button');
+        const moreBtn = card.querySelector('button[aria-label*="more action" i], button[aria-label*="more" i], button[aria-label*="option" i], button.artdeco-dropdown__trigger, .entity-result__actions button');
+        return {
+          index: idx,
+          href: href,
+          text: text,
+          hasDirect: Boolean(directBtn),
+          hasMore: Boolean(moreBtn),
+        };
+      });
+    }
+    """
+    try:
+        cards_info = await page.evaluate(scan_js)
+    except Exception as exc:
+        _raise_if_cancelled(exc)
+        return set()
+
+    if not isinstance(cards_info, list):
+        return set()
+
+    unsaved_keys: set[str] = set()
+
+    for item in cards_info:
+        if _stopped():
+            break
+        href = str(item.get("href") or "").strip()
+        text = str(item.get("text") or "")
+        jid = extract_linkedin_job_id(href)
+        clean_url = href.split("?")[0].split("#")[0].lower()
+
+        card_has_applied = bool(re.search(r"\b(applied|applied\s+\d+|you\s+applied)\b", text, re.I))
+        card_has_closed = bool(re.search(r"\b(no longer accepting applications|closed|job closed|deleted)\b", text, re.I))
+
+        is_applied = (jid and jid in known_applied_ids) or (clean_url and clean_url in known_applied_urls) or card_has_applied
+        is_deleted = (jid and jid in known_deleted_ids) or (clean_url and clean_url in known_deleted_urls) or card_has_closed
+
+        if not is_applied and not is_deleted:
+            continue
+
+        reason = "applied" if is_applied else "deleted"
+        if jid:
+            unsaved_keys.add(jid)
+        if clean_url:
+            unsaved_keys.add(clean_url)
+        if href:
+            unsaved_keys.add(href.lower())
+
+        idx = item.get("index", 0)
+        click_card_js = """
+        (arg) => {
+          const { index, href } = arg;
+          const cards = Array.from(document.querySelectorAll(
+            'li.reusable-search__result-container, div.entity-result, li[data-chameleon-result-urn], .job-card-container, .my-items-job-card'
+          ));
+          let card = cards[index];
+          if (!card && href) {
+            card = cards.find(c => {
+              const a = c.querySelector('a[href*="/jobs/view/"]');
+              return a && a.href && a.href.includes(href);
+            });
+          }
+          if (!card) return { success: false, reason: "card_not_found" };
+
+          const directBtn = card.querySelector('button[aria-label*="unsave" i], button.jobs-save-button');
+          if (directBtn) {
+            directBtn.click();
+            return { success: true, method: "direct" };
+          }
+
+          const moreBtn = card.querySelector('button[aria-label*="more action" i], button[aria-label*="more" i], button[aria-label*="option" i], button.artdeco-dropdown__trigger, .entity-result__actions button');
+          if (moreBtn) {
+            moreBtn.click();
+            return { success: true, method: "dropdown_opened" };
+          }
+          return { success: false, reason: "no_button" };
+        }
+        """
+        try:
+            res = await page.evaluate(click_card_js, {"index": idx, "href": href})
+            if isinstance(res, dict) and res.get("method") == "dropdown_opened":
+                await _pause_ms(250)
+                click_dropdown_js = """
+                () => {
+                  const dropdownItems = Array.from(document.querySelectorAll(
+                    '.artdeco-dropdown__content button, .artdeco-dropdown__item, [role="menuitem"], .artdeco-dropdown__content li'
+                  ));
+                  const unsaveItem = dropdownItems.find(el => {
+                    const txt = (el.innerText || '').toLowerCase();
+                    const lbl = (el.getAttribute('aria-label') || '').toLowerCase();
+                    return txt.includes('unsave') || txt.includes('remove') || lbl.includes('unsave');
+                  });
+                  if (unsaveItem) {
+                    unsaveItem.click();
+                    return true;
+                  }
+                  return false;
+                }
+                """
+                await page.evaluate(click_dropdown_js)
+            log.info("Camoufox unsaved LinkedIn %s job from saved list: %s (id: %s)", reason, clean_url, jid or "n/a")
+            await _pause_ms(max(300, delay_ms // 2))
+        except Exception as exc:
+            _raise_if_cancelled(exc)
+            log.warning("Could not click unsave on saved list card %s: %s", href, exc)
+
+        if card_has_applied:
+            set_job_applied(cfg, {"url": href, "role": "Role", "company": "Company"}, applied=True)
+            if jid:
+                known_applied_ids.add(jid)
+            if clean_url:
+                known_applied_urls.add(clean_url)
+        elif card_has_closed:
+            record_deleted_job(cfg, {"url": href, "role": "Role", "company": "Company"})
+            if jid:
+                known_deleted_ids.add(jid)
+            if clean_url:
+                known_deleted_urls.add(clean_url)
+
+    return unsaved_keys
+
+
 async def _collect_paginated_job_links(
     page,
     cfg: Config,
@@ -790,6 +962,20 @@ async def _collect_paginated_job_links(
     contains = _as_list(source.get("link_contains")) or None
     found: list[str] = []
     seen: set[str] = set()
+
+    from pipeline.jobs import (
+        applied_job_urls,
+        applied_linkedin_ids,
+        deleted_job_urls,
+        deleted_linkedin_ids,
+        extract_linkedin_job_id,
+    )
+
+    known_applied_urls = applied_job_urls(cfg) if source.get("saved") else set()
+    known_applied_ids = applied_linkedin_ids(cfg) if source.get("saved") else set()
+    known_deleted_urls = deleted_job_urls(cfg) if source.get("saved") else set()
+    known_deleted_ids = deleted_linkedin_ids(cfg) if source.get("saved") else set()
+
     pages = max(1, min(40, int(max_pages or SAVED_LIST_MAX_PAGES)))
     for page_n in range(1, pages + 1):
         if _stopped() or len(found) >= limit:
@@ -797,6 +983,12 @@ async def _collect_paginated_job_links(
         label = source.get("id") or "jobs"
         _notify_stage(f"Reading {label} (page {page_n})")
         await _scroll_listings(page)
+
+        is_saved_linkedin = bool(source.get("saved")) and "linkedin.com" in (page.url or "").lower()
+        unsaved_keys: set[str] = set()
+        if is_saved_linkedin:
+            unsaved_keys = await _clean_and_unsave_linkedin_saved_jobs(page, cfg, delay_ms)
+
         try:
             html = await page.content()
         except Exception as exc:
@@ -805,7 +997,23 @@ async def _collect_paginated_job_links(
         new = 0
         for link in collect_job_links(html, page.url, contains):
             key = link.lower()
-            if key in seen:
+            clean_link = link.split("?")[0].split("#")[0].lower()
+            link_jid = extract_linkedin_job_id(link)
+            if (
+                key in seen
+                or key in unsaved_keys
+                or clean_link in unsaved_keys
+                or (link_jid and link_jid in unsaved_keys)
+                or (
+                    is_saved_linkedin
+                    and (
+                        clean_link in known_applied_urls
+                        or (link_jid and link_jid in known_applied_ids)
+                        or clean_link in known_deleted_urls
+                        or (link_jid and link_jid in known_deleted_ids)
+                    )
+                )
+            ):
                 continue
             seen.add(key)
             found.append(link)
@@ -1164,6 +1372,44 @@ async def _needs_login(page) -> bool:
     return False
 
 
+async def _unsave_linkedin_posting_page(page, delay_ms: int) -> bool:
+    """Click the Saved button on a LinkedIn job posting page to unsave it."""
+    js = """
+    () => {
+      const candidates = Array.from(document.querySelectorAll(
+        'button.jobs-save-button, button[aria-label*="unsave" i], button[data-control-name="save_job"]'
+      ));
+      for (const btn of candidates) {
+        const text = (btn.innerText || '').trim().toLowerCase();
+        const label = (btn.getAttribute('aria-label') || '').toLowerCase();
+        if (text === 'saved' || label.includes('unsave')) {
+          btn.click();
+          return true;
+        }
+      }
+      for (const btn of Array.from(document.querySelectorAll('button'))) {
+        const text = (btn.innerText || '').trim().toLowerCase();
+        const label = (btn.getAttribute('aria-label') || '').toLowerCase();
+        if (text === 'saved' || label.startsWith('unsave')) {
+          btn.click();
+          return true;
+        }
+      }
+      return false;
+    }
+    """
+    try:
+        clicked = bool(await page.evaluate(js))
+        if clicked:
+            log.info("Camoufox clicked Unsave on LinkedIn posting page: %s", page.url)
+            await _pause_ms(max(400, delay_ms))
+            return True
+    except Exception as exc:
+        _raise_if_cancelled(exc)
+        log.debug("Unsave posting page evaluate error: %s", exc)
+    return False
+
+
 async def _extract_posting(page, cfg: Config, source: dict, url: str, delay_ms: int) -> dict | None:
     try:
         await page.goto(url, wait_until="domcontentloaded", timeout=60000)
@@ -1221,8 +1467,20 @@ async def _extract_posting(page, cfg: Config, source: dict, url: str, delay_ms: 
     loc = await _first_text(
         page,
         _as_list(source.get("location_selectors"))
-        or [".job-details-jobs-unified-top-card__bullet", ".jobsearch-JobInfoHeader-subtitle", "[data-testid='job-location']"],
+        or [
+            ".job-details-jobs-unified-top-card__primary-description-container",
+            ".job-details-jobs-unified-top-card__bullet",
+            ".job-details-jobs-unified-top-card__tertiary-description-container",
+            ".tvm__text--low-emphasis",
+            ".topcard__flavor--bullet",
+            ".topcard__flavor-row",
+            ".jobsearch-JobInfoHeader-subtitle",
+            "[data-testid='job-location']",
+        ],
     )
+    if loc and "·" in loc:
+        # e.g. "Montreal, QC · Reposted 4 days ago · Over 100 people clicked apply"
+        loc = loc.split("·")[0].strip()
     loc = loc or meta.get("location") or hunt_location(cfg)
     await _wait_for_apply_controls(page, delay_ms)
     try:
@@ -1248,6 +1506,48 @@ async def _extract_posting(page, cfg: Config, source: dict, url: str, delay_ms: 
     if is_directory_or_salary_listing(listing):
         log.info("Skip non-job page %s", final_url)
         return None
+
+    if "linkedin.com" in final_url.lower():
+        from pipeline.jobs import (
+            applied_job_urls,
+            applied_linkedin_ids,
+            deleted_job_urls,
+            deleted_linkedin_ids,
+            extract_linkedin_job_id,
+            record_deleted_job,
+            set_job_applied,
+        )
+
+        post_jid = extract_linkedin_job_id(final_url)
+        post_clean = final_url.split("?")[0].split("#")[0].lower()
+        post_has_applied = bool(
+            re.search(r"\b(applied|you applied)\b", html, re.I)
+            or re.search(r"\bapplied\s+\d+\s*(?:day|week|month|hour|m|d|w)s?\s+ago\b", html, re.I)
+        )
+        post_has_closed = bool(
+            re.search(r"\b(no longer accepting applications|this job is closed|job closed)\b", html, re.I)
+        )
+        post_applied = (
+            (post_jid and post_jid in applied_linkedin_ids(cfg))
+            or (post_clean and post_clean in applied_job_urls(cfg))
+            or post_has_applied
+        )
+        post_deleted = (
+            (post_jid and post_jid in deleted_linkedin_ids(cfg))
+            or (post_clean and post_clean in deleted_job_urls(cfg))
+            or post_has_closed
+        )
+
+        if post_applied or post_deleted:
+            reason = "applied" if post_applied else "deleted"
+            await _unsave_linkedin_posting_page(page, delay_ms)
+            if post_has_applied:
+                set_job_applied(cfg, listing, applied=True)
+            elif post_has_closed:
+                record_deleted_job(cfg, listing)
+            if source.get("saved"):
+                log.info("Camoufox unsaved and skipped %s job on posting page: %s", reason, final_url)
+                return None
     return listing
 
 

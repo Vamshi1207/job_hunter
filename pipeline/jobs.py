@@ -510,7 +510,31 @@ def _job_identity(entry: dict) -> tuple[str, str, str]:
     )
 
 
+def extract_linkedin_job_id(url: str) -> str:
+    """Extract numeric job ID from a LinkedIn URL or URN."""
+    if not url:
+        return ""
+    text = str(url).strip()
+    m = re.search(r"/jobs/view/(?:[^/]*?-)?(\d{6,})", text)
+    if m:
+        return m.group(1)
+    m = re.search(r"[?&]currentJobId=(\d{6,})", text)
+    if m:
+        return m.group(1)
+    m = re.search(r"fsd_jobPosting:(\d{6,})", text)
+    if m:
+        return m.group(1)
+    m = re.search(r"\b(\d{9,11})\b", text)
+    if m:
+        return m.group(1)
+    return ""
+
+
 def _same_job(left: dict, right: dict) -> bool:
+    left_id = extract_linkedin_job_id(str(left.get("url") or left.get("apply_url") or ""))
+    right_id = extract_linkedin_job_id(str(right.get("url") or right.get("apply_url") or ""))
+    if left_id and right_id and left_id == right_id:
+        return True
     left_url, left_company, left_role = _job_identity(left)
     right_url, right_company, right_role = _job_identity(right)
     if left_url and right_url:
@@ -530,6 +554,8 @@ def _queue_row(job: dict) -> dict:
         row["apply_url"] = job["apply_url"]
     if job.get("apply_kind"):
         row["apply_kind"] = job["apply_kind"]
+    if job.get("deleted_at"):
+        row["deleted_at"] = job["deleted_at"]
     return row
 
 
@@ -555,6 +581,80 @@ def queued_job_rows(cfg: Config) -> list[dict]:
 
 def applied_job_rows(cfg: Config) -> list[dict]:
     return _load_yaml_jobs(cfg.applied_jobs_path)
+
+
+def deleted_job_rows(cfg: Config) -> list[dict]:
+    return _load_yaml_jobs(cfg.deleted_jobs_path)
+
+
+def record_deleted_job(cfg: Config, job: dict) -> None:
+    """Record a discarded/deleted job in deleted.yaml so hunt and Camoufox know to skip/unsave it."""
+    from datetime import datetime, timezone
+
+    row = _queue_row(job)
+    if not row.get("deleted_at"):
+        row["deleted_at"] = datetime.now(timezone.utc).isoformat()
+    rows = _load_yaml_jobs(cfg.deleted_jobs_path)
+    if _find_job_index(rows, row) >= 0:
+        return
+    rows.append(row)
+    _write_yaml_jobs(cfg.deleted_jobs_path, rows)
+
+
+def applied_job_urls(cfg: Config) -> set[str]:
+    """All normalized URLs for jobs marked applied (in applied.yaml or applications/)."""
+    urls = set()
+    for row in applied_job_rows(cfg):
+        for key in ("url", "apply_url"):
+            norm = _norm_job_url(str(row.get(key) or ""))
+            if norm:
+                urls.add(norm)
+    applied_needles, _ = _package_job_flags(cfg)
+    for needle in applied_needles:
+        for key in ("url", "apply_url"):
+            norm = _norm_job_url(str(needle.get(key) or ""))
+            if norm:
+                urls.add(norm)
+    return urls
+
+
+def applied_linkedin_ids(cfg: Config) -> set[str]:
+    """All LinkedIn job IDs for jobs marked applied."""
+    ids = set()
+    for row in applied_job_rows(cfg):
+        for key in ("url", "apply_url"):
+            jid = extract_linkedin_job_id(str(row.get(key) or ""))
+            if jid:
+                ids.add(jid)
+    applied_needles, _ = _package_job_flags(cfg)
+    for needle in applied_needles:
+        for key in ("url", "apply_url"):
+            jid = extract_linkedin_job_id(str(needle.get(key) or ""))
+            if jid:
+                ids.add(jid)
+    return ids
+
+
+def deleted_job_urls(cfg: Config) -> set[str]:
+    """All normalized URLs for jobs that were deleted without applying."""
+    urls = set()
+    for row in deleted_job_rows(cfg):
+        for key in ("url", "apply_url"):
+            norm = _norm_job_url(str(row.get(key) or ""))
+            if norm:
+                urls.add(norm)
+    return urls
+
+
+def deleted_linkedin_ids(cfg: Config) -> set[str]:
+    """All LinkedIn job IDs for jobs that were deleted without applying."""
+    ids = set()
+    for row in deleted_job_rows(cfg):
+        for key in ("url", "apply_url"):
+            jid = extract_linkedin_job_id(str(row.get(key) or ""))
+            if jid:
+                ids.add(jid)
+    return ids
 
 
 def _find_job_index(jobs: list[dict], needle: dict) -> int:

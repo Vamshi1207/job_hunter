@@ -68,7 +68,7 @@ def _public_base() -> str:
 def _apply_helper_path(cfg) -> str:
     from pipeline.reports import as_host_path
 
-    return as_host_path(cfg, WEB_ROOT / "apply-helper")
+    return as_host_path(cfg, cfg.root / "extension")
 
 
 def _remember_pending_apply(payload: dict) -> None:
@@ -238,6 +238,19 @@ class LaunchApplyRequest(BaseModel):
     url: str = ""
     company: str = ""
     role: str = ""
+
+
+class FormQuestion(BaseModel):
+    key: str
+    label: str
+    kind: str = "text"
+    options: list[str] = Field(default_factory=list)
+
+
+class FormAnswerRequest(BaseModel):
+    url: str = ""
+    package_id: str = ""
+    questions: list[FormQuestion] = Field(default_factory=list)
 
 
 class RememberJobRequest(BaseModel):
@@ -416,6 +429,12 @@ def delete_package(package_id: str, keep: bool = False) -> dict:
     meta = _job_meta(folder)
     if not delete_package_dir(cfg, package_id):
         raise HTTPException(status_code=404, detail="Package not found")
+    try:
+        from pipeline.jobs import record_deleted_job
+
+        record_deleted_job(cfg, meta)
+    except Exception as exc:
+        log.warning("Could not record deleted job in deleted.yaml: %s", exc)
     if not keep:
         try:
             from pipeline.jobs import forget_job
@@ -424,6 +443,32 @@ def delete_package(package_id: str, keep: bool = False) -> dict:
         except Exception as exc:
             log.warning("Could not remove deleted job from jobs.yaml: %s", exc)
     return {"ok": True, "id": package_id, "keep": keep}
+
+
+class DeleteJobRequest(BaseModel):
+    url: str = ""
+    company: str = ""
+    role: str = ""
+    location: str = ""
+    jd: str = ""
+
+
+@app.post("/api/jobs/delete")
+def delete_job(body: DeleteJobRequest) -> dict:
+    """Record a discarded/deleted job in deleted.yaml and remove from jobs.yaml."""
+    cfg = _load_cfg()
+    from pipeline.jobs import forget_job, record_deleted_job
+
+    job_data = {
+        "company": (body.company or "").strip(),
+        "role": (body.role or "").strip(),
+        "url": (body.url or "").strip(),
+        "location": (body.location or "").strip(),
+        "jd": (body.jd or "").strip(),
+    }
+    record_deleted_job(cfg, job_data)
+    forget_job(cfg, job_data)
+    return {"ok": True}
 
 
 @app.post("/api/jobs/remember")
@@ -456,6 +501,12 @@ def mark_package_applied(package_id: str, body: MarkAppliedRequest) -> dict:
     fields = {"applied": body.applied}
     if body.applied:
         fields["applied_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        try:
+            from pipeline.fill import clear_package_answers_cache
+
+            clear_package_answers_cache(cfg, package_id)
+        except Exception as exc:
+            log.warning("Could not clear answers cache for %s: %s", package_id, exc)
     else:
         fields["applied_at"] = ""
     meta = update_job_meta(folder, **fields)
@@ -533,7 +584,7 @@ def launch_apply(body: LaunchApplyRequest) -> dict:
                 log.warning("Camoufox could not read the form URL for %s: %s", posting, exc)
         job["apply_url"] = apply_url
         job["apply_kind"] = apply_kind
-        if folder:
+        if folder and folder.exists():
             update_job_meta(folder, apply_url=apply_url, apply_kind=apply_kind)
         remember_apply_target(cfg, job)
     job["apply_url"] = apply_url
@@ -543,6 +594,67 @@ def launch_apply(body: LaunchApplyRequest) -> dict:
     )
     _remember_pending_apply(payload)
     return payload
+
+
+def _current_pending_payload() -> dict | None:
+    with _apply_lock:
+        data = _pending_apply
+    if not data:
+        return None
+    if time.time() - data["at"] > PENDING_APPLY_TTL:
+        return None
+    payload = data.get("payload")
+    return payload if isinstance(payload, dict) else None
+
+
+@app.get("/api/apply/for-page")
+def apply_for_page(url: str = "") -> dict:
+    """Fill payload for the form currently open in the browser. Never submits."""
+    cfg = _load_cfg()
+    from pipeline.fill import fill_payload_for_page
+
+    payload = fill_payload_for_page(
+        cfg,
+        url,
+        pending=_current_pending_payload(),
+        public_base=_public_base(),
+    )
+    if not payload:
+        raise HTTPException(
+            status_code=404,
+            detail="No tailored package matches this form. Open it with Apply on the desk first.",
+        )
+    return payload
+
+
+@app.post("/api/apply/answer")
+def apply_answer(body: FormAnswerRequest) -> dict:
+    """Answer leftover form questions from memory + this role's tailored CV. Never submits."""
+    cfg = _load_cfg()
+    from pipeline.fill import answer_form_questions, fill_payload_for_page
+
+    package_id = (body.package_id or "").strip()
+    if not package_id:
+        matched = fill_payload_for_page(
+            cfg,
+            body.url,
+            pending=_current_pending_payload(),
+            public_base=_public_base(),
+        )
+        package_id = str((matched or {}).get("package_id") or "")
+    if not package_id:
+        raise HTTPException(
+            status_code=404,
+            detail="No tailored package matches this form. Open it with Apply on the desk first.",
+        )
+    questions = [
+        {"key": item.key, "label": item.label, "kind": item.kind, "options": list(item.options or [])}
+        for item in body.questions
+    ]
+    t0 = time.perf_counter()
+    answers, stats = answer_form_questions(cfg, questions, package_id=package_id, page_url=body.url, with_stats=True)
+    stats["latency_ms"] = round((time.perf_counter() - t0) * 1000)
+    return {"package_id": package_id, "answers": answers, "stats": stats, "never_submit": True}
 
 
 @app.get("/api/apply/pending")

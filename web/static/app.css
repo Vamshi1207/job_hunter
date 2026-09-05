@@ -366,6 +366,18 @@ h2 { font-size: 1.15rem; }
   color: var(--forest);
 }
 
+.applied-timer {
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.04em;
+  color: var(--forest);
+  font-weight: 600;
+}
+
+.applied-timer:empty {
+  display: none;
+}
+
 .applied-stamp:focus-within .applied-box {
   outline: 2px solid var(--amber);
   outline-offset: 2px;

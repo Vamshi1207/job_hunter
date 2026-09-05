@@ -246,7 +246,7 @@ def _retry_section(feedback_history: str) -> str:
 ### PREVIOUS ATTEMPT FEEDBACK
 {feedback_history}
 
-You may ONLY: reorder skills, swap in a closer experience-bank variant, inject JD wording for skills already in the master CV or bank, or tighten the summary.
+You may ONLY: add related skills to Key Skills sections to match JD keywords and support claims, reorder skills, swap in a closer experience-bank variant, inject JD wording for skills already in the master CV or bank, or tighten the summary.
 You MUST NOT invent technologies, domains, employers, job titles, metrics, or responsibilities.
 If a JD requirement cannot be met honestly, leave it as a gap.
 """
@@ -302,11 +302,11 @@ LinkedIn DM max words: {dm_words}
 {tailor_layout_instructions(cfg)}
 - Classify the JD into a role type, then SELECT bullets from the experience bank whose target matches. {_bullet_count_instruction(cfg)}
 - If the bank has fewer bullets than needed, fill the rest from the master CV. Never pad with invented work.
-- You MUST NOT invent technologies, domains, employers, job titles, metrics, or responsibilities.
+- You MUST NOT invent employers, job titles, metrics, or responsibilities. In experience bullets, do not invent technologies the candidate did not use.
 - Text changes only. Do not add/remove jobs, projects, education, or employers.
 - Inject JD keywords only where they describe work the candidate actually did.
 - Rewrite the tagline and summary for this role. Summary must stay interview-defensible.
-- Reorder each skills list so JD-relevant items the candidate already has come first. Do not add skills that are absent from the master CV.
+- Key skills: Reorder each skills list so JD-relevant items come first. You may also add more skills, libraries, tools, frameworks, and protocols to the Key Skills sections to support the candidate's claims and achieve a higher ATS score, PROVIDED they are closely related and natural extensions of the candidate's actual work/tech stack. You MUST NOT add completely out-of-the-blue technologies, unrelated languages, or fabricated domains (e.g., do not add Rust, C++, mobile development, or ungrounded domains).
 - Job title lines: honest titles only. Do not use Staff / Senior Staff / Principal unless those are the actual titles in the master CV.
 - Do not include dates in TITLE tags (dates are already in the HTML template).
 - Cover letter: 250-400 words, cite something specific about {company} if the JD contains it; otherwise stay concrete about the role. Include the visa line if relevant.
@@ -402,12 +402,12 @@ You are a resume auditor. Score keyword coverage and honesty. You are not a keyw
 {tailored_resume}
 
 Rules:
-- keyword_coverage (0-100): how well the tailored resume surfaces existing experience that matches the JD.
-- honesty (0-100): 100 means every claim is supported by the source of truth. Deduct for new technologies, domains, employers, titles, or metrics.
+- keyword_coverage (0-100): how well the tailored resume surfaces existing experience and related skills that match the JD.
+- honesty (0-100): 100 means claims are supported by the source of truth. Deduct for fake employers, false job titles, fabricated metrics, or completely ungrounded/out-of-the-blue technologies. Closely related technologies, tools, libraries, or protocols added to the Key Skills section to legitimately support the candidate's actual work/tech stack and match JD keywords are ALLOWED and must NOT be penalized as dishonesty.
 - overall score MUST be <= honesty.
 - NEVER tell the writer to invent, fabricate, or add experience the candidate does not have.
 - If the JD requires something absent, list it under gaps and suggest adjacent-evidence framing or an honest omission.
-- allowed_fixes may only be: reorder skills, swap experience-bank variants, inject JD wording for skills already in the source of truth, tighten summary.
+- allowed_fixes may only be: add related skills to Key Skills sections to match JD keywords and support claims, reorder skills, swap experience-bank variants, inject JD wording for skills already in the source of truth, tighten summary.
 
 Return exactly this JSON:
 {{
