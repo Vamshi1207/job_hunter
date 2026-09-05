@@ -10,7 +10,175 @@ jobs.yaml / hunt / pasted URL  →  tailor (Nemotron, gpt-oss, then agy)  →  h
 
 The desk, hunt, Camoufox, and tailor all run **inside Docker**. Do not start uvicorn on the host.
 
-Runtime map (Archify, pinned to commit `0ce6138`): open [`docs/architecture/job-search-runtime.html`](docs/architecture/job-search-runtime.html) in a browser. Typed source is [`docs/architecture/job-search-runtime.architecture.json`](docs/architecture/job-search-runtime.architecture.json).
+## Architecture
+
+The Job Search Pipeline is an automated, containerized job discovery, tailoring, and application-prep platform. It operates strictly on a **human-in-the-loop** model: it automates discovery, stack evaluation, CV customization, ATS scoring, and form autofill, but **never clicks Submit**.
+
+<p align="center">
+  <a href="docs/architecture/job-search-runtime.html">
+    <img src="docs/architecture/job-search-runtime.png" alt="Job Search Pipeline Architecture Map (Archify)" width="100%"/>
+  </a>
+  <br/>
+  <sub>Interactive runtime map (compiled with <a href="https://github.com/tt-a1i/archify">Archify</a>): open <a href="docs/architecture/job-search-runtime.html"><code>docs/architecture/job-search-runtime.html</code></a> in a browser for interactive views, source links, and route probing. Typed source: <a href="docs/architecture/job-search-runtime.architecture.json"><code>docs/architecture/job-search-runtime.architecture.json</code></a>.</sub>
+</p>
+
+```mermaid
+graph TB
+  subgraph Client ["Client & Host Layer"]
+    User["User Browser<br/>(http://127.0.0.1:8000)"]
+    Ext["Chrome Extension<br/>(extension/)"]
+    PagesHelper["Mac Pages Helper<br/>(scripts/macos_pages_helper.py)"]
+  end
+
+  subgraph Docker ["Docker Container (:8000, :6080)"]
+    subgraph WebDesk ["Desk Service (web/app.py)"]
+      FastAPI["FastAPI REST & SSE Engine"]
+      DeskUI["Desk Single-Page App<br/>(HTML5 / Vanilla CSS / JS)"]
+      VNCProxy["noVNC Bridge<br/>(Xvfb :99 → websockify :6080)"]
+    end
+
+    subgraph Hunting ["Hunting Engine (pipeline/hunt.py)"]
+      HuntOrch["Hunt Orchestrator"]
+      GeoGate["Multi-Location Balancer & Geo-Gate"]
+      StackFilter["Fit & Stack Matcher (pipeline/stack_match.py)"]
+      Camoufox["Camoufox Stealth Browser<br/>(Anti-detect Firefox on Xvfb :99)"]
+    end
+
+    subgraph Tailoring ["Tailoring & Critic Engine (pipeline/tailor.py)"]
+      TailorOrch["Tailor Orchestrator"]
+      Critic["Honesty & ATS Critic"]
+      LLMCascade["LLM Cascade Controller (pipeline/llm.py)"]
+    end
+
+    subgraph Exporting ["Document Compiler (pipeline/cv_export.py)"]
+      HTMLGen["Dynamic HTML Generator"]
+      PlaywrightPDF["Playwright Headless PDF"]
+      DocxGen["DOCX Generator"]
+    end
+  end
+
+  subgraph External ["External Services"]
+    LLM1["Primary: NVIDIA NIM<br/>(Nemotron Ultra)"]
+    LLM2["Fallback: NVIDIA NIM<br/>(openai/gpt-oss-120b)"]
+    LLM3["Backup: Antigravity CLI<br/>(Gemini Pro)"]
+    Boards["Job Boards & Portals<br/>(LinkedIn, Indeed, Greenhouse, Lever, Ashby, Workday)"]
+  end
+
+  subgraph Storage ["Storage & Truth (Filesystem)"]
+    Config["Configuration<br/>(config.yaml + config.example.yaml)"]
+    Truth["Ground Truth<br/>(cv_master.md + experience-bank/)"]
+    Queues["Queue State<br/>(jobs.yaml + applied.yaml)"]
+    Packages["Application Packages<br/>(applications/{company}-{role}-{date}/)"]
+    AnswerCache["Answer Cache<br/>(.answers_cache.json)"]
+  end
+
+  User -->|HTTP / SSE| DeskUI
+  DeskUI --> FastAPI
+  FastAPI --> HuntOrch
+  FastAPI --> TailorOrch
+  VNCProxy -.->|Embedded Iframe| DeskUI
+  Ext -->|Autofill & Caching API| FastAPI
+
+  HuntOrch --> GeoGate --> StackFilter --> Camoufox
+  Camoufox -->|Crawl / Auto-Unsave| Boards
+  Camoufox -.->|X11 Display :99| VNCProxy
+
+  TailorOrch --> LLMCascade
+  LLMCascade --> LLM1
+  LLM1 -.->|On Failure| LLM2
+  LLM2 -.->|On Failure| LLM3
+  TailorOrch --> Critic
+  Critic -->|Iterative Refinement| LLMCascade
+
+  TailorOrch --> Exporting
+  Exporting --> HTMLGen --> PlaywrightPDF
+  Exporting --> DocxGen
+  DocxGen -.->|AppleScript Trigger| PagesHelper
+
+  Config --> FastAPI & HuntOrch & TailorOrch
+  Truth --> TailorOrch
+  FastAPI & HuntOrch --> Queues
+  Exporting --> Packages
+  FastAPI --> AnswerCache
+```
+
+### Core Subsystems
+
+#### 1. Desk UI & Real-Time Orchestration Hub (`web/app.py`, `web/static/`)
+- **FastAPI Engine (`web/app.py`)**: Runs inside Docker on port `8000`, serving both the REST API and the dashboard UI.
+- **Server-Sent Events (SSE)**: Streams granular task progress live (`/api/runs/{run_id}/stream`), updating UI indicators for each active job (`Searching`, `Writing CV`, `Scoring ATS`, `Building PDF`, `Ready`, `Stopped`).
+- **Interactive VNC Bridge**: `scripts/docker-entrypoint.sh` initializes Xvfb on display `:99`, paired with `x11vnc` and `websockify` on port `6080`. The Desk UI dynamically embeds a noVNC iframe *only* when a job board requires human intervention (CAPTCHA, 2FA, or interactive login).
+- **Application Lifecycle Controls**: Handles manual URL & JD intake, job tailoring runs, PDF rebuilds, direct ATS form launching, and job management (separating active listings from applied listings, backed by a 5-second undo timer).
+
+#### 2. Automated Hunting & Discovery Engine (`pipeline/hunt.py`, `pipeline/browser_hunt.py`, `pipeline/search.py`)
+- **Multi-Source Aggregation**:
+  - **LinkedIn**: Crawls search results and saved jobs. Automatically unsaves applied and deleted jobs via Camoufox to keep saved queues clean.
+  - **Indeed**: Discovers postings via Camoufox browser automation or the optional Indeed MCP server.
+  - **ATS Search Dorks**: Searches Google with targeted site queries across major ATS boards (Greenhouse, Lever, Ashby, Workday, iCIMS, Taleo, SmartRecruiters, and custom company boards).
+  - **Public Job APIs**: Queries Remotive and The Muse with automatic schema normalization.
+- **Multi-Location Query Balancing**: Rotates searches evenly across configured target markets and cities (e.g., Montreal, Toronto, Ottawa, and Remote Canada) to prevent geographic bias or search exhaustion.
+- **Strict Geo-Fencing**: Strictly enforces target location boundaries, eliminating US-only job leakage while preserving Canada-eligible and remote postings.
+- **Fit Gates & Stack Matching (`pipeline/stack_match.py`)**:
+  - **Title Veto Tokens**: Instantly skips unwanted titles or seniority levels (e.g., intern, junior, director, QA).
+  - **Stack Analysis**: Gating requires preferred skills to be present and strictly rejects roles requiring forbidden technologies (`hunt.reject_skills`).
+  - **Experience Gating**: Skips jobs demanding years of experience beyond the user profile plus configured buffer.
+
+#### 3. Camoufox Anti-Detect Browser Automation (`pipeline/browser_hunt.py`, `pipeline/apply_url.py`)
+- **Stealth Headed Automation**: Uses Camoufox (anti-detect Firefox build) running inside the container's Xvfb virtual display `:99`. Camoufox prevents anti-bot fingerprinting without popping up native windows on the host.
+- **Direct Form URL Resolution (`pipeline/apply_url.py`)**: Resolves indirect job board links (e.g., LinkedIn `/jobs/view/...` or Indeed `/viewjob?...`) into direct canonical ATS application portal URLs (Greenhouse, Lever, Workday, etc.).
+- **Session Persistence**: Browser profiles, session cookies, and authentication tokens are persisted in the gitignored `.camoufox-profile/` directory.
+
+#### 4. Tailoring & Honesty Critic Engine (`pipeline/tailor.py`, `pipeline/llm.py`)
+- **LLM Cascade & Fault Tolerance**:
+  1. **Primary**: NVIDIA NIM (`pipeline.model`, default `nvidia/nemotron-4-340b-instruct` / Nemotron Ultra).
+  2. **Secondary Fallback**: NVIDIA NIM (`pipeline.nvidia.fallback_model`, default `openai/gpt-oss-120b`).
+  3. **Tertiary Fallback**: Antigravity CLI / Gemini (`pipeline.fallback_model`, default `agy` with `gemini-3.1-pro`).
+  - Automatically handles model outages, quota exhaustion, and provider failures while honoring rate limits (40 RPM default) and managing parallel worker pools (`pipeline.workers`).
+- **Ground-Truth Invariant ("Honesty Critic")**:
+  - The tailor is strictly constrained to `cv_master.md` and `experience-bank/*.md`. It is strictly forbidden from fabricating employers, employment dates, degrees, or unearned metrics.
+  - **Key Skills Enrichment**: Enriches the Key Skills summary with matching JD keywords only when substantiated by existing master experience.
+  - **Iterative Scoring Loop**: Calculates ATS match score and evaluates honesty. If either score falls below threshold (`pipeline.ats_threshold`), it loops with corrective feedback up to `pipeline.max_attempts`.
+
+#### 5. Multi-Format Document Compiler (`pipeline/cv_export.py`, `resumes/template.html`)
+- **Dynamic HTML Template**: Fills `resumes/template.html` with role-adapted content and dynamic bullet counts (`cv_format.bullets.dynamic`), allocating more bullets to directly relevant past employers. Unused bullet rows are cleanly omitted.
+- **Playwright PDF Generation**: Compiles pixel-perfect PDFs via headless Chromium with strict CSS page-budget preservation (`cv_format.pages`).
+- **Multi-Format Output**: Compiles Word (`.docx`) and native Apple Pages (`.pages`) formats. Native Pages export is orchestrated via `scripts/macos_pages_helper.py` running on the host Mac.
+- **Complete Application Dossiers**: Each tailored role receives a dedicated folder under `applications/<company>-<role>-<date>/` containing:
+  - `<Name>_CV.pdf`, `<Name>_CV.html`, `<Name>_CV.docx`, `<Name>_CV.pages`
+  - `cover_letter.md` (250–400 word targeted cover letter)
+  - `linkedin_dm.txt` (≤60-word cold outreach message)
+  - `why_i_fit.txt` (3-bullet fit summary)
+  - `playbook.md` (Q&A cheat sheet for ATS forms)
+  - `analysis.md` & `llm_output_raw.txt` (scoring and generation audit logs)
+
+#### 6. Chrome Extension & Form Autofill Assistant (`extension/`, `pipeline/fill.py`)
+- **Manifest V3 Browser Extension (`extension/`)**:
+  - Interacts with Desk API endpoints (`/api/apply/for-page`, `/api/packages/{package_id}/fill`, `/api/apply/answer`).
+  - Injects into ATS job applications (Greenhouse, Lever, Ashby, Workday, etc.) to autofill personal information, work authorizations, and playbook Q&As.
+  - Auto-attaches the compiled tailored CV PDF directly into the application file-upload input.
+- **Question-Answer Caching**: Custom application questions answered by the user or generated via LLM are cached in `.answers_cache.json` and reused across future applications.
+- **Visual Question Tracking**: Highlights processed form fields and flags ambiguous or unhandled custom questions for manual review.
+
+#### 7. State, Queue & Memory Architecture
+- **Configuration Hierarchy**: Deep-merges tracked defaults (`config.example.yaml`) with user-specific gitignored overrides (`config.yaml`).
+- **Queue Segregation**:
+  - `jobs.yaml`: Active queue of discovered and in-progress job postings.
+  - `applied.yaml`: Completed/submitted postings archive, preventing search pollution and re-crawling.
+  - `applications/_tracker.md`: High-level markdown audit table linking tailored applications, ATS scores, and application links.
+- **Feedback & Experience Bank (`memory/`, `experience-bank/`)**:
+  - `memory/feedback.md`: Negative prompt guidelines and writing corrections loaded into the tailor on every run to prevent repeat style errors.
+  - `experience-bank/*.md`: Deep repository of employer-specific bullet variations and project narratives.
+
+### Key Architectural Invariants
+
+| Principle | Enforcement Mechanism |
+|---|---|
+| **Never Clicks Submit** | Form autofill and browser automation strictly halt before submission. Final review and submission are exclusively performed by the human user. |
+| **No Hallucinated Experience** | Tailoring prompt and honesty critic reject any bullet points, skills, or metrics not grounded in `cv_master.md` or `experience-bank/`. |
+| **Containerized Sandboxing** | All browser crawling, LLM communication, and desk server operations run inside Docker with mounted credentials and persistent browser profiles. |
+| **Rate-Limited Resiliency** | Centralized semaphore and token rate-limiter prevents 429 throttling across parallel tailoring workers. |
+
+Runtime map (Archify, pinned to commit `a4c61fe`): open [`docs/architecture/job-search-runtime.html`](docs/architecture/job-search-runtime.html) in a browser. Typed source is [`docs/architecture/job-search-runtime.architecture.json`](docs/architecture/job-search-runtime.architecture.json).
 
 ## Prerequisites
 

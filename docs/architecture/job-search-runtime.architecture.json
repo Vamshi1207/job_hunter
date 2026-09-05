@@ -8,7 +8,7 @@
     "quality_profile": "showcase",
     "repository": {
       "url": "https://github.com/Vamshi1207/job_hunter",
-      "revision": "0ce613813b2de18146bc29e095d3b2fae3a7808e"
+      "revision": "a4c61fe29796fcf0f1beab0e9699b7f2a374bd75"
     },
     "views": [
       {
@@ -20,14 +20,14 @@
       {
         "id": "tailor-path",
         "label": "Tailor a posting",
-        "focus": ["desk", "truth", "tailor", "gemini", "packages"],
+        "focus": ["desk", "truth", "tailor", "llm", "packages"],
         "note": "Master CV and experience bank are the only facts the LLM may reuse."
       },
       {
-        "id": "manual-intake",
-        "label": "Manual URL and JD",
-        "focus": ["you", "desk", "tailor", "packages"],
-        "note": "Paste URLs and an optional JD; a single URL uses the pasted text."
+        "id": "apply-path",
+        "label": "Autofill application",
+        "focus": ["you", "ext", "desk", "packages"],
+        "note": "Chrome extension fetches package fill data and caches answers. Never clicks Submit."
       }
     ]
   },
@@ -41,6 +41,16 @@
       "size": [120, 60]
     },
     {
+      "id": "ext",
+      "type": "frontend",
+      "label": "Extension",
+      "sublabel": "autofill · cache",
+      "pos": [40, 460],
+      "size": [120, 60],
+      "tag": "never Submit",
+      "sources": [{ "path": "extension/background.js", "line": 1, "end_line": 20, "label": "background" }]
+    },
+    {
       "id": "desk",
       "type": "frontend",
       "label": "Desk UI",
@@ -48,7 +58,7 @@
       "brand": "fastapi",
       "pos": [240, 280],
       "size": [140, 64],
-      "sources": [{ "path": "web/app.py", "line": 28, "end_line": 29, "label": "app" }]
+      "sources": [{ "path": "web/app.py", "line": 39, "end_line": 46, "label": "app" }]
     },
     {
       "id": "hunt",
@@ -57,7 +67,7 @@
       "sublabel": "fit gates",
       "pos": [480, 280],
       "size": [140, 64],
-      "sources": [{ "path": "pipeline/hunt.py", "line": 14, "end_line": 25, "label": "hunt_and_tailor" }]
+      "sources": [{ "path": "pipeline/hunt.py", "line": 331, "end_line": 348, "label": "hunt_and_tailor" }]
     },
     {
       "id": "camoufox",
@@ -68,7 +78,7 @@
       "pos": [720, 280],
       "size": [150, 64],
       "tag": "never Apply",
-      "sources": [{ "path": "pipeline/browser_hunt.py", "line": 280, "end_line": 316, "label": "browse_jobs" }]
+      "sources": [{ "path": "pipeline/browser_hunt.py", "line": 379, "end_line": 415, "label": "browse_jobs" }]
     },
     {
       "id": "boards",
@@ -85,26 +95,26 @@
       "sublabel": "config · CV · bank",
       "pos": [240, 80],
       "size": [140, 64],
-      "sources": [{ "path": "pipeline/config.py", "line": 44, "end_line": 53, "label": "load_config" }]
+      "sources": [{ "path": "pipeline/config.py", "line": 47, "end_line": 56, "label": "load_config" }]
     },
     {
       "id": "tailor",
       "type": "backend",
       "label": "Tailor + critic",
-      "sublabel": "agy · Playwright PDF",
+      "sublabel": "NIM · Playwright PDF",
       "pos": [480, 460],
       "size": [140, 64],
       "sources": [{ "path": "pipeline/run_pipeline.py", "line": 45, "end_line": 71, "label": "process_job" }]
     },
     {
-      "id": "gemini",
+      "id": "llm",
       "type": "cloud",
-      "label": "Gemini",
-      "sublabel": "agy CLI",
+      "label": "LLM cascade",
+      "sublabel": "Nemotron · agy",
       "brand": "google-gemini",
       "pos": [720, 460],
       "size": [140, 64],
-      "sources": [{ "path": "pipeline/tailor.py", "line": 93, "end_line": 98, "label": "call_agy" }]
+      "sources": [{ "path": "pipeline/llm.py", "line": 120, "end_line": 144, "label": "call_llm" }]
     },
     {
       "id": "packages",
@@ -120,7 +130,7 @@
     {
       "kind": "region",
       "label": "Docker",
-      "wraps": ["desk", "hunt", "camoufox", "tailor", "gemini"]
+      "wraps": ["desk", "hunt", "camoufox", "tailor", "llm"]
     },
     {
       "kind": "security-group",
@@ -130,21 +140,23 @@
   ],
   "connections": [
     { "id": "you-desk", "from": "you", "to": "desk", "label": "HTTPS", "variant": "emphasis" },
+    { "id": "you-ext", "from": "you", "to": "ext", "label": "ATS page", "fromSide": "bottom", "toSide": "top", "labelDy": 24 },
+    { "id": "ext-desk", "from": "ext", "to": "desk", "label": "/api/apply", "fromSide": "right", "toSide": "left", "labelDy": -20 },
     { "id": "desk-hunt", "from": "desk", "to": "hunt", "label": "/api/hunt", "labelDy": -28 },
     { "id": "hunt-camoufox", "from": "hunt", "to": "camoufox", "label": "crawl", "labelDy": -28 },
     { "id": "camoufox-boards", "from": "camoufox", "to": "boards", "label": "read JDs", "labelDy": -28 },
     { "id": "desk-truth", "from": "desk", "to": "truth", "label": "config overlay", "fromSide": "top", "toSide": "bottom", "labelDy": -40 },
     { "id": "desk-tailor", "from": "desk", "to": "tailor", "label": "/api/runs", "variant": "dashed", "fromSide": "bottom", "toSide": "left", "labelDy": 20 },
     { "id": "hunt-tailor", "from": "hunt", "to": "tailor", "label": "selected JDs", "fromSide": "bottom", "toSide": "top", "labelDy": 24 },
-    { "id": "tailor-gemini", "from": "tailor", "to": "gemini", "label": "agy retry" },
+    { "id": "tailor-llm", "from": "tailor", "to": "llm", "label": "NIM cascade" },
     { "id": "tailor-packages", "from": "tailor", "to": "packages", "label": "HTML + PDF", "fromSide": "bottom", "toSide": "bottom", "via": [[550, 560], [1040, 560]], "labelDy": 28 }
   ],
   "cards": [
     {
       "dot": "cyan",
-      "title": "Desk",
+      "title": "Desk & Extension",
       "items": [
-        "Hunt from profile or paste URLs plus an optional JD"
+        "Hunt from profile, paste URLs, and autofill forms with cached answers"
       ]
     },
     {
