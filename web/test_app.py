@@ -7,7 +7,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import ANY, patch
 
 from fastapi.testclient import TestClient
 
@@ -241,6 +241,43 @@ class DeskAPITests(unittest.TestCase):
         applied = yaml.safe_load((self.root / "applied.yaml").read_text()) or {}
         self.assertEqual(queue["jobs"][0]["company"], "Acme")
         self.assertEqual(applied.get("jobs") or [], [])
+
+    def test_mark_package_applied_triggers_linkedin_unsave(self):
+        folder = self._package()
+        (folder / "job.json").write_text(
+            json.dumps({
+                "company": "LinkedInCo",
+                "role": "Software Engineer",
+                "url": "https://www.linkedin.com/jobs/view/4444667324",
+                "source": "saved:linkedin",
+            })
+        )
+        with patch("web.app._enqueue_linkedin_unsave") as mock_enqueue:
+            res = self.client.post(f"/api/packages/{folder.name}/applied", json={"applied": True})
+            self.assertEqual(res.status_code, 200)
+            self.assertTrue(res.json()["applied"])
+            self.assertTrue(res.json().get("unsave_triggered"))
+            mock_enqueue.assert_called_once()
+            args, kwargs = mock_enqueue.call_args
+            self.assertEqual(args[1], "https://www.linkedin.com/jobs/view/4444667324")
+            self.assertEqual(args[2], folder.name)
+
+    def test_mark_package_applied_non_saved_job_does_not_unsave(self):
+        folder = self._package()
+        (folder / "job.json").write_text(
+            json.dumps({
+                "company": "LinkedInCo",
+                "role": "Software Engineer",
+                "url": "https://www.linkedin.com/jobs/view/4444667324",
+                "source": "camoufox:linkedin",
+            })
+        )
+        with patch("web.app._enqueue_linkedin_unsave") as mock_enqueue:
+            res = self.client.post(f"/api/packages/{folder.name}/applied", json={"applied": True})
+            self.assertEqual(res.status_code, 200)
+            self.assertTrue(res.json()["applied"])
+            self.assertFalse(res.json().get("unsave_triggered"))
+            mock_enqueue.assert_not_called()
 
     def test_apply_launch_uses_stored_form_url_and_stores_pending_fill(self):
         folder = self._package()
@@ -491,9 +528,12 @@ class DeskAPITests(unittest.TestCase):
         res = self.client.post("/api/packages/missing-package/rebuild-pdf")
         self.assertEqual(res.status_code, 404)
 
-    def test_start_run_requires_urls(self):
-        res = self.client.post("/api/runs", json={"urls": "", "jd": "Python"})
+    def test_start_run_requires_urls_or_jd(self):
+        res = self.client.post("/api/runs", json={"urls": "", "jd": ""})
         self.assertEqual(res.status_code, 400)
+        with patch("web.app.threading.Thread"):
+            res2 = self.client.post("/api/runs", json={"urls": "", "jd": "Python Developer at Acme"})
+            self.assertEqual(res2.status_code, 200)
 
     def test_active_run_empty_then_hunt_stop_and_stale_restart(self):
         empty = self.client.get("/api/runs/active")
@@ -563,6 +603,57 @@ class DeskAPITests(unittest.TestCase):
         from pipeline.jobs import deleted_linkedin_ids
 
         self.assertIn("9998887776", deleted_linkedin_ids(load_config()))
+
+
+    def test_delete_unapplied_saved_package_with_keep_triggers_unsave(self):
+        folder = self._package()
+        (folder / "job.json").write_text(
+            json.dumps({
+                "company": "LinkedInCo",
+                "role": "Software Engineer",
+                "url": "https://www.linkedin.com/jobs/view/4444667324",
+                "source": "saved:linkedin",
+                "applied": False,
+            })
+        )
+        with patch("web.app._enqueue_linkedin_action") as mock_action:
+            res = self.client.delete(f"/api/packages/{folder.name}?keep=true")
+            self.assertEqual(res.status_code, 200)
+            self.assertTrue(res.json().get("keep"))
+            self.assertTrue(res.json().get("unsave_triggered"))
+            mock_action.assert_called_once_with(ANY, "https://www.linkedin.com/jobs/view/4444667324", package_id="", action="unsave")
+
+    def test_delete_applied_package_with_keep_does_not_trigger_unsave(self):
+        folder = self._package()
+        (folder / "job.json").write_text(
+            json.dumps({
+                "company": "LinkedInCo",
+                "role": "Software Engineer",
+                "url": "https://www.linkedin.com/jobs/view/4444667324",
+                "source": "saved:linkedin",
+                "applied": True,
+            })
+        )
+        with patch("web.app._enqueue_linkedin_action") as mock_action:
+            res = self.client.delete(f"/api/packages/{folder.name}?keep=true")
+            self.assertEqual(res.status_code, 200)
+            self.assertFalse(res.json().get("unsave_triggered"))
+            mock_action.assert_not_called()
+
+    def test_remember_saved_job_triggers_unsave(self):
+        with patch("web.app._enqueue_linkedin_action") as mock_action:
+            res = self.client.post(
+                "/api/jobs/remember",
+                json={
+                    "company": "LinkedInCo",
+                    "role": "Software Engineer",
+                    "url": "https://www.linkedin.com/jobs/view/4444667324",
+                    "source": "saved:linkedin",
+                },
+            )
+            self.assertEqual(res.status_code, 200)
+            self.assertTrue(res.json().get("unsave_triggered"))
+            mock_action.assert_called_once_with(ANY, "https://www.linkedin.com/jobs/view/4444667324", package_id="", action="unsave")
 
 
 if __name__ == "__main__":

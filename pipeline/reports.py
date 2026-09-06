@@ -172,7 +172,13 @@ def package_summary(cfg: Config, folder: Path) -> dict:
     from pipeline.jobs import display_location, infer_work_mode
 
     location = (job_meta.get("location") or "").strip()
-    work_mode = (job_meta.get("work_mode") or "").strip().lower() or infer_work_mode(location)
+    work_mode = (job_meta.get("work_mode") or "").strip().lower()
+    if not work_mode:
+        analysis_ctx = ""
+        analysis_file = folder / "analysis.md"
+        if analysis_file.exists():
+            analysis_ctx = analysis_file.read_text()
+        work_mode = infer_work_mode(location, analysis_ctx)
     applied = _truthy(job_meta.get("applied"))
     applied_at = str(job_meta.get("applied_at") or "").strip()
     if not applied:

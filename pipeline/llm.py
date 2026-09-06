@@ -1,4 +1,4 @@
-"""LLM calls: Nemotron, then NVIDIA gpt-oss, then agy/Gemini."""
+"""LLM calls: Nemotron 3.5 Lightning, Nemotron 3 Ultra, DeepSeek V4 Flash, then agy/Gemini."""
 
 from __future__ import annotations
 
@@ -14,8 +14,11 @@ from pipeline.config import load_config
 log = logging.getLogger(__name__)
 
 NVIDIA_DEFAULT_URL = "https://integrate.api.nvidia.com/v1"
-NVIDIA_DEFAULT_MODEL = "nvidia/nemotron-3-ultra-550b-a55b"
-NVIDIA_FALLBACK_MODEL = "openai/gpt-oss-120b"
+NVIDIA_DEFAULT_MODEL = "nvidia/nemotron-3.5-lightning-30b-a3b"
+NVIDIA_FALLBACK_MODELS = [
+    "nvidia/nemotron-3-ultra-550b-a55b",
+    "deepseek-ai/deepseek-v4-flash-0731",
+]
 
 
 class RpmLimiter:
@@ -79,31 +82,45 @@ def primary_provider(cfg=None) -> str:
     if raw in {"nvidia", "agy"}:
         return raw
     model = str(cfg.get("pipeline.model") or "")
-    if model.startswith("nvidia/") or "nemotron" in model.lower():
+    if _looks_like_nvidia_model(model):
         return "nvidia"
     return "agy"
 
 
 def nvidia_model_chain(cfg=None) -> list[str]:
-    """Primary NIM model, then gpt-oss, skipping duplicates."""
+    """Primary model (nemotron-3.5-lightning), then nemotron-3-ultra, then deepseek-v4-flash."""
     cfg = cfg or load_config()
     primary = str(cfg.get("pipeline.model") or NVIDIA_DEFAULT_MODEL).strip()
     if not _looks_like_nvidia_model(primary):
         primary = NVIDIA_DEFAULT_MODEL
-    mid = str(cfg.get("pipeline.nvidia.fallback_model") or NVIDIA_FALLBACK_MODEL).strip()
-    models = [primary]
-    if mid and mid != primary:
-        models.append(mid)
-    return models
+    chain = [primary]
+
+    configured_fallbacks = cfg.get("pipeline.nvidia.fallback_models")
+    if isinstance(configured_fallbacks, list) and configured_fallbacks:
+        fallbacks = [str(m).strip() for m in configured_fallbacks if str(m).strip()]
+    else:
+        single = str(cfg.get("pipeline.nvidia.fallback_model") or "").strip()
+        if single and _looks_like_nvidia_model(single):
+            fallbacks = [single]
+            for m in NVIDIA_FALLBACK_MODELS:
+                if m not in fallbacks:
+                    fallbacks.append(m)
+        else:
+            fallbacks = NVIDIA_FALLBACK_MODELS
+
+    for m in fallbacks:
+        if m and m not in chain and "gpt-oss" not in m.lower():
+            chain.append(m)
+    return chain
 
 
 def _looks_like_nvidia_model(model: str) -> bool:
     lower = model.lower()
     return (
         lower.startswith("nvidia/")
-        or lower.startswith("openai/")
+        or lower.startswith("deepseek-ai/")
         or "nemotron" in lower
-        or "gpt-oss" in lower
+        or "deepseek" in lower
     )
 
 
@@ -116,7 +133,7 @@ def get_last_used_model() -> str:
 
 
 def complete_prompt(prompt: str, *, effort: str = "high") -> str:
-    """Return model text. Tries Nemotron, then NVIDIA gpt-oss, then agy."""
+    """Return model text. Tries Nemotron 3.5 Lightning, then Nemotron 3 Ultra, then DeepSeek V4 Flash, then agy."""
     global _last_used_model
     cfg = load_config()
     timeout = int(cfg.get("pipeline.llm_timeout_seconds", 600))
@@ -185,20 +202,26 @@ def _call_nvidia(prompt: str, cfg, *, timeout: int, effort: str, model: str | No
 
     _limiter_for(cfg).acquire()
     model = (model or str(cfg.get("pipeline.model") or NVIDIA_DEFAULT_MODEL)).strip()
-    gpt_oss = "gpt-oss" in model.lower()
+    is_deepseek = "deepseek" in model.lower()
+    is_lightning = "lightning" in model.lower()
     base_url = str(cfg.get("pipeline.nvidia.base_url") or NVIDIA_DEFAULT_URL).rstrip("/")
-    temperature = float(cfg.get("pipeline.nvidia.temperature", 1 if effort == "high" else 0.3))
-    if gpt_oss:
-        top_p = float(cfg.get("pipeline.nvidia.fallback_top_p", 1))
-        raw_max = cfg.get("pipeline.nvidia.fallback_max_tokens")
-        max_tokens = int(raw_max if raw_max is not None else cfg.get("pipeline.nvidia.max_tokens", 16384))
+    temperature = float(cfg.get("pipeline.nvidia.temperature", 1.0 if effort == "high" else 0.3))
+    top_p = float(cfg.get("pipeline.nvidia.top_p", 0.95))
+    max_tokens = int(cfg.get("pipeline.nvidia.max_tokens", 16384))
+
+    if is_deepseek:
         stream = False
-        thinking = False
-    else:
-        top_p = float(cfg.get("pipeline.nvidia.top_p", 0.95))
-        max_tokens = int(cfg.get("pipeline.nvidia.max_tokens", 16384))
+        extra_body = {"chat_template_kwargs": {"thinking": True, "reasoning_effort": "high"}}
+    elif is_lightning:
         stream = True
-        thinking = bool(cfg.get("pipeline.nvidia.enable_thinking", True))
+        extra_body = {
+            "chat_template_kwargs": {"enable_thinking": True},
+            "reasoning_budget": max_tokens,
+        }
+    else:
+        stream = True
+        extra_body = {"chat_template_kwargs": {"enable_thinking": True}}
+
     client = OpenAI(base_url=base_url, api_key=key, timeout=timeout)
     kwargs = {
         "model": model,
@@ -207,9 +230,8 @@ def _call_nvidia(prompt: str, cfg, *, timeout: int, effort: str, model: str | No
         "top_p": top_p,
         "max_tokens": max_tokens,
         "stream": stream,
+        "extra_body": extra_body,
     }
-    if thinking:
-        kwargs["extra_body"] = {"chat_template_kwargs": {"enable_thinking": True}}
     log.info("NVIDIA %s (%s)", model, effort)
     last_error = None
     for attempt in range(3):

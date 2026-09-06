@@ -253,6 +253,7 @@ def parse_posting_meta(html: str, url: str = "") -> dict:
 REGION_TOKENS = {
     "qc", "on", "bc", "ab", "mb", "sk", "ns", "nb", "nl", "pe", "yt", "nt", "nu",
     "ca", "us", "usa", "uk", "canada", "united states", "america", "remote",
+    "latam", "latin america", "europe", "apac", "emea", "asia", "americas", "global", "worldwide", "anywhere",
 }
 
 
@@ -265,13 +266,11 @@ def infer_work_mode(location: str = "", jd: str = "") -> str:
         r"\b(not remote|no remote|not a remote)\b", blob
     ):
         return "remote"
-    if re.search(r"\b(on-?site|in-?office|office-based|in the office)\b", blob):
+    if re.search(r"\b(on-?site|in-?office|office-based|in the office|in-person|in person)\b", blob):
         return "onsite"
     loc = (location or "").strip().lower()
     if loc in {"remote", "anywhere"} or loc.startswith("remote"):
         return "remote"
-    if loc:
-        return "onsite"
     return ""
 
 
@@ -297,12 +296,15 @@ def display_location(location: str = "", work_mode: str = "") -> str:
             found.append(first)
         if len(found) >= 3:
             break
-    if work_mode == "remote" and "remote" not in seen and found:
-        pass
     if not found:
-        if work_mode == "remote" or "remote" in (location or "").lower():
+        low = text.lower()
+        if "canada" in low or "canadian" in low:
+            return "Canada"
+        if any(w in low for w in ["worldwide", "anywhere", "global"]):
+            return "Worldwide"
+        if work_mode == "remote" or "remote" in low:
             return "Remote"
-        return (location or "").split(",")[0].strip()[:40]
+        return text.split(",")[0].strip()[:40]
     return ", ".join(found)
 
 
@@ -383,12 +385,15 @@ def load_jobs(cfg: Config, company_filter: Optional[str] = None) -> list[dict]:
                 url or "no url",
             )
             continue
+        loc = (entry.get("location") or "").strip()
+        mode = (entry.get("work_mode") or "").strip().lower() or infer_work_mode(loc, jd)
         jobs.append(
             {
                 "company": company,
                 "role": role,
                 "url": url,
-                "location": (entry.get("location") or "").strip(),
+                "location": loc,
+                "work_mode": mode,
                 "jd": jd,
                 "folder": f"{slug(company)}-{slug(role)}",
                 "apply_url": (entry.get("apply_url") or "").strip(),
@@ -399,41 +404,135 @@ def load_jobs(cfg: Config, company_filter: Optional[str] = None) -> list[dict]:
 
 
 def infer_company_role(url: str = "", jd: str = "") -> tuple[str, str]:
-    """Best-effort company and role from a URL and/or JD first line."""
+    """Best-effort company and role from a URL and/or JD text."""
     company = ""
     role = ""
-    host_path = re.sub(r"^https?://", "", url or "").split("?")[0]
-    patterns = [
-        r"(?:boards\.)?greenhouse\.io/([^/]+)",
-        r"lever\.co/([^/]+)",
-        r"jobs\.ashbyhq\.com/([^/]+)",
-        r"ats\.rippling\.com/([^/]+)",
-        r"jobs\.workable\.com/([^/]+)",
-    ]
-    for pattern in patterns:
-        match = re.search(pattern, host_path, re.I)
-        if match:
-            company = match.group(1).replace("-", " ").strip().title()
-            break
+    if url:
+        host_path = re.sub(r"^https?://", "", url or "").split("?")[0]
+        patterns = [
+            r"(?:boards\.)?greenhouse\.io/([^/]+)",
+            r"lever\.co/([^/]+)",
+            r"jobs\.ashbyhq\.com/([^/]+)",
+            r"ats\.rippling\.com/([^/]+)",
+            r"jobs\.workable\.com/([^/]+)",
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, host_path, re.I)
+            if match:
+                company = match.group(1).replace("-", " ").strip().title()
+                break
 
-    first = ""
-    for line in (jd or "").splitlines():
-        if line.strip():
-            first = line.strip()
-            break
-    at_match = re.match(r"(.+?)\s+at\s+(.+?)(?:\s+\(|$)", first, re.I)
-    if at_match:
-        role = role or at_match.group(1).strip(" -–—")
-        guessed = at_match.group(2).strip(" -–—")
-        if not company or is_placeholder_company(company):
-            company = guessed
+    lines = [line.strip() for line in (jd or "").splitlines() if line.strip()]
+    if not lines:
+        return company, role
 
-    if not role and first and " at " not in first.lower():
-        role = first[:80]
+    # 1. Check for explicit labeled lines in the first 25 lines
+    for line in lines[:25]:
+        if not company:
+            m_comp = re.match(r"^(?:company(?:\s*name)?|employer|organization|hirer)\s*[:\-–]\s*(.+)$", line, re.I)
+            if m_comp:
+                val = m_comp.group(1).strip(" -–—*#")
+                if val and not is_placeholder_company(val):
+                    company = val
+        if not role:
+            m_role = re.match(r"^(?:job\s*title|position(?:\s*title)?|role(?:\s*title)?|title)\s*[:\-–]\s*(.+)$", line, re.I)
+            if m_role:
+                val = m_role.group(1).strip(" -–—*#")
+                if val and val.lower() != "role":
+                    role = val
+
+    # 2. Check for "Role at Company" pattern across first 10 lines
+    if not (company and role):
+        for line in lines[:10]:
+            clean_l = re.sub(r"^[#*>\-\s]+", "", line).strip()
+            at_match = re.match(r"^(.+?)\s+(?:at|@)\s+(.+?)(?:\s+[-–—(]|$)", clean_l, re.I)
+            if at_match:
+                cand_r = at_match.group(1).strip(" -–—*#")
+                cand_c = at_match.group(2).strip(" -–—*#")
+                if cand_r and (not role or role.lower() == "role"):
+                    role = cand_r[:80]
+                if cand_c and not company and not is_placeholder_company(cand_c):
+                    company = cand_c[:80]
+                break
+
+    # 3. Check for "About <Company>" or "At <Company>"
+    if not company:
+        for line in lines[:15]:
+            clean_l = re.sub(r"^[#*>\-\s]+", "", line).strip()
+            m_about = re.match(r"^(?:about|at|join)\s+([A-Z0-9][A-Za-z0-9\s.,&'\-–]+?)(?:\s+is|\s+we|\s*[:!.]|$)", clean_l, re.I)
+            if m_about:
+                cand = m_about.group(1).strip(" -–—*#.:")
+                if cand.lower() not in {"the role", "the job", "the position", "the company", "the team", "us", "our team"}:
+                    if len(cand) <= 50 and not is_placeholder_company(cand):
+                        company = cand
+                        break
+
+    # 4. First lines heuristics for title / role
+    if not role:
+        for line in lines[:5]:
+            clean_l = re.sub(r"^[#*>\-\s]+", "", line).strip()
+            if len(clean_l) < 80 and not re.search(r"[.;?!]\s", clean_l):
+                if not re.match(r"^(?:about\s+the\s+job|job\s+description|overview|summary)$", clean_l, re.I):
+                    role = clean_l
+                    break
+
+    if not company and lines:
+        first_clean = re.sub(r"^[#*>\-\s]+", "", lines[0]).strip()
+        if len(first_clean) < 60 and first_clean != role and not re.search(r"[.;?!]\s", first_clean):
+            if not is_placeholder_company(first_clean):
+                company = first_clean
 
     if is_placeholder_company(company):
         company = ""
     return company, role
+
+
+def extract_company_role_from_jd(jd: str) -> tuple[str, str, str]:
+    """Extract (company, role, location) from job description using fast heuristics or fallback to LLM."""
+    comp, role = infer_company_role("", jd)
+    loc = ""
+    # Check for labeled location in lines
+    for line in (jd or "").splitlines()[:30]:
+        m_loc = re.match(r"^(?:location|workplace|job\s*location)\s*[:\-–]\s*(.+)$", line.strip(), re.I)
+        if m_loc:
+            loc = m_loc.group(1).strip(" -–—*#")
+            break
+
+    if comp and role and not is_placeholder_company(comp) and role.lower() != "role":
+        return comp, role, loc
+
+    # If heuristic didn't find both company and role, try fast LLM extraction
+    try:
+        from pipeline.llm import complete_prompt
+
+        prompt = (
+            "Extract the hiring company name, job title/role, and job location from this job description.\n"
+            "Return ONLY in this exact format (nothing else):\n"
+            "Company: <company name>\n"
+            "Role: <job title>\n"
+            "Location: <location or Remote>\n\n"
+            f"Job Description:\n{jd[:2000]}\n"
+        )
+        resp = complete_prompt(prompt, effort="low")
+        c = re.search(r"^Company:\s*(.+)$", resp, re.M | re.I)
+        r = re.search(r"^Role:\s*(.+)$", resp, re.M | re.I)
+        l = re.search(r"^Location:\s*(.+)$", resp, re.M | re.I)
+        if c:
+            cand_c = c.group(1).strip(" *#")
+            if cand_c and not is_placeholder_company(cand_c):
+                comp = comp or cand_c
+        if r:
+            cand_r = r.group(1).strip(" *#")
+            if cand_r and cand_r.lower() != "role":
+                role = role or cand_r
+        if l and not loc:
+            loc = l.group(1).strip(" *#")
+    except Exception as exc:
+        log.warning("LLM company/role extraction fallback failed: %s", exc)
+
+    comp = comp or "Unknown"
+    role = role or "Software Engineer"
+    return comp, role, loc
 
 
 def apply_pasted_job_text(
@@ -542,6 +641,56 @@ def _same_job(left: dict, right: dict) -> bool:
     return bool(left_company and left_role and left_company == right_company and left_role == right_role)
 
 
+def is_linkedin_saved_job(meta: dict, folder: Path | None = None, cfg: Config | None = None) -> bool:
+    """Return True if a job posting was fetched from saved jobs in LinkedIn."""
+    if not isinstance(meta, dict):
+        return False
+    url = (meta.get("url") or "").strip()
+    if "linkedin.com" not in url.lower():
+        return False
+
+    source = str(meta.get("source") or "").strip().lower()
+    channel = str(meta.get("channel") or "").strip().lower()
+
+    if source in {"saved:linkedin", "saved_linkedin", "saved-linkedin"}:
+        return True
+    if source == "saved" or source.startswith("saved:"):
+        return True
+    if channel in {"saved", "saved:linkedin"}:
+        return True
+    if meta.get("saved"):
+        return True
+
+    # Check _tracker.md for "saved" channel
+    if folder is not None:
+        try:
+            tracker_path = cfg.tracker_path if cfg else (folder.parent / "_tracker.md")
+            if tracker_path.exists():
+                content = tracker_path.read_text()
+                for line in content.splitlines():
+                    if folder.name in line and "| saved |" in line.lower():
+                        return True
+        except Exception:
+            pass
+
+    # Check jobs.yaml / applied.yaml if cfg provided
+    if cfg is not None:
+        try:
+            for y_path in (cfg.jobs_path, cfg.applied_jobs_path):
+                if not y_path.exists():
+                    continue
+                for row in _load_yaml_jobs(y_path):
+                    if (row.get("url") or "").strip() == url:
+                        r_src = str(row.get("source") or "").lower()
+                        r_chan = str(row.get("channel") or "").lower()
+                        if "saved" in r_src or "saved" in r_chan or row.get("saved"):
+                            return True
+        except Exception:
+            pass
+
+    return False
+
+
 def _queue_row(job: dict) -> dict:
     row = {
         "company": job.get("company") or "",
@@ -550,6 +699,12 @@ def _queue_row(job: dict) -> dict:
         "url": job.get("url") or "",
         "jd": job.get("jd") or job.get("jd_text") or "",
     }
+    if job.get("source"):
+        row["source"] = job["source"]
+    if job.get("channel"):
+        row["channel"] = job["channel"]
+    if job.get("saved") is not None:
+        row["saved"] = bool(job["saved"])
     if job.get("apply_url"):
         row["apply_url"] = job["apply_url"]
     if job.get("apply_kind"):

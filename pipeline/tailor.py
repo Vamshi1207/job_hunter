@@ -677,12 +677,18 @@ async def save_materials(
             payload["retry_history"] = feedback_history.strip()
         (output_dir / "evaluation.json").write_text(json.dumps(payload, indent=2))
 
+    loc = ((job or {}).get("location") or "").strip()
+    from pipeline.jobs import infer_work_mode
+
+    work_mode = ((job or {}).get("work_mode") or "").strip().lower() or infer_work_mode(
+        loc, (job or {}).get("jd") or ""
+    )
     meta = {
         "company": company,
         "role": role,
         "url": (job or {}).get("url") or "",
-        "location": (job or {}).get("location") or "",
-        "work_mode": (job or {}).get("work_mode") or "",
+        "location": loc,
+        "work_mode": work_mode,
         "source": (job or {}).get("source") or (job or {}).get("channel") or "",
         "apply_url": (job or {}).get("apply_url") or "",
         "apply_kind": (job or {}).get("apply_kind") or "",

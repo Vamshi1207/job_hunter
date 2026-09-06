@@ -24,6 +24,7 @@ from pipeline.config import load_config
 from pipeline.jobs import (
     append_job,
     apply_pasted_job_text,
+    extract_company_role_from_jd,
     infer_company_role,
     listing_has_identity,
     parse_job_urls,
@@ -107,9 +108,95 @@ def _browser_busy() -> bool:
         _reclaim_finished_runs_locked()
         return any(
             run.get("status") in {"running", "stopping"}
-            and run.get("kind") in {"hunt", "run", "resolve"}
+            and run.get("kind") in {"hunt", "run", "resolve", "unsave"}
             for run in _runs.values()
         )
+
+
+_unsave_queue: queue.Queue = queue.Queue()
+_unsave_worker_thread: threading.Thread | None = None
+_unsave_worker_lock = threading.Lock()
+
+
+def _enqueue_linkedin_action(cfg, job_url: str, package_id: str = "", action: str = "apply") -> None:
+    """Queue a LinkedIn job action ('apply' or 'unsave') via Camoufox in the background."""
+    global _unsave_worker_thread
+    if not job_url:
+        return
+    _unsave_queue.put((cfg, job_url, package_id, action))
+    with _unsave_worker_lock:
+        if _unsave_worker_thread is None or not _unsave_worker_thread.is_alive():
+            _unsave_worker_thread = threading.Thread(target=_unsave_worker_loop, daemon=True)
+            _unsave_worker_thread.start()
+
+
+def _enqueue_linkedin_unsave(cfg, job_url: str, package_id: str = "") -> None:
+    """Queue a LinkedIn job to be confirmed applied via Camoufox in the background."""
+    _enqueue_linkedin_action(cfg, job_url, package_id=package_id, action="apply")
+
+
+def _unsave_worker_loop() -> None:
+    """Background worker pulling LinkedIn tasks and executing them sequentially."""
+    while True:
+        try:
+            item = _unsave_queue.get(timeout=2.0)
+        except queue.Empty:
+            break
+        if len(item) == 4:
+            cfg, job_url, package_id, action = item
+        else:
+            cfg, job_url, package_id = item
+            action = "apply"
+
+        try:
+            # If the package was unchecked before the worker got to it, skip
+            if action == "apply" and package_id:
+                try:
+                    folder = package_dir(cfg, package_id)
+                    if folder:
+                        from pipeline.reports import _job_meta
+
+                        meta = _job_meta(folder)
+                        if meta.get("applied") is False:
+                            log.info("Job %s was unapplied before Camoufox apply confirmation; skipping.", package_id)
+                            continue
+                except Exception:
+                    pass
+
+            # Wait if browser is busy with hunt or resolve
+            for _ in range(120):
+                with _run_lock:
+                    _reclaim_finished_runs_locked()
+                    hunt_or_resolve_busy = any(
+                        run.get("status") in {"running", "stopping"}
+                        and run.get("kind") in {"hunt", "run", "resolve"}
+                        for run in _runs.values()
+                    )
+                if not hunt_or_resolve_busy:
+                    break
+                time.sleep(1.0)
+
+            run_id = uuid.uuid4().hex[:10]
+            run = _new_run(run_id, queue.Queue(), kind="unsave")
+            with _run_lock:
+                _runs[run_id] = run
+
+            try:
+                if action == "unsave":
+                    from pipeline.browser_hunt import unsave_linkedin_job_in_browser
+
+                    _run_async(lambda: unsave_linkedin_job_in_browser(cfg, job_url))
+                else:
+                    from pipeline.browser_hunt import mark_linkedin_job_applied_in_browser
+
+                    _run_async(lambda: mark_linkedin_job_applied_in_browser(cfg, job_url))
+            except Exception as exc:
+                log.warning("Background Camoufox %s error for %s: %s", action, job_url, exc)
+            finally:
+                with _run_lock:
+                    run["status"] = "finished"
+        finally:
+            _unsave_queue.task_done()
 
 
 def _run_async(factory):
@@ -259,6 +346,9 @@ class RememberJobRequest(BaseModel):
     url: str = ""
     location: str = ""
     jd: str = ""
+    source: str = ""
+    channel: str = ""
+    saved: Optional[bool] = None
 
 
 class MarkAppliedRequest(BaseModel):
@@ -422,11 +512,16 @@ async def rebuild_pdf(package_id: str) -> dict:
 def delete_package(package_id: str, keep: bool = False) -> dict:
     cfg = _load_cfg()
     from pipeline.reports import _job_meta
+    from pipeline.jobs import is_linkedin_saved_job
 
     folder = package_dir(cfg, package_id)
     if folder is None:
         raise HTTPException(status_code=404, detail="Package not found")
     meta = _job_meta(folder)
+    was_applied = bool(meta.get("applied"))
+    is_saved = is_linkedin_saved_job(meta, folder, cfg)
+    url = (meta.get("url") or "").strip()
+
     if not delete_package_dir(cfg, package_id):
         raise HTTPException(status_code=404, detail="Package not found")
     try:
@@ -442,7 +537,14 @@ def delete_package(package_id: str, keep: bool = False) -> dict:
             forget_job(cfg, meta)
         except Exception as exc:
             log.warning("Could not remove deleted job from jobs.yaml: %s", exc)
-    return {"ok": True, "id": package_id, "keep": keep}
+
+    unsave_triggered = False
+    if keep and not was_applied and is_saved and "linkedin.com" in url.lower():
+        log.info("Triggered background Camoufox unsave on delete (keep=True, not applied) for %s: %s", package_id, url)
+        _enqueue_linkedin_action(cfg, url, package_id="", action="unsave")
+        unsave_triggered = True
+
+    return {"ok": True, "id": package_id, "keep": keep, "unsave_triggered": unsave_triggered}
 
 
 class DeleteJobRequest(BaseModel):
@@ -477,17 +579,32 @@ def remember_job(body: RememberJobRequest) -> dict:
     cfg = _load_cfg()
     if not (body.company or "").strip() and not (body.url or "").strip():
         raise HTTPException(status_code=400, detail="Need a company or URL to remember.")
-    append_job(
-        cfg,
-        {
-            "company": (body.company or "").strip() or "Unknown",
-            "role": (body.role or "").strip() or "Role",
-            "url": (body.url or "").strip(),
-            "location": (body.location or "").strip(),
-            "jd": (body.jd or "").strip(),
-        },
-    )
-    return {"ok": True}
+    job_dict = {
+        "company": (body.company or "").strip() or "Unknown",
+        "role": (body.role or "").strip() or "Role",
+        "url": (body.url or "").strip(),
+        "location": (body.location or "").strip(),
+        "jd": (body.jd or "").strip(),
+    }
+    if body.source:
+        job_dict["source"] = body.source
+    if body.channel:
+        job_dict["channel"] = body.channel
+    if body.saved is not None:
+        job_dict["saved"] = body.saved
+
+    append_job(cfg, job_dict)
+
+    from pipeline.jobs import is_linkedin_saved_job
+
+    unsave_triggered = False
+    url = (body.url or "").strip()
+    if is_linkedin_saved_job(job_dict, cfg=cfg) and "linkedin.com" in url.lower():
+        log.info("Triggered background Camoufox unsave on remember_job: %s", url)
+        _enqueue_linkedin_action(cfg, url, package_id="", action="unsave")
+        unsave_triggered = True
+
+    return {"ok": True, "unsave_triggered": unsave_triggered}
 
 
 @app.post("/api/packages/{package_id}/applied")
@@ -521,7 +638,24 @@ def mark_package_applied(package_id: str, body: MarkAppliedRequest) -> dict:
         )
     except Exception as exc:
         log.warning("Could not move job between jobs.yaml and applied.yaml: %s", exc)
-    return package_summary(cfg, folder)
+
+    summary = package_summary(cfg, folder)
+    unsave_triggered = False
+    if body.applied:
+        try:
+            from pipeline.jobs import is_linkedin_saved_job
+
+            if is_linkedin_saved_job(meta, folder=folder, cfg=cfg):
+                job_url = (meta.get("url") or "").strip()
+                if job_url:
+                    _enqueue_linkedin_unsave(cfg, job_url, package_id)
+                    unsave_triggered = True
+                    log.info("Triggered background Camoufox unsave for %s: %s", package_id, job_url)
+        except Exception as exc:
+            log.warning("Could not trigger Camoufox unsave for %s: %s", package_id, exc)
+
+    summary["unsave_triggered"] = unsave_triggered
+    return summary
 
 
 @app.get("/api/packages/{package_id}/fill")
@@ -679,8 +813,9 @@ def apply_consumed() -> dict:
 @app.post("/api/runs")
 def start_run(body: RunRequest) -> dict:
     urls = parse_job_urls("\n".join(part for part in (body.urls, body.url) if part))
-    if not urls:
-        raise HTTPException(status_code=400, detail="Paste one or more job URLs, one per line.")
+    jd = (body.jd or "").strip()
+    if not urls and not jd:
+        raise HTTPException(status_code=400, detail="Paste one or more job URLs or paste a job description.")
     run_id = uuid.uuid4().hex[:10]
     sink: queue.Queue = queue.Queue()
     thread = threading.Thread(target=_execute_run, args=(run_id, urls, body, sink), daemon=True)
@@ -689,7 +824,7 @@ def start_run(body: RunRequest) -> dict:
         run["thread"] = thread
         _runs[run_id] = run
     thread.start()
-    return {"id": run_id, "count": len(urls)}
+    return {"id": run_id, "count": len(urls) if urls else 1}
 
 
 @app.get("/api/runs/active")
@@ -939,35 +1074,59 @@ def _execute_run(run_id: str, urls: list[str], body: RunRequest, sink: queue.Que
     try:
         extra_jd = (body.jd or "").strip()
         listings: list[dict] = []
-        if extra_jd and len(urls) != 1:
+        if extra_jd and urls and len(urls) != 1:
             sink.put({"type": "log", "line": "Pasted description is used with a single URL; reading each posting from the page instead."})
             extra_jd = ""
         if extra_jd:
             from pipeline.jobs import fetch_posting
 
             sink.put({"type": "stage", "line": "Tailoring from the pasted job description."})
-            posting = fetch_posting(urls[0])
-            listings = apply_pasted_job_text(
-                [posting] if posting else [],
-                urls,
-                extra_jd,
-                company=body.company,
-                role=body.role,
-                location=body.location,
-            )
-            if listings:
-                board.found(listings[0])
-            if not listings or not listing_has_identity(listings[0]):
-                sink.put({"type": "stage", "line": "Reading the posting for company and role. Camoufox opens for LinkedIn. Apply is never clicked."})
-                browser = aio.run(_hydrate())
+            if urls:
+                posting = fetch_posting(urls[0])
                 listings = apply_pasted_job_text(
-                    browser or listings,
+                    [posting] if posting else [],
                     urls,
                     extra_jd,
                     company=body.company,
                     role=body.role,
                     location=body.location,
                 )
+                if listings:
+                    board.found(listings[0])
+                if not listings or not listing_has_identity(listings[0]):
+                    sink.put({"type": "stage", "line": "Reading the posting for company and role. Camoufox opens for LinkedIn. Apply is never clicked."})
+                    browser = aio.run(_hydrate())
+                    listings = apply_pasted_job_text(
+                        browser or listings,
+                        urls,
+                        extra_jd,
+                        company=body.company,
+                        role=body.role,
+                        location=body.location,
+                    )
+            else:
+                comp = (body.company or "").strip()
+                role = (body.role or "").strip()
+                loc = (body.location or "").strip()
+                if not comp or not role or not loc:
+                    sink.put({"type": "stage", "line": "Detecting company, role, and location from description..."})
+                    c_inf, r_inf, l_inf = extract_company_role_from_jd(extra_jd)
+                    comp = comp or c_inf
+                    role = role or r_inf
+                    loc = loc or l_inf
+                listing = {
+                    "company": comp or "Unknown",
+                    "role": role or "Software Engineer",
+                    "url": "",
+                    "location": loc,
+                    "jd": extra_jd,
+                    "channel": "desk",
+                    "source": "desk:pasted",
+                    "apply_url": "",
+                    "apply_kind": "",
+                }
+                listings = [listing]
+                board.found(listing)
         else:
             sink.put({"type": "stage", "line": f"Reading {len(urls)} posting(s). Camoufox opens for LinkedIn. Apply is never clicked."})
             listings = aio.run(_hydrate())
@@ -977,7 +1136,7 @@ def _execute_run(run_id: str, urls: list[str], body: RunRequest, sink: queue.Que
             sink.put({"type": "stage", "line": "Stopped."})
             return
         if not listings:
-            raise RuntimeError("Could not read those URLs. Sign in to LinkedIn in the Camoufox window if asked, then run again.")
+            raise RuntimeError("Could not read posting. Please provide a job description or URL.")
         work: list[dict] = []
         for listing in listings:
             company = (listing.get("company") or "").strip()

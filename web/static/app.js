@@ -392,7 +392,7 @@ function bindDelete(tr, packageId, liveRow) {
       if (liveRow) {
         try {
           const endpoint = choice.keep ? "/api/jobs/remember" : "/api/jobs/delete";
-          await api(endpoint, {
+          const res = await api(endpoint, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -401,8 +401,14 @@ function bindDelete(tr, packageId, liveRow) {
               url: liveRow.url || "",
               location: liveRow.location || "",
               jd: liveRow.jd || "",
+              source: liveRow.source || "",
+              channel: liveRow.channel || "",
+              saved: liveRow.saved,
             }),
           });
+          if (res && res.unsave_triggered) {
+            setStrip("Removed · Unsaving on LinkedIn in background...");
+          }
         } catch (err) {
           setStrip(err.message);
           return;
@@ -418,7 +424,10 @@ function bindDelete(tr, packageId, liveRow) {
     if (!id) return;
     try {
       const path = "/api/packages/" + encodeURIComponent(id) + (choice.keep ? "?keep=true" : "");
-      await api(path, { method: "DELETE" });
+      const res = await api(path, { method: "DELETE" });
+      if (res && res.unsave_triggered) {
+        setStrip("Deleted · Unsaving on LinkedIn in background...");
+      }
       state.jobs = state.jobs.filter((row) => row.package_id !== id);
       if (state.activeId === id) {
         state.activeId = null;
@@ -667,9 +676,9 @@ function scheduleAutoMoveToApplied(pkgId, tr, btn, role, company, source = "appl
 
       setTimeout(() => {
         renderBoard();
-        setStrip(
-          who ? `Moved “${who}” to Applied tab.` : "Moved job to Applied tab."
-        );
+        const baseMsg = who ? `Moved “${who}” to Applied tab.` : "Moved job to Applied tab.";
+        const unsaveMsg = updated && updated.unsave_triggered ? " · Confirming applied on LinkedIn in background..." : "";
+        setStrip(baseMsg + unsaveMsg);
       }, 300);
     } catch (err) {
       if (input) input.checked = false;
@@ -822,7 +831,11 @@ function bindMarkApplied(tr) {
       input.setAttribute("aria-label", nextState ? "Undo applied" : "Mark applied");
       await new Promise((resolve) => setTimeout(resolve, appliedMotionMs(nextState)));
       renderBoard();
-      setStrip(nextState ? "Marked applied." : "Unmarked applied. Moved back to Queue.");
+      let msg = nextState ? "Marked applied." : "Unmarked applied. Moved back to Queue.";
+      if (nextState && updated && updated.unsave_triggered) {
+        msg = "Marked applied · Confirming applied on LinkedIn in background...";
+      }
+      setStrip(msg);
     } catch (err) {
       input.checked = !nextState;
       if (stamp) {
@@ -1334,11 +1347,19 @@ $("stop").addEventListener("click", async () => {
 $("intake").addEventListener("submit", async (ev) => {
   ev.preventDefault();
   setControls("running");
+  $("inspect-note").hidden = true;
+  $("inspect-note").textContent = "";
   try {
-    const body = {
-      urls: $("urls").value,
-      jd: $("jd").value,
-    };
+    const urls = ($("urls") ? $("urls").value : "").trim();
+    const jd = ($("jd") ? $("jd").value : "").trim();
+    const company = ($("company") ? $("company").value : "").trim();
+    const role = ($("role") ? $("role").value : "").trim();
+
+    if (!urls && !jd) {
+      throw new Error("Paste one or more job URLs or paste a job description.");
+    }
+
+    const body = { urls, jd, company, role };
     const run = await api("/api/runs", {
       method: "POST",
       headers: { "Content-Type": "application/json" },

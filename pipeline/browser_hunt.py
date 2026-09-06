@@ -790,161 +790,6 @@ async def _click_next_listings_page(page, delay_ms: int) -> bool:
     return after_html != before_html
 
 
-async def _clean_and_unsave_linkedin_saved_jobs(
-    page,
-    cfg: Config,
-    delay_ms: int,
-) -> set[str]:
-    """Inspect LinkedIn saved jobs on the active page.
-    Unsave any job that is already applied or deleted/closed.
-    Returns set of job identifiers (IDs and URLs) that were skipped/unsaved.
-    """
-    from pipeline.jobs import (
-        applied_job_urls,
-        applied_linkedin_ids,
-        deleted_job_urls,
-        deleted_linkedin_ids,
-        extract_linkedin_job_id,
-        record_deleted_job,
-        set_job_applied,
-    )
-
-    known_applied_urls = applied_job_urls(cfg)
-    known_applied_ids = applied_linkedin_ids(cfg)
-    known_deleted_urls = deleted_job_urls(cfg)
-    known_deleted_ids = deleted_linkedin_ids(cfg)
-
-    scan_js = """
-    () => {
-      const cards = Array.from(document.querySelectorAll(
-        'li.reusable-search__result-container, div.entity-result, li[data-chameleon-result-urn], .job-card-container, .my-items-job-card'
-      ));
-      return cards.map((card, idx) => {
-        const link = card.querySelector('a[href*="/jobs/view/"]');
-        const href = link ? link.href : '';
-        const text = (card.innerText || '').trim();
-        const directBtn = card.querySelector('button[aria-label*="unsave" i], button.jobs-save-button');
-        const moreBtn = card.querySelector('button[aria-label*="more action" i], button[aria-label*="more" i], button[aria-label*="option" i], button.artdeco-dropdown__trigger, .entity-result__actions button');
-        return {
-          index: idx,
-          href: href,
-          text: text,
-          hasDirect: Boolean(directBtn),
-          hasMore: Boolean(moreBtn),
-        };
-      });
-    }
-    """
-    try:
-        cards_info = await page.evaluate(scan_js)
-    except Exception as exc:
-        _raise_if_cancelled(exc)
-        return set()
-
-    if not isinstance(cards_info, list):
-        return set()
-
-    unsaved_keys: set[str] = set()
-
-    for item in cards_info:
-        if _stopped():
-            break
-        href = str(item.get("href") or "").strip()
-        text = str(item.get("text") or "")
-        jid = extract_linkedin_job_id(href)
-        clean_url = href.split("?")[0].split("#")[0].lower()
-
-        card_has_applied = bool(re.search(r"\b(applied|applied\s+\d+|you\s+applied)\b", text, re.I))
-        card_has_closed = bool(re.search(r"\b(no longer accepting applications|closed|job closed|deleted)\b", text, re.I))
-
-        is_applied = (jid and jid in known_applied_ids) or (clean_url and clean_url in known_applied_urls) or card_has_applied
-        is_deleted = (jid and jid in known_deleted_ids) or (clean_url and clean_url in known_deleted_urls) or card_has_closed
-
-        if not is_applied and not is_deleted:
-            continue
-
-        reason = "applied" if is_applied else "deleted"
-        if jid:
-            unsaved_keys.add(jid)
-        if clean_url:
-            unsaved_keys.add(clean_url)
-        if href:
-            unsaved_keys.add(href.lower())
-
-        idx = item.get("index", 0)
-        click_card_js = """
-        (arg) => {
-          const { index, href } = arg;
-          const cards = Array.from(document.querySelectorAll(
-            'li.reusable-search__result-container, div.entity-result, li[data-chameleon-result-urn], .job-card-container, .my-items-job-card'
-          ));
-          let card = cards[index];
-          if (!card && href) {
-            card = cards.find(c => {
-              const a = c.querySelector('a[href*="/jobs/view/"]');
-              return a && a.href && a.href.includes(href);
-            });
-          }
-          if (!card) return { success: false, reason: "card_not_found" };
-
-          const directBtn = card.querySelector('button[aria-label*="unsave" i], button.jobs-save-button');
-          if (directBtn) {
-            directBtn.click();
-            return { success: true, method: "direct" };
-          }
-
-          const moreBtn = card.querySelector('button[aria-label*="more action" i], button[aria-label*="more" i], button[aria-label*="option" i], button.artdeco-dropdown__trigger, .entity-result__actions button');
-          if (moreBtn) {
-            moreBtn.click();
-            return { success: true, method: "dropdown_opened" };
-          }
-          return { success: false, reason: "no_button" };
-        }
-        """
-        try:
-            res = await page.evaluate(click_card_js, {"index": idx, "href": href})
-            if isinstance(res, dict) and res.get("method") == "dropdown_opened":
-                await _pause_ms(250)
-                click_dropdown_js = """
-                () => {
-                  const dropdownItems = Array.from(document.querySelectorAll(
-                    '.artdeco-dropdown__content button, .artdeco-dropdown__item, [role="menuitem"], .artdeco-dropdown__content li'
-                  ));
-                  const unsaveItem = dropdownItems.find(el => {
-                    const txt = (el.innerText || '').toLowerCase();
-                    const lbl = (el.getAttribute('aria-label') || '').toLowerCase();
-                    return txt.includes('unsave') || txt.includes('remove') || lbl.includes('unsave');
-                  });
-                  if (unsaveItem) {
-                    unsaveItem.click();
-                    return true;
-                  }
-                  return false;
-                }
-                """
-                await page.evaluate(click_dropdown_js)
-            log.info("Camoufox unsaved LinkedIn %s job from saved list: %s (id: %s)", reason, clean_url, jid or "n/a")
-            await _pause_ms(max(300, delay_ms // 2))
-        except Exception as exc:
-            _raise_if_cancelled(exc)
-            log.warning("Could not click unsave on saved list card %s: %s", href, exc)
-
-        if card_has_applied:
-            set_job_applied(cfg, {"url": href, "role": "Role", "company": "Company"}, applied=True)
-            if jid:
-                known_applied_ids.add(jid)
-            if clean_url:
-                known_applied_urls.add(clean_url)
-        elif card_has_closed:
-            record_deleted_job(cfg, {"url": href, "role": "Role", "company": "Company"})
-            if jid:
-                known_deleted_ids.add(jid)
-            if clean_url:
-                known_deleted_urls.add(clean_url)
-
-    return unsaved_keys
-
-
 async def _collect_paginated_job_links(
     page,
     cfg: Config,
@@ -985,9 +830,6 @@ async def _collect_paginated_job_links(
         await _scroll_listings(page)
 
         is_saved_linkedin = bool(source.get("saved")) and "linkedin.com" in (page.url or "").lower()
-        unsaved_keys: set[str] = set()
-        if is_saved_linkedin:
-            unsaved_keys = await _clean_and_unsave_linkedin_saved_jobs(page, cfg, delay_ms)
 
         try:
             html = await page.content()
@@ -1001,9 +843,6 @@ async def _collect_paginated_job_links(
             link_jid = extract_linkedin_job_id(link)
             if (
                 key in seen
-                or key in unsaved_keys
-                or clean_link in unsaved_keys
-                or (link_jid and link_jid in unsaved_keys)
                 or (
                     is_saved_linkedin
                     and (
@@ -1376,21 +1215,151 @@ async def _unsave_linkedin_posting_page(page, delay_ms: int) -> bool:
     """Click the Saved button on a LinkedIn job posting page to unsave it."""
     js = """
     () => {
-      const candidates = Array.from(document.querySelectorAll(
-        'button.jobs-save-button, button[aria-label*="unsave" i], button[data-control-name="save_job"]'
-      ));
-      for (const btn of candidates) {
+      function isSavedButton(btn) {
+        if (!btn) return false;
         const text = (btn.innerText || '').trim().toLowerCase();
         const label = (btn.getAttribute('aria-label') || '').toLowerCase();
-        if (text === 'saved' || label.includes('unsave')) {
+        const pressed = btn.getAttribute('aria-pressed') === 'true';
+        const hasBookmarkFill = Boolean(btn.querySelector('svg[data-test-icon*="bookmark-fill"]'));
+        const hasSavedClass = Array.from(btn.classList || []).some(c => c.toLowerCase().includes('saved'));
+
+        if (text === 'saved' || text.split('\\n').map(s => s.trim()).includes('saved')) return true;
+        if (label.includes('unsave') || label.startsWith('unsave')) return true;
+        if (pressed && (text.includes('save') || label.includes('save'))) return true;
+        if (hasBookmarkFill) return true;
+        if (hasSavedClass && (text.includes('save') || label.includes('save'))) return true;
+        return false;
+      }
+
+      const specificSelectors = [
+        'button.jobs-save-button',
+        'button[aria-label*="unsave" i]',
+        'button[data-control-name="save_job"]',
+        '.job-details-jobs-unified-top-card button',
+        '.jobs-unified-top-card button',
+        '.jobs-details-top-card button',
+      ];
+      for (const sel of specificSelectors) {
+        for (const btn of Array.from(document.querySelectorAll(sel))) {
+          if (isSavedButton(btn)) {
+            btn.click();
+            return 'clicked';
+          }
+        }
+      }
+      for (const btn of Array.from(document.querySelectorAll('button'))) {
+        if (isSavedButton(btn)) {
           btn.click();
-          return true;
+          return 'clicked';
+        }
+      }
+
+      // Check if button is already in 'Save' state (already not saved)
+      for (const sel of specificSelectors) {
+        for (const btn of Array.from(document.querySelectorAll(sel))) {
+          const text = (btn.innerText || '').trim().toLowerCase();
+          const label = (btn.getAttribute('aria-label') || '').toLowerCase();
+          if ((text === 'save' || label === 'save') && !isSavedButton(btn)) {
+            return 'already_unsaved';
+          }
         }
       }
       for (const btn of Array.from(document.querySelectorAll('button'))) {
         const text = (btn.innerText || '').trim().toLowerCase();
         const label = (btn.getAttribute('aria-label') || '').toLowerCase();
-        if (text === 'saved' || label.startsWith('unsave')) {
+        if ((text === 'save' || label === 'save') && !isSavedButton(btn)) {
+          return 'already_unsaved';
+        }
+      }
+      return 'not_found';
+    }
+    """
+    try:
+        res = await page.evaluate(js)
+        if res == 'clicked' or res is True:
+            log.info("Camoufox clicked Unsave on LinkedIn posting page: %s", getattr(page, "url", ""))
+            await _pause_ms(max(600, delay_ms))
+            return True
+        elif res == 'already_unsaved':
+            log.info("LinkedIn posting is already unsaved (in 'Save' state): %s", getattr(page, "url", ""))
+            return True
+        else:
+            log.warning("Save/Unsave button not found on LinkedIn page: %s", getattr(page, "url", ""))
+            return False
+    except Exception as exc:
+        _raise_if_cancelled(exc)
+        log.debug("Unsave posting page evaluate error: %s", exc)
+    return False
+
+
+async def _is_linkedin_job_already_applied(page) -> bool:
+    """Check if the LinkedIn posting page already indicates the user applied."""
+    js = """
+    () => {
+      const feedback = Array.from(document.querySelectorAll(
+        '.artdeco-inline-feedback__message, .jobs-s-apply__application-date, .jobs-unified-top-card__applied-feedback, .jobs-details-top-card__applied-feedback'
+      ));
+      for (const el of feedback) {
+        if ((el.innerText || '').toLowerCase().includes('applied')) return true;
+      }
+      for (const btn of Array.from(document.querySelectorAll('button.jobs-apply-button, .jobs-apply-button, .jobs-unified-top-card button'))) {
+        const txt = (btn.innerText || '').trim().toLowerCase();
+        if (txt === 'applied' || txt.startsWith('applied ')) return true;
+      }
+      const bodyText = (document.body.innerText || '').toLowerCase();
+      if (bodyText.includes('application submitted') || bodyText.includes('applied on company site') || bodyText.includes('you applied')) {
+        return true;
+      }
+      if (bodyText.includes('application status') && (bodyText.includes('submitted') || bodyText.includes('applied'))) {
+        return true;
+      }
+      const topCard = document.querySelector('.jobs-unified-top-card, .job-details-jobs-unified-top-card, .jobs-details-top-card, main');
+      if (topCard) {
+        const cardText = (topCard.innerText || '').toLowerCase();
+        if (cardText.includes('you applied') || cardText.includes('applied on') || cardText.includes('submitted') || /\\bapplied\\s+\\d+\\s+(day|week|month|hour|m|d|w)/.test(cardText)) {
+          return true;
+        }
+      }
+      return false;
+    }
+    """
+    try:
+        return bool(await page.evaluate(js))
+    except Exception as exc:
+        _raise_if_cancelled(exc)
+        log.debug("Check already applied error: %s", exc)
+        return False
+
+
+async def _confirm_finish_applying_yes(page, delay_ms: int) -> bool:
+    """If 'Did you finish applying?' prompt is visible, click 'Yes'."""
+    js = """
+    () => {
+      const bodyText = (document.body.innerText || '').toLowerCase();
+      if (!bodyText.includes('did you finish applying') && !bodyText.includes('finish applying')) {
+        return false;
+      }
+
+      const candidates = Array.from(document.querySelectorAll('div, section, p, span, form'));
+      for (const c of candidates) {
+        const cText = (c.innerText || '').toLowerCase();
+        if (cText.includes('did you finish applying') || cText.includes('finish applying')) {
+          const yesBtn = Array.from(c.querySelectorAll('button, a, [role="button"], span')).find(b => {
+            const txt = (b.innerText || '').trim().toLowerCase();
+            const aria = (b.getAttribute('aria-label') || '').toLowerCase();
+            return txt === 'yes' || aria === 'yes' || aria.includes('confirm applied');
+          });
+          if (yesBtn) {
+            yesBtn.click();
+            return true;
+          }
+        }
+      }
+
+      for (const btn of Array.from(document.querySelectorAll('button, a, [role="button"]'))) {
+        const text = (btn.innerText || '').trim().toLowerCase();
+        const aria = (btn.getAttribute('aria-label') || '').toLowerCase();
+        if (text === 'yes' || aria === 'yes') {
           btn.click();
           return true;
         }
@@ -1401,13 +1370,324 @@ async def _unsave_linkedin_posting_page(page, delay_ms: int) -> bool:
     try:
         clicked = bool(await page.evaluate(js))
         if clicked:
-            log.info("Camoufox clicked Unsave on LinkedIn posting page: %s", page.url)
-            await _pause_ms(max(400, delay_ms))
+            log.info("Clicked 'Yes' on LinkedIn 'Did you finish applying?' prompt: %s", getattr(page, "url", ""))
+            await _pause_ms(max(1000, delay_ms))
             return True
     except Exception as exc:
         _raise_if_cancelled(exc)
-        log.debug("Unsave posting page evaluate error: %s", exc)
+        log.debug("Confirm finish applying evaluate error: %s", exc)
     return False
+
+
+async def _close_new_tab(p):
+    try:
+        await asyncio.sleep(0.5)
+        await p.close()
+    except Exception:
+        pass
+
+
+async def _click_linkedin_apply_button(page, delay_ms: int) -> bool:
+    """Click the Apply button on a LinkedIn posting, keeping the LinkedIn tab open."""
+    js = """
+    () => {
+      const selectors = [
+        'button.jobs-apply-button',
+        'a.jobs-apply-button',
+        'button[aria-label*="apply" i]',
+        'a[aria-label*="apply" i]',
+        '.jobs-unified-top-card button',
+        '.jobs-details-top-card button',
+        '.job-details-jobs-unified-top-card button',
+      ];
+      for (const sel of selectors) {
+        for (const el of Array.from(document.querySelectorAll(sel))) {
+          const text = (el.innerText || '').trim().toLowerCase();
+          const aria = (el.getAttribute('aria-label') || '').toLowerCase();
+          if (text === 'apply' || text.startsWith('apply on') || text.startsWith('apply ') || aria.startsWith('apply')) {
+            if (el.tagName.toLowerCase() === 'a') {
+              el.setAttribute('target', '_blank');
+            }
+            el.click();
+            return true;
+          }
+        }
+      }
+      for (const btn of Array.from(document.querySelectorAll('button, a'))) {
+        const text = (btn.innerText || '').trim().toLowerCase();
+        if (text === 'apply' || text.startsWith('apply on') || text.startsWith('apply ')) {
+          if (btn.tagName.toLowerCase() === 'a') {
+            btn.setAttribute('target', '_blank');
+          }
+          btn.click();
+          return true;
+        }
+      }
+      return false;
+    }
+    """
+    try:
+        clicked = bool(await page.evaluate(js))
+        if clicked:
+            log.info("Camoufox clicked Apply on LinkedIn posting: %s", getattr(page, "url", ""))
+            await _pause_ms(max(1000, delay_ms))
+            return True
+    except Exception as exc:
+        _raise_if_cancelled(exc)
+        log.debug("Click Apply button evaluate error: %s", exc)
+    return False
+
+
+async def mark_linkedin_job_applied_on_page(page, delay_ms: int, *, should_stop=None) -> bool:
+    """On an active LinkedIn posting page: check if applied, click Apply, and confirm 'Yes'."""
+    def is_stopped() -> bool:
+        if should_stop and should_stop():
+            return True
+        return _stopped()
+
+    # 1. Check if already applied
+    if await _is_linkedin_job_already_applied(page):
+        log.info("LinkedIn job is already marked applied on LinkedIn: %s", getattr(page, "url", ""))
+        return True
+
+    # 2. Check if 'Did you finish applying?' is already showing
+    if await _confirm_finish_applying_yes(page, delay_ms):
+        await _pause_ms(1500)
+        return True
+
+    # 3. Click Apply button
+    clicked_apply = await _click_linkedin_apply_button(page, delay_ms)
+    if not clicked_apply:
+        if await _is_linkedin_job_already_applied(page):
+            log.info("LinkedIn job already applied on LinkedIn: %s", getattr(page, "url", ""))
+            return True
+        log.warning("Apply button not found on LinkedIn page: %s", getattr(page, "url", ""))
+        return False
+
+    # 4. Wait for 'Did you finish applying?' prompt and click Yes
+    for _ in range(15):
+        if is_stopped():
+            return False
+
+        # If page navigated away to external ATS, navigate back to LinkedIn
+        current_url = (getattr(page, "url", "") or "").lower()
+        if "linkedin.com" not in current_url:
+            try:
+                log.info("Page navigated away to %s, going back to LinkedIn", current_url)
+                await page.go_back(wait_until="domcontentloaded", timeout=15000)
+                await _pause_ms(1500)
+            except Exception as exc:
+                log.debug("go_back failed: %s", exc)
+
+        if await _confirm_finish_applying_yes(page, delay_ms):
+            await _pause_ms(1500)
+            log.info("Confirmed 'Did you finish applying? -> Yes' for %s", getattr(page, "url", ""))
+            return True
+        if await _is_linkedin_job_already_applied(page):
+            log.info("Job now marked as applied on LinkedIn: %s", getattr(page, "url", ""))
+            return True
+        await _pause_ms(1000)
+
+    log.warning("Did not see 'Did you finish applying?' prompt after clicking Apply on %s", getattr(page, "url", ""))
+    return False
+
+
+async def mark_linkedin_job_applied_in_browser(
+    cfg: Config,
+    job_url: str,
+    *,
+    should_stop=None,
+) -> bool:
+    """Launch Camoufox, navigate to LinkedIn job, click Apply, and confirm 'Yes' on prompt."""
+    clean_url = canonicalize_job_url(job_url)
+    if "linkedin.com" not in clean_url.lower():
+        log.warning("Cannot mark non-LinkedIn URL applied: %s", job_url)
+        return False
+
+    try:
+        from camoufox.async_api import AsyncCamoufox
+    except ImportError:
+        log.error("Camoufox is not installed. Cannot mark LinkedIn job applied.")
+        return False
+
+    launch = _camoufox_launch(cfg)
+    delay_ms = int(cfg.get("hunt.browser.delay_ms", 500) or 500)
+    login_wait = int(cfg.get("hunt.browser.login_wait_seconds", 300) or 0)
+
+    log.info("Launching Camoufox to click Apply -> Yes on LinkedIn: %s", clean_url)
+    try:
+        async with AsyncCamoufox(**launch) as session:
+            if callable(getattr(session, "on", None)):
+                session.on("page", lambda p: asyncio.create_task(_close_new_tab(p)))
+            page = session.pages[0] if getattr(session, "pages", None) else await session.new_page()
+            try:
+                await page.goto(clean_url, wait_until="domcontentloaded", timeout=60000)
+            except Exception as exc:
+                _raise_if_cancelled(exc)
+                log.warning("Failed to navigate to %s: %s", clean_url, exc)
+                return False
+
+            if await _pause_ms(max(800, delay_ms)):
+                return False
+
+            if await _needs_login(page):
+                await _try_configured_login(page, cfg, delay_ms)
+                if await _needs_login(page):
+                    await _wait_for_manual_auth(
+                        page,
+                        login_wait,
+                        "Sign in to LinkedIn in the Camoufox panel to confirm applied",
+                    )
+                if "jobs/view" not in (getattr(page, "url", "") or ""):
+                    await page.goto(clean_url, wait_until="domcontentloaded", timeout=60000)
+                    await _pause_ms(max(800, delay_ms))
+
+            return await mark_linkedin_job_applied_on_page(page, delay_ms, should_stop=should_stop)
+    except Exception as exc:
+        _raise_if_cancelled(exc)
+        log.warning("Camoufox mark applied error: %s", exc)
+        return False
+
+
+async def unsave_linkedin_job_in_browser(
+    cfg: Config,
+    job_url: str,
+    *,
+    should_stop=None,
+) -> bool:
+    """Launch Camoufox, navigate to LinkedIn job posting, and click Saved to unsave it."""
+    clean_url = canonicalize_job_url(job_url)
+    if "linkedin.com" not in clean_url.lower():
+        log.warning("Cannot unsave non-LinkedIn URL: %s", job_url)
+        return False
+
+    try:
+        from camoufox.async_api import AsyncCamoufox
+    except ImportError:
+        log.error("Camoufox is not installed. Cannot unsave LinkedIn job.")
+        return False
+
+    launch = _camoufox_launch(cfg)
+    delay_ms = int(cfg.get("hunt.browser.delay_ms", 500) or 500)
+    login_wait = int(cfg.get("hunt.browser.login_wait_seconds", 300) or 0)
+
+    log.info("Launching Camoufox to unsave LinkedIn posting: %s", clean_url)
+    try:
+        async with AsyncCamoufox(**launch) as session:
+            page = session.pages[0] if getattr(session, "pages", None) else await session.new_page()
+            try:
+                await page.goto(clean_url, wait_until="domcontentloaded", timeout=60000)
+            except Exception as exc:
+                _raise_if_cancelled(exc)
+                log.warning("Failed to navigate to %s: %s", clean_url, exc)
+                return False
+
+            if await _pause_ms(max(800, delay_ms)):
+                return False
+
+            if await _needs_login(page):
+                await _try_configured_login(page, cfg, delay_ms)
+                if await _needs_login(page):
+                    await _wait_for_manual_auth(
+                        page,
+                        login_wait,
+                        "Sign in to LinkedIn in the Camoufox panel to unsave",
+                    )
+                if "jobs/view" not in (getattr(page, "url", "") or ""):
+                    await page.goto(clean_url, wait_until="domcontentloaded", timeout=60000)
+                    await _pause_ms(max(800, delay_ms))
+
+            return await _unsave_linkedin_posting_page(page, delay_ms)
+    except Exception as exc:
+        _raise_if_cancelled(exc)
+        log.warning("Camoufox unsave error: %s", exc)
+        return False
+
+
+# Alias for backward compatibility
+unsave_linkedin_job_posting = unsave_linkedin_job_in_browser
+
+
+async def sync_all_applied_saved_jobs_on_linkedin(
+    cfg: Config,
+    *,
+    should_stop=None,
+    on_progress=None,
+) -> dict:
+    """One-time batch sync: match applied jobs with LinkedIn saved jobs, and for each click Apply -> Yes."""
+    from pipeline.reports import list_packages
+    from pipeline.jobs import is_linkedin_saved_job
+
+    pkgs = list_packages(cfg)
+    targets = []
+    seen_urls = set()
+    for p in pkgs:
+        if p.get("applied") and is_linkedin_saved_job(p, cfg=cfg):
+            u = canonicalize_job_url(p.get("url") or "")
+            if u and u not in seen_urls and "linkedin.com" in u.lower():
+                seen_urls.add(u)
+                targets.append({"id": p.get("id"), "company": p.get("company"), "role": p.get("role"), "url": u})
+
+    if not targets:
+        log.info("No matching LinkedIn saved jobs found in applied tab.")
+        return {"total": 0, "success": 0, "failed": 0, "items": []}
+
+    log.info("Found %s LinkedIn saved jobs in applied tab to sync to LinkedIn.", len(targets))
+    try:
+        from camoufox.async_api import AsyncCamoufox
+    except ImportError:
+        log.error("Camoufox is not installed.")
+        return {"total": len(targets), "success": 0, "failed": len(targets), "error": "Camoufox not installed"}
+
+    launch = _camoufox_launch(cfg)
+    delay_ms = int(cfg.get("hunt.browser.delay_ms", 500) or 500)
+    login_wait = int(cfg.get("hunt.browser.login_wait_seconds", 300) or 0)
+
+    results = []
+    async with AsyncCamoufox(**launch) as session:
+        if callable(getattr(session, "on", None)):
+            session.on("page", lambda p: asyncio.create_task(_close_new_tab(p)))
+        page = session.pages[0] if getattr(session, "pages", None) else await session.new_page()
+
+        # Check login first
+        try:
+            await page.goto("https://www.linkedin.com/feed/", wait_until="domcontentloaded", timeout=60000)
+            await _pause_ms(max(800, delay_ms))
+            if await _needs_login(page):
+                await _try_configured_login(page, cfg, delay_ms)
+                if await _needs_login(page):
+                    await _wait_for_manual_auth(page, login_wait, "Sign in to LinkedIn in Camoufox panel")
+        except Exception as exc:
+            _raise_if_cancelled(exc)
+            log.warning("Login check warning: %s", exc)
+
+        for idx, item in enumerate(targets, 1):
+            if should_stop and should_stop():
+                break
+            url = item["url"]
+            msg = f"[{idx}/{len(targets)}] Syncing {item['company']} — {item['role']}"
+            log.info(msg)
+            if on_progress:
+                on_progress(msg)
+
+            try:
+                await page.goto(url, wait_until="domcontentloaded", timeout=60000)
+                await _pause_ms(max(1000, delay_ms))
+                ok = await mark_linkedin_job_applied_on_page(page, delay_ms, should_stop=should_stop)
+                results.append({**item, "ok": ok})
+            except Exception as exc:
+                _raise_if_cancelled(exc)
+                log.warning("Failed to sync %s (%s): %s", item["company"], url, exc)
+                results.append({**item, "ok": False, "error": str(exc)})
+
+    success_count = sum(1 for r in results if r.get("ok"))
+    log.info("Finished syncing applied jobs on LinkedIn: %s/%s succeeded", success_count, len(targets))
+    return {
+        "total": len(targets),
+        "success": success_count,
+        "failed": len(targets) - success_count,
+        "items": results,
+    }
 
 
 async def _extract_posting(page, cfg: Config, source: dict, url: str, delay_ms: int) -> dict | None:
@@ -1481,7 +1761,38 @@ async def _extract_posting(page, cfg: Config, source: dict, url: str, delay_ms: 
     if loc and "·" in loc:
         # e.g. "Montreal, QC · Reposted 4 days ago · Over 100 people clicked apply"
         loc = loc.split("·")[0].strip()
-    loc = loc or meta.get("location") or hunt_location(cfg)
+
+    extracted_mode = ""
+    try:
+        top_card_info = await page.evaluate(
+            """() => {
+                const lines = (document.body.innerText || '').split('\\n').map(s => s.trim()).filter(Boolean);
+                let topLoc = '', topMode = '';
+                for (let i = 0; i < Math.min(lines.length, 50); i++) {
+                    const l = lines[i];
+                    if (l.includes('·') && (l.includes('ago') || l.includes('applicant') || l.includes('apply') || l.includes('reposted') || l.includes('Promoted'))) {
+                        topLoc = l.split('·')[0].trim();
+                        for (let j = i + 1; j < Math.min(i + 8, lines.length); j++) {
+                            const nextL = lines[j].toLowerCase();
+                            if (nextL === 'on-site' || nextL === 'onsite') { topMode = 'onsite'; break; }
+                            if (nextL === 'hybrid') { topMode = 'hybrid'; break; }
+                            if (nextL === 'remote') { topMode = 'remote'; break; }
+                        }
+                        break;
+                    }
+                }
+                return { loc: topLoc, mode: topMode };
+            }"""
+        )
+        if isinstance(top_card_info, dict):
+            if not loc and top_card_info.get("loc"):
+                loc = top_card_info["loc"].strip()
+            if top_card_info.get("mode"):
+                extracted_mode = top_card_info["mode"].strip()
+    except Exception:
+        pass
+
+    loc = (loc or meta.get("location") or "").strip()
     await _wait_for_apply_controls(page, delay_ms)
     try:
         html = await page.content()
@@ -1495,6 +1806,7 @@ async def _extract_posting(page, cfg: Config, source: dict, url: str, delay_ms: 
         "role": title.strip()[:160],
         "url": final_url,
         "location": (loc or "").strip(),
+        "work_mode": extracted_mode,
         "jd": (jd or "").strip(),
         "source": f"camoufox:{_source_name(source)}",
         "apply_url": apply_url,
@@ -1540,13 +1852,12 @@ async def _extract_posting(page, cfg: Config, source: dict, url: str, delay_ms: 
 
         if post_applied or post_deleted:
             reason = "applied" if post_applied else "deleted"
-            await _unsave_linkedin_posting_page(page, delay_ms)
             if post_has_applied:
                 set_job_applied(cfg, listing, applied=True)
             elif post_has_closed:
                 record_deleted_job(cfg, listing)
             if source.get("saved"):
-                log.info("Camoufox unsaved and skipped %s job on posting page: %s", reason, final_url)
+                log.info("Camoufox skipped %s job on posting page: %s", reason, final_url)
                 return None
     return listing
 

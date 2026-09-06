@@ -1491,11 +1491,13 @@ class HuntTests(unittest.TestCase):
             (root / "config.yaml").write_text(
                 "pipeline:\n"
                 "  provider: nvidia\n"
-                "  model: nvidia/nemotron-3-ultra-550b-a55b\n"
+                "  model: nvidia/nemotron-3.5-lightning-30b-a3b\n"
                 "  fallback_provider: agy\n"
                 "  workers: 5\n"
                 "  nvidia:\n"
-                "    fallback_model: openai/gpt-oss-120b\n"
+                "    fallback_models:\n"
+                "      - nvidia/nemotron-3-ultra-550b-a55b\n"
+                "      - deepseek-ai/deepseek-v4-flash-0731\n"
             )
             os.environ["JOB_SEARCH_ROOT"] = str(root)
             cfg = load_config(force=True)
@@ -1503,7 +1505,11 @@ class HuntTests(unittest.TestCase):
             self.assertEqual(worker_count(cfg), 5)
             self.assertEqual(
                 nvidia_model_chain(cfg),
-                ["nvidia/nemotron-3-ultra-550b-a55b", "openai/gpt-oss-120b"],
+                [
+                    "nvidia/nemotron-3.5-lightning-30b-a3b",
+                    "nvidia/nemotron-3-ultra-550b-a55b",
+                    "deepseek-ai/deepseek-v4-flash-0731",
+                ],
             )
 
             def boom(*_a, **_k):
@@ -1518,7 +1524,7 @@ class HuntTests(unittest.TestCase):
             tmp.cleanup()
             load_config(force=True)
 
-    def test_llm_nemotron_falls_back_to_gpt_oss_before_agy(self):
+    def test_llm_nvidia_falls_back_through_models_before_agy(self):
         from unittest.mock import patch
 
         from pipeline.llm import complete_prompt
@@ -1529,10 +1535,12 @@ class HuntTests(unittest.TestCase):
             (root / "config.yaml").write_text(
                 "pipeline:\n"
                 "  provider: nvidia\n"
-                "  model: nvidia/nemotron-3-ultra-550b-a55b\n"
+                "  model: nvidia/nemotron-3.5-lightning-30b-a3b\n"
                 "  fallback_provider: agy\n"
                 "  nvidia:\n"
-                "    fallback_model: openai/gpt-oss-120b\n"
+                "    fallback_models:\n"
+                "      - nvidia/nemotron-3-ultra-550b-a55b\n"
+                "      - deepseek-ai/deepseek-v4-flash-0731\n"
             )
             os.environ["JOB_SEARCH_ROOT"] = str(root)
             load_config(force=True)
@@ -1540,20 +1548,24 @@ class HuntTests(unittest.TestCase):
 
             def nvidia(_prompt, _cfg, *, timeout, effort, model=None):
                 models.append(model)
-                if model and "gpt-oss" in model:
-                    return "from-gpt-oss"
-                raise RuntimeError("nemotron down")
+                if model and "deepseek" in model:
+                    return "from-deepseek"
+                raise RuntimeError("model down")
 
             def agy_should_not_run(*_a, **_k):
-                raise AssertionError("agy should not run when gpt-oss succeeds")
+                raise AssertionError("agy should not run when deepseek succeeds")
 
             with patch("pipeline.llm._call_nvidia", nvidia), patch(
                 "pipeline.llm.call_agy", agy_should_not_run
             ):
-                self.assertEqual(complete_prompt("hi"), "from-gpt-oss")
+                self.assertEqual(complete_prompt("hi"), "from-deepseek")
             self.assertEqual(
                 models,
-                ["nvidia/nemotron-3-ultra-550b-a55b", "openai/gpt-oss-120b"],
+                [
+                    "nvidia/nemotron-3.5-lightning-30b-a3b",
+                    "nvidia/nemotron-3-ultra-550b-a55b",
+                    "deepseek-ai/deepseek-v4-flash-0731",
+                ],
             )
         finally:
             os.environ.pop("JOB_SEARCH_ROOT", None)
@@ -1772,6 +1784,24 @@ class HuntTests(unittest.TestCase):
             self.assertEqual(infer_work_mode("Montreal, QC", "On-site in downtown Montreal"), "onsite")
             self.assertEqual(display_location("Montreal, QC, Canada", "onsite"), "Montreal")
             self.assertEqual(display_location("Toronto / Montreal", "hybrid"), "Toronto, Montreal")
+
+            from pipeline.jobs import apply_pasted_job_text, infer_company_role
+            c1, r1 = infer_company_role("", "Company: Stripe\nRole: Senior Backend Engineer\nDescription: ...")
+            self.assertEqual(c1, "Stripe")
+            self.assertEqual(r1, "Senior Backend Engineer")
+
+            c2, r2 = infer_company_role("", "Job Title: Staff AI Engineer\nEmployer: Cohere\nAbout us...")
+            self.assertEqual(c2, "Cohere")
+            self.assertEqual(r2, "Staff AI Engineer")
+
+            c3, r3 = infer_company_role("", "About Shopify\nShopify is looking for a Senior Developer...")
+            self.assertEqual(c3, "Shopify")
+
+            pasted_items = apply_pasted_job_text([], [], "Company: Stripe\nRole: Lead Engineer\nLocation: Remote", company="", role="")
+            self.assertEqual(len(pasted_items), 1)
+            self.assertEqual(pasted_items[0]["company"], "Stripe")
+            self.assertEqual(pasted_items[0]["role"], "Lead Engineer")
+            self.assertEqual(pasted_items[0]["url"], "")
         finally:
             os.environ.pop("JOB_SEARCH_ROOT", None)
             tmp.cleanup()
@@ -2409,7 +2439,7 @@ class ConfigMergeTests(unittest.TestCase):
             {
                 "pipeline": {
                     "max_attempts": 3,
-                    "nvidia": {"fallback_model": "openai/gpt-oss-120b", "rpm": 40},
+                    "nvidia": {"fallback_model": "nvidia/nemotron-3-ultra-550b-a55b", "rpm": 40},
                 },
                 "hunt": {
                     "exclude_levels": ["intern", "staff"],
@@ -2426,7 +2456,7 @@ class ConfigMergeTests(unittest.TestCase):
             },
         )
         self.assertEqual(merged["pipeline"]["max_attempts"], 2)
-        self.assertEqual(merged["pipeline"]["nvidia"]["fallback_model"], "openai/gpt-oss-120b")
+        self.assertEqual(merged["pipeline"]["nvidia"]["fallback_model"], "nvidia/nemotron-3-ultra-550b-a55b")
         self.assertEqual(merged["pipeline"]["nvidia"]["rpm"], 20)
         self.assertEqual(merged["hunt"]["exclude_levels"], ["intern", "staff"])
         self.assertEqual(merged["hunt"]["preferred_skills"], ["python", "kafka"])
@@ -2505,59 +2535,83 @@ class ConfigMergeTests(unittest.TestCase):
         self.assertIn("Key Skills", critic)
         self.assertIn("penalized as dishonesty", critic)
 
-    def test_clean_and_unsave_linkedin_saved_jobs_mock(self):
-        import asyncio
-        from unittest.mock import AsyncMock
+    def test_is_linkedin_saved_job(self):
+        from pipeline.jobs import is_linkedin_saved_job
         from pipeline.config import Config
-        from pipeline.browser_hunt import _clean_and_unsave_linkedin_saved_jobs
-        from pipeline.jobs import record_deleted_job, set_job_applied
 
         tmp = tempfile.TemporaryDirectory()
         root = Path(tmp.name)
         cfg = Config({"workspace": {"root": str(root)}}, root)
 
-        record_deleted_job(cfg, {"company": "OldCo", "role": "Dev", "url": "https://www.linkedin.com/jobs/view/1111111111"})
-        set_job_applied(cfg, {"company": "AppCo", "role": "Dev", "url": "https://www.linkedin.com/jobs/view/2222222222"}, applied=True)
+        # Non-LinkedIn
+        self.assertFalse(is_linkedin_saved_job({"url": "https://indeed.com/viewjob?jk=123", "source": "saved:indeed"}))
+        # LinkedIn with search source
+        self.assertFalse(is_linkedin_saved_job({"url": "https://www.linkedin.com/jobs/view/123", "source": "camoufox:linkedin"}))
+        # LinkedIn with saved source
+        self.assertTrue(is_linkedin_saved_job({"url": "https://www.linkedin.com/jobs/view/123", "source": "saved:linkedin"}))
+        self.assertTrue(is_linkedin_saved_job({"url": "https://www.linkedin.com/jobs/view/123", "channel": "saved"}))
+        self.assertTrue(is_linkedin_saved_job({"url": "https://www.linkedin.com/jobs/view/123", "saved": True}))
+
+        # Via tracker
+        folder = root / "applications" / "TestCo-Engineer-2026-09-05"
+        folder.mkdir(parents=True)
+        tracker = root / "applications" / "_tracker.md"
+        tracker.write_text("| 2026-09-05 | TestCo | Engineer | saved | ✏️ draft | /app/applications/TestCo-Engineer-2026-09-05 | |\n")
+        self.assertTrue(is_linkedin_saved_job({"url": "https://www.linkedin.com/jobs/view/456"}, folder=folder, cfg=cfg))
+
+        tmp.cleanup()
+
+    def test_unsave_linkedin_posting_page_mock(self):
+        import asyncio
+        from unittest.mock import AsyncMock
+        from pipeline.browser_hunt import _unsave_linkedin_posting_page
 
         page = AsyncMock()
-        page.url = "https://www.linkedin.com/my-items/saved-jobs/"
+        page.evaluate.return_value = True
+        clicked = asyncio.run(_unsave_linkedin_posting_page(page, 0))
+        self.assertTrue(clicked)
 
-        async def evaluate_mock(script, *args):
-            text = str(script)
-            if "querySelectorAll" in text and "reusable-search" in text:
-                return [
-                    {
-                        "index": 0,
-                        "href": "https://www.linkedin.com/jobs/view/1111111111",
-                        "text": "OldCo Dev Closed",
-                        "hasDirect": True,
-                        "hasMore": False,
-                    },
-                    {
-                        "index": 1,
-                        "href": "https://www.linkedin.com/jobs/view/2222222222",
-                        "text": "AppCo Dev Applied",
-                        "hasDirect": False,
-                        "hasMore": True,
-                    },
-                    {
-                        "index": 2,
-                        "href": "https://www.linkedin.com/jobs/view/3333333333",
-                        "text": "NewCo Dev",
-                        "hasDirect": True,
-                        "hasMore": False,
-                    },
-                ]
-            if "dropdown_opened" in text:
-                return {"success": True, "method": "dropdown_opened"}
-            return {"success": True, "method": "direct"}
+        page.evaluate.return_value = False
+        clicked_false = asyncio.run(_unsave_linkedin_posting_page(page, 0))
+        self.assertFalse(clicked_false)
 
-        page.evaluate = evaluate_mock
+    def test_unsave_linkedin_job_posting_mock(self):
+        import asyncio
+        from unittest.mock import AsyncMock, patch
+        from pipeline.config import Config
+        from pipeline.browser_hunt import unsave_linkedin_job_posting
 
-        unsaved = asyncio.run(_clean_and_unsave_linkedin_saved_jobs(page, cfg, 50))
-        self.assertIn("1111111111", unsaved)
-        self.assertIn("2222222222", unsaved)
-        self.assertNotIn("3333333333", unsaved)
+        tmp = tempfile.TemporaryDirectory()
+        root = Path(tmp.name)
+        cfg = Config({"workspace": {"root": str(root)}}, root)
+
+        # Non-linkedin URL returns False immediately
+        res = asyncio.run(unsave_linkedin_job_posting(cfg, "https://indeed.com/viewjob?jk=123"))
+        self.assertFalse(res)
+
+        # Mock Camoufox context
+        mock_page = AsyncMock()
+        mock_page.goto = AsyncMock()
+        mock_page.url = "https://www.linkedin.com/jobs/view/999999"
+        mock_page.evaluate = AsyncMock(return_value=True)
+
+        class MockSession:
+            def __init__(self):
+                self.pages = [mock_page]
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                pass
+
+        with patch("camoufox.async_api.AsyncCamoufox", return_value=MockSession()), \
+             patch("pipeline.browser_hunt._needs_login", return_value=False), \
+             patch("pipeline.browser_hunt._unsave_linkedin_posting_page", return_value=True):
+            ok = asyncio.run(unsave_linkedin_job_posting(cfg, "https://www.linkedin.com/jobs/view/999999"))
+            self.assertTrue(ok)
+            mock_page.goto.assert_called_once()
+
         tmp.cleanup()
 
 

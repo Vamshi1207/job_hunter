@@ -175,19 +175,21 @@ pipeline:
   max_attempts: 3
   # nvidia = OpenAI-compatible NVIDIA NIM (NVIDIA_API_KEY). agy = Gemini CLI.
   provider: nvidia
-  model: nvidia/nemotron-3-ultra-550b-a55b
+  model: nvidia/nemotron-3.5-lightning-30b-a3b
   fallback_provider: agy
   fallback_model: gemini-3.1-pro
   workers: 5                 # parallel tailor jobs (stay under nvidia.rpm)
   llm_timeout_seconds: 600
   nvidia:
     base_url: https://integrate.api.nvidia.com/v1
-    fallback_model: openai/gpt-oss-120b   # after Nemotron, before agy
     rpm: 40
     max_tokens: 16384
     temperature: 1
     top_p: 0.95
     enable_thinking: true
+    fallback_models:
+      - nvidia/nemotron-3-ultra-550b-a55b
+      - deepseek-ai/deepseek-v4-flash-0731
   # Form fill is off unless you pass --fill-form. Submit is never clicked.
   auto_apply: false
 

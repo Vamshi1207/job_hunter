@@ -700,12 +700,13 @@
     }
 
     function formatModelName(name) {
-      if (!name) return "Nemotron-3 (NVIDIA)";
+      if (!name) return "Nemotron 3.5 Lightning";
       const low = String(name).toLowerCase();
       if (low === "cache" || low.includes("cache")) return "Local Cache (Instant)";
-      if (low.includes("nemotron")) return "Nemotron-3 (NVIDIA)";
+      if (low.includes("lightning") || low.includes("3.5")) return "Nemotron 3.5 Lightning";
+      if (low.includes("nemotron")) return "Nemotron-3 Ultra";
+      if (low.includes("deepseek")) return "DeepSeek V4 Flash";
       if (low.includes("gemini")) return "Gemini 3.1 Pro";
-      if (low.includes("gpt-oss")) return "GPT-OSS 120B";
       if (low.includes("claude")) return "Claude 3.5 Sonnet";
       return String(name).replace(/^[^/]+\//, "");
     }

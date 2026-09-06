@@ -199,7 +199,8 @@ _US_STATE = re.compile(
 _OTHER_COUNTRY = re.compile(
     r"\b(united kingdom|u\.k\.|england|scotland|ireland|germany|france|spain|"
     r"netherlands|australia|india|singapore|japan|mexico|brazil|sweden|norway|"
-    r"denmark|poland|italy|switzerland|israel|uae|dubai|philippines)\b",
+    r"denmark|poland|italy|switzerland|israel|uae|dubai|philippines|"
+    r"latam|latin america|europe|emea|apac|asia|africa)\b",
     re.I,
 )
 
@@ -242,10 +243,24 @@ def _blob_has_us(text: str) -> bool:
 
 def listing_in_scope(listing: dict, cfg: Config | None = None) -> bool:
     """Canada anywhere, or US only when the posting is open to Canada applicants."""
-    loc = listing.get("location") or ""
-    title = listing.get("role") or ""
-    jd = listing.get("jd") or ""
+    loc = (listing.get("location") or "").strip()
+    title = (listing.get("role") or "").strip()
+    jd = (listing.get("jd") or "").strip()
     blob = f"{loc}\n{title}\n{jd}"
+
+    from pipeline.jobs import infer_work_mode
+
+    work_mode = (listing.get("work_mode") or "").strip().lower() or infer_work_mode(loc, jd)
+    jd_top = "\n".join(jd.splitlines()[:5])
+
+    # If work mode is onsite or hybrid, it MUST be located in Canada.
+    # An onsite/hybrid role in the US, Europe, or other foreign market is physically impossible for a candidate in Canada.
+    if work_mode in ("onsite", "hybrid"):
+        if not _blob_has_canada(loc) and not _blob_has_canada(title):
+            if _blob_has_us(loc) or _OTHER_COUNTRY.search(loc) or _blob_has_us(jd_top) or _OTHER_COUNTRY.search(jd_top):
+                return False
+        if (_blob_has_us(jd_top) or _OTHER_COUNTRY.search(jd_top)) and not _blob_has_canada(jd_top):
+            return False
 
     # Explicit US-only or US-candidate requirements are always out of scope
     if _US_ONLY.search(blob):
@@ -257,16 +272,17 @@ def listing_in_scope(listing: dict, cfg: Config | None = None) -> bool:
     if _OTHER_COUNTRY.search(loc) and not _blob_has_canada(loc) and not _CANADA_ELIGIBLE.search(blob):
         return False
 
-    # Check first lines of JD in case loc was defaulted to Canada but JD top line has US location
-    jd_top = "\n".join((jd or "").splitlines()[:5])
+    # Check first lines of JD in case loc was defaulted or vague but JD top line has foreign location
     if _blob_has_us(jd_top) and not _blob_has_canada(jd_top) and not _CANADA_ELIGIBLE.search(blob):
+        return False
+    if _OTHER_COUNTRY.search(jd_top) and not _blob_has_canada(jd_top) and not _CANADA_ELIGIBLE.search(blob):
         return False
 
     if _blob_has_canada(blob):
         return True
 
     if jd and _blob_has_us(jd) and not _CANADA_ELIGIBLE.search(blob) and not _blob_has_canada(blob):
-        if re.search(r"\bremote\b|\banywhere\b", (loc or "").lower()):
+        if re.search(r"\bremote\b|\banywhere\b", loc.lower()):
             return False
     return True
 
@@ -643,12 +659,20 @@ def search_remotive(cfg: Config) -> list[dict]:
         if not company or not role or key in seen:
             continue
         seen.add(key)
+        req_loc = (item.get("candidate_required_location") or "Remote").strip()
+        req_low = req_loc.lower()
+        # Accept if worldwide, global, anywhere, north america, americas, or mentions canada
+        eligible_tokens = ["worldwide", "anywhere", "global", "all countries", "north america", "americas", "canada", "remote"]
+        if not any(token in req_low for token in eligible_tokens) and req_loc:
+            continue
+
         listings.append(
             {
                 "company": company,
                 "role": role,
                 "url": job_url,
-                "location": (item.get("candidate_required_location") or "Remote").strip(),
+                "location": req_loc,
+                "work_mode": "remote",
                 "jd": html_to_text(item.get("description") or ""),
                 "source": "remotive",
             }

@@ -3,7 +3,7 @@
 Turns a job description into a tailored CV PDF, cover letter, LinkedIn DM, and a paste-by-field playbook. It only rewrites experience that is already in your master CV and experience bank. **It never clicks Submit.**
 
 ```
-jobs.yaml / hunt / pasted URL  →  tailor (Nemotron, gpt-oss, then agy)  →  honesty critic  →  HTML → PDF
+jobs.yaml / hunt / pasted URL  →  tailor (Nemotron 3.5 Lightning, Nemotron 3 Ultra, DeepSeek V4 Flash, then agy)  →  honesty critic  →  HTML → PDF
                                                                       ↓
                                          applications/<company>-<role>-<date>/
 ```
@@ -79,9 +79,10 @@ graph TB
   end
 
   subgraph External ["External Services"]
-    LLM1["Primary: NVIDIA NIM<br/>(Nemotron Ultra)"]
-    LLM2["Fallback: NVIDIA NIM<br/>(openai/gpt-oss-120b)"]
-    LLM3["Backup: Antigravity CLI<br/>(Gemini Pro)"]
+    LLM1["Primary: NVIDIA NIM<br/>(Nemotron 3.5 Lightning)"]
+    LLM2["Fallback 1: NVIDIA NIM<br/>(Nemotron 3 Ultra)"]
+    LLM3["Fallback 2: NVIDIA NIM<br/>(DeepSeek V4 Flash)"]
+    LLM4["Backup: Antigravity CLI<br/>(Gemini Pro)"]
     Boards["Job Boards & Portals<br/>(LinkedIn, Indeed, Greenhouse, Lever, Ashby, Workday)"]
   end
 
@@ -153,9 +154,10 @@ graph TB
 
 #### 4. Tailoring & Honesty Critic Engine (`pipeline/tailor.py`, `pipeline/llm.py`)
 - **LLM Cascade & Fault Tolerance**:
-  1. **Primary**: NVIDIA NIM (`pipeline.model`, default `nvidia/nemotron-4-340b-instruct` / Nemotron Ultra).
-  2. **Secondary Fallback**: NVIDIA NIM (`pipeline.nvidia.fallback_model`, default `openai/gpt-oss-120b`).
-  3. **Tertiary Fallback**: Antigravity CLI / Gemini (`pipeline.fallback_model`, default `agy` with `gemini-3.1-pro`).
+  1. **Primary**: NVIDIA NIM (`pipeline.model`, default `nvidia/nemotron-3.5-lightning-30b-a3b`).
+  2. **Secondary Fallback**: NVIDIA NIM (`pipeline.nvidia.fallback_models`, fallback 1 `nvidia/nemotron-3-ultra-550b-a55b`).
+  3. **Tertiary Fallback**: NVIDIA NIM (`pipeline.nvidia.fallback_models`, fallback 2 `deepseek-ai/deepseek-v4-flash-0731`).
+  4. **Last Resort Backup**: Antigravity CLI / Gemini (`pipeline.fallback_model`, default `agy` with `gemini-3.1-pro`).
   - Automatically handles model outages, quota exhaustion, and provider failures while honoring rate limits (40 RPM default) and managing parallel worker pools (`pipeline.workers`).
 - **Ground-Truth Invariant ("Honesty Critic")**:
   - The tailor is strictly constrained to `cv_master.md` and `experience-bank/*.md`. It is strictly forbidden from fabricating employers, employment dates, degrees, or unearned metrics.
@@ -207,7 +209,7 @@ Runtime map (Archify, pinned to commit `a4c61fe`): open [`docs/architecture/job-
 
 - Docker + Docker Compose
 - An LLM key in `.env` (copy from `.env.example`):
-  - **`NVIDIA_API_KEY`** — primary. Create one at [build.nvidia.com](https://build.nvidia.com/) (NIM, `https://integrate.api.nvidia.com/v1`). Tailor tries Nemotron Ultra, then `openai/gpt-oss-120b`, then agy.
+  - **`NVIDIA_API_KEY`** — primary. Create one at [build.nvidia.com](https://build.nvidia.com/) (NIM, `https://integrate.api.nvidia.com/v1`). Tailor tries Nemotron 3.5 Lightning, then Nemotron 3 Ultra, then DeepSeek V4 Flash, then agy.
   - **`GEMINI_API_KEY`** or `agy auth login` — last backup. The image already includes the agy CLI; Compose mounts `~/.gemini` if you logged in on the host.
 - Optional on macOS: Pages.app, if you want native `.pages` files (Word still works without it)
 
@@ -320,9 +322,9 @@ If you add a fourth job, add a `JOB4` block in **both** `config.yaml` and `resum
 | Key | Why |
 |---|---|
 | `pipeline.provider` | `nvidia` (NIM API) or `agy` (Gemini CLI). |
-| `pipeline.model` | Primary NIM model (default Nemotron Ultra). |
-| `pipeline.nvidia.fallback_model` | Second NIM model if Nemotron fails (default `openai/gpt-oss-120b`). |
-| `pipeline.fallback_provider` / `fallback_model` | Last resort after both NIM models (default `agy` / `gemini-3.1-pro`). |
+| `pipeline.model` | Primary NIM model (default `nvidia/nemotron-3.5-lightning-30b-a3b`). |
+| `pipeline.nvidia.fallback_models` | NIM fallback chain (default `["nvidia/nemotron-3-ultra-550b-a55b", "deepseek-ai/deepseek-v4-flash-0731"]`). |
+| `pipeline.fallback_provider` / `fallback_model` | Last resort after NIM models (default `agy` / `gemini-3.1-pro`). |
 | `pipeline.workers` | Parallel tailor jobs (default 4). Shared 40 req/min NVIDIA cap. |
 | `pipeline.nvidia.rpm` | NVIDIA rate limit (default 40). |
 | `pipeline.ats_threshold` | Stop when score **and** honesty meet this (default 80). |
@@ -431,7 +433,7 @@ What landed since the last published `main`:
 - **Camoufox panel**: appears only for sign-in, 2FA, or CAPTCHA (noVNC at localhost:6080). Hunt waits until you finish, then the panel hides.
 - **Streamed hunt**: tailor starts as soon as a posting matches; search keeps adding jobs. **Stop** cancels the rest.
 - **Live step status**: Writing CV, Scoring ATS, Building PDF, Searching LinkedIn, Stopped — not a generic Working label.
-- **LLM chain**: NVIDIA Nemotron → `openai/gpt-oss-120b` → agy/Gemini. Put `NVIDIA_API_KEY` in `.env`.
+- **LLM chain**: NVIDIA Nemotron 3.5 Lightning → Nemotron 3 Ultra → DeepSeek V4 Flash → agy/Gemini. Put `NVIDIA_API_KEY` in `.env`.
 - **URL form** at the top of the desk; **Rebuild PDF** after HTML edits; native Pages via `scripts/macos_pages_helper.py`.
 - **Fit gates, not ranking**: `hunt.max_jobs: 0` tailors every match. JD stack decides keep/drop; titles are vetoes only.
 - **Live hunt table**, Word/HTML/Pages downloads, skip salary/search pages, skip already processed job URLs (same title at one company with a new URL is kept).
