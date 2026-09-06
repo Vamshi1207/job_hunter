@@ -824,7 +824,13 @@ def start_run(body: RunRequest) -> dict:
         run["thread"] = thread
         _runs[run_id] = run
     thread.start()
-    return {"id": run_id, "count": len(urls) if urls else 1}
+    return {
+        "id": run_id,
+        "count": len(urls) if urls else 1,
+        "company": (body.company or "").strip(),
+        "role": (body.role or "").strip(),
+        "url": urls[0] if urls else "",
+    }
 
 
 @app.get("/api/runs/active")
@@ -1108,6 +1114,31 @@ def _execute_run(run_id: str, urls: list[str], body: RunRequest, sink: queue.Que
     try:
         extra_jd = (body.jd or "").strip()
         listings: list[dict] = []
+
+        # Emit an immediate placeholder card so the board updates right away,
+        # before any URL fetching or JD inference takes place.
+        _early_company = (body.company or "").strip()
+        _early_role = (body.role or "").strip()
+        _early_url = urls[0] if urls else ""
+        if _early_company or _early_role or _early_url:
+            sink.put({
+                "type": "queued",
+                "status": "queued",
+                "company": _early_company or "Detecting…",
+                "role": _early_role or "Detecting…",
+                "url": _early_url,
+                "line": f"Queued: {_early_company or _early_url or 'JD paste'}",
+            })
+        elif extra_jd:
+            sink.put({
+                "type": "queued",
+                "status": "queued",
+                "company": "Detecting…",
+                "role": "Detecting…",
+                "url": "",
+                "line": "Queued: detecting company and role from description…",
+            })
+
         if extra_jd and urls and len(urls) != 1:
             sink.put({"type": "log", "line": "Pasted description is used with a single URL; reading each posting from the page instead."})
             extra_jd = ""

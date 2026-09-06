@@ -1355,67 +1355,113 @@ $("stop").addEventListener("click", async () => {
 });
 $("intake").addEventListener("submit", async (ev) => {
   ev.preventDefault();
-  // Don't use setControls here — we don't want to grey out Hunt/Resolve.
-  // Instead just disable the submit button itself while this tailor is in flight.
   const submitBtn = $("run");
   submitBtn.disabled = true;
-  submitBtn.textContent = "Tailoring…";
+  submitBtn.textContent = "Queuing…";
   $("inspect-note").hidden = true;
   $("inspect-note").textContent = "";
+
+  const urlsEl  = $("urls");
+  const jdEl    = $("jd");
+  const coEl    = $("company");
+  const roleEl  = $("role");
+  const urls    = (urlsEl  ? urlsEl.value  : "").trim();
+  const jd      = (jdEl    ? jdEl.value    : "").trim();
+  const company = (coEl    ? coEl.value    : "").trim();
+  const role    = (roleEl  ? roleEl.value  : "").trim();
+
+  if (!urls && !jd) {
+    $("inspect-note").hidden = false;
+    $("inspect-note").textContent = "Paste one or more job URLs or paste a job description.";
+    submitBtn.disabled = false;
+    submitBtn.textContent = "Tailor Resume";
+    return;
+  }
+
+  let run;
   try {
-    const urls = ($("urls") ? $("urls").value : "").trim();
-    const jd = ($("jd") ? $("jd").value : "").trim();
-    const company = ($("company") ? $("company").value : "").trim();
-    const role = ($("role") ? $("role").value : "").trim();
-
-    if (!urls && !jd) {
-      throw new Error("Paste one or more job URLs or paste a job description.");
-    }
-
-    const body = { urls, jd, company, role };
-    const run = await api("/api/runs", {
+    run = await api("/api/runs", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
+      body: JSON.stringify({ urls, jd, company, role }),
     });
-    // Don't replace state.runId if a hunt is already being watched.
-    // Just watch this tailor in a lightweight way (the hunt/resolve stream stays active).
-    if (!state.runKind || state.runKind === "run") {
-      state.runId = run.id;
-      watchRun(run.id, undefined, "run");
-    } else {
-      // A browser run is being watched — attach a silent watcher just to restore the button.
-      const src = new EventSource("/api/runs/" + run.id + "/stream");
-      src.addEventListener("done", async (ev2) => {
-        src.close();
-        let payload = {};
-        try { payload = JSON.parse(ev2.data); } catch (_) {}
-        submitBtn.disabled = false;
-        submitBtn.textContent = "Tailor Resume";
-        const first = payload.package_id || (payload.packages && payload.packages[0]);
-        if (first) await loadPackages(first);
-        if (first) openPackage(first);
-        setStrip((payload.error && payload.status !== "stopped")
-          ? "ERROR: " + payload.error
-          : `✓ Tailored: ${payload.company || ""} ${payload.role || ""}`.trim(), true);
-      });
-      src.onerror = () => {
-        submitBtn.disabled = false;
-        submitBtn.textContent = "Tailor Resume";
-      };
-      setStrip(`Tailoring in background: ${company || urls || "JD paste"}…`, true);
-      return; // early return — don't fall into the catch path
-    }
   } catch (err) {
     $("inspect-note").hidden = false;
     $("inspect-note").textContent = err.message;
-    setLamp("");
-  } finally {
-    // Restore button text unless watchRun took ownership (it will manage it via done event)
-    if (!state.runKind || state.runKind !== "run") {
-      submitBtn.disabled = false;
-      submitBtn.textContent = "Tailor Resume";
-    }
+    submitBtn.disabled = false;
+    submitBtn.textContent = "Tailor Resume";
+    return;
+  }
+
+  // ── Immediately reset the form so the user can queue another job ──
+  if (urlsEl)  urlsEl.value  = "";
+  if (jdEl)    jdEl.value    = "";
+  if (coEl)    coEl.value    = "";
+  if (roleEl)  roleEl.value  = "";
+  submitBtn.disabled = false;
+  submitBtn.textContent = "Tailor Resume";
+
+  // ── Show a placeholder card in the board immediately ──
+  const earlyJob = {
+    type: "queued",
+    status: "queued",
+    company: run.company || company || "Detecting…",
+    role:    run.role    || role    || "Detecting…",
+    url:     run.url     || (urls ? urls.split(/\s+/)[0] : ""),
+  };
+  upsertJob(earlyJob);
+  renderBoard(state.activeId);
+
+  // ── Attach a lightweight SSE watcher that updates the card and loads the package ──
+  const _watchTailor = (runId) => {
+    const src = new EventSource("/api/runs/" + runId + "/stream");
+    src.onmessage = (ev2) => {
+      try {
+        const data = JSON.parse(ev2.data);
+        // Forward board events so the card updates in real-time
+        if (["found", "queued", "processing", "package", "failed", "stopped"].includes(data.type)) {
+          upsertJob({ ...data, status: data.status || data.type });
+          renderBoard(state.activeId);
+          if (data.package_id) loadPackages(data.package_id);
+        }
+        if (data.type === "progress") renderProgress(data.line);
+        if (data.line && data.type !== "progress") setStrip(data.line, true);
+      } catch (_) {}
+    };
+    src.addEventListener("done", async (ev2) => {
+      src.close();
+      let payload = {};
+      try { payload = JSON.parse(ev2.data); } catch (_) {}
+      const first = payload.package_id || (payload.packages && payload.packages[0]);
+      if (first) { await loadPackages(first); openPackage(first); }
+      if (payload.error && payload.status !== "stopped")
+        setStrip("ERROR: " + payload.error, true);
+      else if (first)
+        setStrip(`✓ Tailored: ${payload.company || run.company || ""} — ${payload.role || run.role || ""}`.trim(), true);
+      // If this was the primary watched run, mark idle
+      if (state.runId === runId) {
+        setLamp(payload.status === "done" ? "done" : "");
+        $("run-state").textContent = payload.status || "done";
+        setControls("idle", "run");
+        state.runKind = null;
+      }
+    });
+    src.onerror = () => {};
+  };
+
+  if (!state.runKind || state.runKind === "run") {
+    // No browser run in progress — take the primary slot
+    if (state.events) state.events.close();
+    state.events = null;
+    state.runId  = run.id;
+    state.runKind = "run";
+    setLamp("on");
+    $("run-state").textContent = "tailoring";
+    _watchTailor(run.id);
+  } else {
+    // Hunt/resolve is being watched — run tailor silently alongside it
+    setStrip(`Tailoring in background: ${company || urls || "JD paste"}…`, true);
+    _watchTailor(run.id);
   }
 });
 
