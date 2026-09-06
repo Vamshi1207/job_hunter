@@ -313,9 +313,9 @@ function atsLabel(row, pkg) {
 
 function boardCells(role, company, location, mode, ats, statusHtml, resume, edit, link, apply, del) {
   return `
-      <td class="col-role">${escapeHtml(role || "Role")}</td>
-      <td class="col-company">${escapeHtml(company || "")}</td>
-      <td class="col-location">${escapeHtml(location)}</td>
+      <td class="col-role" title="${escapeAttr(role || "Role")}">${escapeHtml(role || "Role")}</td>
+      <td class="col-company" title="${escapeAttr(company || "")}">${escapeHtml(company || "")}</td>
+      <td class="col-location" title="${escapeAttr(location)}">${escapeHtml(location)}</td>
       <td class="col-mode">${escapeHtml(mode)}</td>
       <td class="col-ats ats-cell">${escapeHtml(ats)}</td>
       <td class="col-status">${statusHtml}</td>

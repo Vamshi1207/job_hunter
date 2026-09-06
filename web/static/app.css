@@ -351,17 +351,17 @@ h2 { font-size: 1.15rem; }
   margin-left: 0.35rem;
 }
 
-.board .col-role { width: 20%; }
-.board .col-company { width: 12%; }
-.board .col-location { width: 10%; }
-.board .col-mode { width: 7%; }
-.board .col-ats { width: 4%; }
-.board .col-status { width: 7%; }
-.board .col-resume { width: 5%; }
-.board .col-edit { width: 12%; }
-.board .col-link { width: 6%; }
-.board .col-apply { width: 13%; }
-.board .col-delete { width: 5%; }
+.board .col-role    { width: 18%; }
+.board .col-company { width: 10%; }
+.board .col-location { width: 11%; }
+.board .col-mode    { width: 6%; }
+.board .col-ats     { width: 4%; }
+.board .col-status  { width: 9%; }
+.board .col-resume  { width: 4%; }
+.board .col-edit    { width: 10%; }
+.board .col-link    { width: 5%; }
+.board .col-apply   { width: 16%; }
+.board .col-delete  { width: 5%; }
 
 .applied-stamp {
   position: relative;
@@ -471,10 +471,9 @@ h2 { font-size: 1.15rem; }
 
 .board {
   width: 100%;
-  min-width: 70rem;
   table-layout: fixed;
   border-collapse: collapse;
-  font-size: 0.92rem;
+  font-size: 0.88rem;
 }
 
 .ats-cell {
@@ -508,10 +507,18 @@ h2 { font-size: 1.15rem; }
 }
 
 .board td.col-role,
-.board td.col-company,
+.board td.col-company {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 0; /* required for ellipsis in table-layout:fixed */
+}
+
 .board td.col-location {
-  overflow-wrap: anywhere;
-  word-break: break-word;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 0;
 }
 
 .board td.col-mode,
