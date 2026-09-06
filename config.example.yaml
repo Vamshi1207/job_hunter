@@ -253,6 +253,11 @@ hunt:
   # Add brand aliases if a board uses a shorter name (e.g. ForeFlight vs the full employer).
   exclude_companies:
     - Example Current Employer
+
+  # Block specific job boards, scrapers, or sources by name or domain (e.g. remotive, themuse, indeed).
+  # Matches against listing source, board, or URL.
+  exclude_job_boards:
+    - remotive
   # Jobs you saved on LinkedIn/Indeed are treated as matches (fit gates skipped).
   saved_jobs:
     enabled: true

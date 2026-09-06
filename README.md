@@ -293,6 +293,7 @@ Open `config.example.yaml` for every key and comment. Below is what people actua
 | `hunt.preferred_skills` | JD keep | After the posting text loads, at least one of these must appear. Languages here are the strong stack: C++-only roles are dropped for a Python profile; TypeScript/Go can still match. Unclear cases ask the LLM. |
 | `hunt.reject_skills` | JD filter | Drop roles that require a skill you will not use (example: `java`). |
 | `hunt.exclude_companies` | Search **and** saved jobs | Current/former employers you will not apply to. Add brand aliases if a board uses a shorter name. |
+| `hunt.exclude_job_boards` | Search **and** saved jobs | Block job boards, aggregators, or sources by name/domain (e.g. `remotive`, `themuse`, `indeed`). |
 | `hunt.saved_jobs` | LinkedIn/Indeed saved | Treated as matches (fit gates skipped) unless the company is excluded. Camoufox clicks **Next** through saved-jobs pages until `max` or the last page. |
 | `hunt.sources` / `hunt.ats_boards` | Camoufox | LinkedIn, Indeed, Google ATS dorks (Greenhouse, Lever, Ashby, Workday, iCIMS, Taleo, …), optional company board URLs. Hunt skips salary guides and search SERPs. |
 | `hunt.api_sources` | Extra listings | `true` (default) adds The Muse and Remotive. No API key. Fit gates still apply. |

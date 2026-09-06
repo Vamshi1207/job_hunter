@@ -780,6 +780,80 @@ class HuntTests(unittest.TestCase):
             tmp.cleanup()
             load_config(force=True)
 
+    def test_exclude_job_boards_and_restricted_employer(self):
+        from pipeline.search import (
+            company_is_excluded,
+            exclude_job_boards,
+            harvest_api_listings,
+            job_board_is_excluded,
+            score_listing,
+        )
+
+        tmp = tempfile.TemporaryDirectory()
+        try:
+            cfg = self._cfg(
+                Path(tmp.name),
+                "  exclude_companies:\n"
+                "    - Crossing Hurdles\n"
+                "  exclude_job_boards:\n"
+                "    - remotive\n"
+                "    - themuse\n",
+            )
+            # Test Crossing Hurdles employer exclusion
+            self.assertTrue(
+                company_is_excluded(
+                    {"company": "Crossing Hurdles", "url": "https://example.com/ch"},
+                    cfg,
+                )
+            )
+            self.assertEqual(
+                score_listing(
+                    {
+                        "company": "Crossing Hurdles",
+                        "role": "Senior Python Engineer",
+                        "url": "https://example.com/ch",
+                        "location": "Canada",
+                        "jd": "Python, AWS, Kafka",
+                    },
+                    cfg,
+                ),
+                0,
+            )
+
+            # Test job board exclusions
+            self.assertEqual(exclude_job_boards(cfg), ["remotive", "themuse"])
+            self.assertTrue(job_board_is_excluded("remotive", cfg))
+            self.assertTrue(job_board_is_excluded("https://remotive.com/jobs/123", cfg))
+            self.assertTrue(job_board_is_excluded("themuse", cfg))
+            self.assertTrue(job_board_is_excluded("https://www.themuse.com/jobs/456", cfg))
+            self.assertFalse(job_board_is_excluded("linkedin", cfg))
+
+            # Test listing exclusion by source and URL
+            remotive_listing = {
+                "company": "GoodCo",
+                "role": "Python Developer",
+                "source": "remotive",
+                "url": "https://remotive.com/remote-jobs/software-dev/python-123",
+                "location": "Remote",
+                "jd": "Python Kafka AWS",
+            }
+            self.assertTrue(job_board_is_excluded(remotive_listing, cfg))
+            self.assertEqual(score_listing(remotive_listing, cfg), 0)
+
+            # Test harvest_api_listings skips remotive and themuse
+            calls: list[str] = []
+            from unittest.mock import patch
+
+            with patch("pipeline.search.search_greenhouse", lambda _c: calls.append("greenhouse") or []), \
+                 patch("pipeline.search.search_muse", lambda _c: calls.append("muse") or []), \
+                 patch("pipeline.search.search_remotive", lambda _c: calls.append("remotive") or []):
+                harvest_api_listings(cfg)
+            self.assertEqual(calls, ["greenhouse"])
+        finally:
+            os.environ.pop("JOB_SEARCH_ROOT", None)
+            tmp.cleanup()
+            load_config(force=True)
+
     def test_hunt_queries_prefer_stack_over_exact_title(self):
         from pipeline.search import hunt_queries
 

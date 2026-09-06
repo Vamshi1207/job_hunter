@@ -392,6 +392,50 @@ def company_is_excluded(listing: dict, cfg: Config) -> bool:
     return False
 
 
+def exclude_job_boards(cfg: Config) -> list[str]:
+    """List of blocked job boards / sources from config."""
+    raw = (
+        cfg.get("hunt.exclude_job_boards")
+        or cfg.get("hunt.blocked_job_boards")
+        or cfg.get("hunt.exclude_boards")
+    )
+    return [item.strip().lower() for item in _as_list(raw) if item and item.strip()]
+
+
+def job_board_is_excluded(listing_or_target: dict | str, cfg: Config) -> bool:
+    """True if source name, board name, or posting URL matches hunt.exclude_job_boards."""
+    blocked = exclude_job_boards(cfg)
+    if not blocked:
+        return False
+    if isinstance(listing_or_target, dict):
+        source = (listing_or_target.get("source") or "").lower()
+        url = (listing_or_target.get("url") or "").lower()
+        apply_url = (listing_or_target.get("apply_url") or "").lower()
+        board = (listing_or_target.get("board") or "").lower()
+        company = (listing_or_target.get("company") or "").lower()
+        hay = f"{source} {board} {url} {apply_url} {company}"
+        for item in blocked:
+            if item in hay or phrase_in(hay, item):
+                return True
+            clean_item = item.replace("https://", "").replace("http://", "").replace("www.", "").rstrip("/")
+            if clean_item in hay or (len(clean_item) >= 3 and phrase_in(hay, clean_item)):
+                return True
+            if (source and source in clean_item) or (board and board in clean_item):
+                return True
+        return False
+
+    target = str(listing_or_target).lower().strip()
+    if not target:
+        return False
+    for item in blocked:
+        clean_item = item.replace("https://", "").replace("http://", "").replace("www.", "").rstrip("/")
+        if item == target or clean_item == target or item in target or clean_item in target or target in item or target in clean_item:
+            return True
+        if phrase_in(target, clean_item) or phrase_in(target, item):
+            return True
+    return False
+
+
 WEAK_ROLE_WORDS = {"engineer", "engineering", "manager", "specialist", "analyst", "developer", "lead", "staff"}
 IC_TITLE_HINTS = (
     "engineer",
@@ -480,6 +524,8 @@ def score_listing(listing: dict, cfg: Config) -> int:
     if is_directory_or_salary_listing(listing):
         return 0
     if company_is_excluded(listing, cfg):
+        return 0
+    if job_board_is_excluded(listing, cfg):
         return 0
     if not listing_in_scope(listing, cfg):
         return 0
@@ -882,7 +928,14 @@ def ensure_jd(listing: dict) -> dict:
 
 def harvest_api_listings(cfg: Config) -> list[dict]:
     listings: list[dict] = []
-    for searcher in (search_greenhouse, search_muse, search_remotive):
+    searchers = []
+    if not (job_board_is_excluded("greenhouse", cfg) or job_board_is_excluded("boards.greenhouse.io", cfg)):
+        searchers.append(search_greenhouse)
+    if not (job_board_is_excluded("muse", cfg) or job_board_is_excluded("themuse", cfg) or job_board_is_excluded("the muse", cfg)):
+        searchers.append(search_muse)
+    if not (job_board_is_excluded("remotive", cfg) or job_board_is_excluded("remotive.com", cfg)):
+        searchers.append(search_remotive)
+    for searcher in searchers:
         try:
             listings.extend(searcher(cfg))
         except Exception as exc:
@@ -925,6 +978,10 @@ class HuntMatcher:
         else:
             if not key or key == "job-job" or key in self.seen_keys:
                 return None
+        if company_is_excluded(listing, self.cfg):
+            return None
+        if job_board_is_excluded(listing, self.cfg):
+            return None
         item = dict(listing)
         item["fit"] = score_listing(item, self.cfg)
         if item["fit"] <= 0:

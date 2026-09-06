@@ -22,7 +22,15 @@ from pipeline.jobs import (
     is_placeholder_company,
     parse_posting_meta,
 )
-from pipeline.search import html_to_text, hunt_location, hunt_locations, hunt_queries
+from pipeline.search import (
+    company_is_excluded,
+    exclude_job_boards,
+    html_to_text,
+    hunt_location,
+    hunt_locations,
+    hunt_queries,
+    job_board_is_excluded,
+)
 
 log = logging.getLogger(__name__)
 
@@ -416,6 +424,16 @@ async def browse_jobs(cfg: Config, on_listing=None, on_stage=None, should_stop=N
             for source in sources:
                 if _stopped():
                     break
+                source_id = (source.get("id") or "").lower()
+                source_name = _source_name(source).lower()
+                source_url = (source.get("url") or source.get("url_template") or "").lower()
+                if (
+                    job_board_is_excluded(source_id, cfg)
+                    or job_board_is_excluded(source_name, cfg)
+                    or job_board_is_excluded(source_url, cfg)
+                ):
+                    log.info("Skipping excluded job board source: %s", _source_name(source))
+                    continue
                 try:
                     _notify_stage(f"Searching {source_label(source)}")
                     found = await _crawl_source(page, cfg, source, delay_ms, login_wait, max_per)
@@ -608,7 +626,11 @@ async def _crawl_source(page, cfg: Config, source: dict, delay_ms: int, login_wa
 async def _crawl_google_ats(page, cfg: Config, source: dict, delay_ms: int, login_wait: int, max_per: int) -> list[dict]:
     """Search Google (or another engine) for role + ATS operator, then open the job URLs."""
     template = source.get("url") or "https://www.google.com/search?q={dork}&hl=en&num=10"
-    ats_ops = _as_list(source.get("ats")) or _as_list(cfg.get("hunt.google_ats"))
+    ats_ops = [
+        op
+        for op in (_as_list(source.get("ats")) or _as_list(cfg.get("hunt.google_ats")))
+        if not job_board_is_excluded(op, cfg)
+    ]
     if not ats_ops:
         log.warning("google_ats source has no hunt.sources[].ats / hunt.google_ats operators.")
         return []
@@ -841,6 +863,8 @@ async def _collect_paginated_job_links(
             key = link.lower()
             clean_link = link.split("?")[0].split("#")[0].lower()
             link_jid = extract_linkedin_job_id(link)
+            if job_board_is_excluded(clean_link, cfg):
+                continue
             if (
                 key in seen
                 or (
@@ -1719,6 +1743,9 @@ async def _extract_posting(page, cfg: Config, source: dict, url: str, delay_ms: 
     if not is_job_posting_url(final_url):
         log.info("Skip non-job page %s", final_url)
         return None
+    if job_board_is_excluded(final_url, cfg):
+        log.info("Skip posting from excluded job board %s", final_url)
+        return None
 
     title = await _first_text(page, _as_list(source.get("title_selectors")) or list(DEFAULT_TITLE_SELECTORS))
     company = await _first_text(
@@ -1728,6 +1755,9 @@ async def _extract_posting(page, cfg: Config, source: dict, url: str, delay_ms: 
     meta = parse_posting_meta(html, url)
     if is_placeholder_company(company):
         company = meta.get("company") or ""
+    if company_is_excluded({"company": company, "url": final_url}, cfg):
+        log.info("Skip excluded company %s (%s)", company, final_url)
+        return None
     if not title:
         title = meta.get("role") or ""
     if not jd:
