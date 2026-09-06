@@ -213,9 +213,7 @@ def _tag_schema(cfg: Config | None = None) -> str:
     for job in job_blocks(cfg):
         prefix = job["prefix"]
         lines.append(f"<R_{prefix}_TITLE>why this title wording</R_{prefix}_TITLE>")
-        lines.append(
-            f"<{prefix}_TITLE>{job['default_title']} [optional honest descriptor, no dates]</{prefix}_TITLE>"
-        )
+        lines.append(f"<{prefix}_TITLE>{job['default_title']}</{prefix}_TITLE>")
         for i in range(1, job["bullets"] + 1):
             lines.append(f"<R_{prefix}_B{i}>why this bullet / which bank variant</R_{prefix}_B{i}>")
             lines.append(f"<{prefix}_B{i}>bullet text, or empty if unused</{prefix}_B{i}>")
@@ -355,7 +353,60 @@ def strip_skill_prefix(text: str, label: str) -> str:
 
 
 def strip_title_dates(text: str) -> str:
-    return re.split(r"[\t]| {2,}", text, maxsplit=1)[0].strip()
+    cleaned = re.split(r"[\t]| {2,}", text, maxsplit=1)[0].strip()
+    cleaned = re.sub(r"\s*\[optional honest descriptor[^\]]*\]", "", cleaned, flags=re.IGNORECASE).strip()
+    return cleaned
+
+
+def validate_tailored_output(parsed: dict, cfg: Config | None = None) -> tuple[bool, list[str]]:
+    """Strictly validate that tailored output contains all required sections and is not truncated."""
+    cfg = cfg or load_config()
+    errors: list[str] = []
+
+    # 1. Headline & Summary
+    title = (parsed.get("TITLE") or "").strip()
+    if not title or "{{" in title or "[optional" in title.lower():
+        errors.append("TITLE missing, empty, or contains placeholder text")
+    summary = (parsed.get("SUMMARY") or "").strip()
+    if not summary or len(summary) < 40 or "{{" in summary:
+        errors.append("SUMMARY missing, too short (< 40 chars), or contains placeholder text")
+
+    # 2. Every employer must have a title and at least 2 bullets
+    for job in job_blocks(cfg):
+        prefix = job["prefix"]
+        employer = job["employer"]
+        job_title = (parsed.get(f"{prefix}_TITLE") or "").strip()
+        if not job_title or "{{" in job_title or "[optional" in job_title.lower():
+            errors.append(f"{employer} ({prefix}_TITLE) missing or contains placeholder text")
+        bullets = [
+            (parsed.get(f"{prefix}_B{i}") or "").strip()
+            for i in range(1, job["bullets"] + 1)
+            if (parsed.get(f"{prefix}_B{i}") or "").strip()
+        ]
+        min_bullets = max(1, min(2, job.get("bullets_min", 2)))
+        if len(bullets) < min_bullets:
+            errors.append(f"{employer} has only {len(bullets)} bullet(s) (minimum {min_bullets} required)")
+
+    # 3. Key Skills sections
+    for name, label in SKILL_BLOCKS:
+        skills = (parsed.get(name) or "").strip()
+        if not skills or "{{" in skills or len(skills) < 5:
+            errors.append(f"Key skill block {name} ({label}) missing or empty")
+
+    # 4. Cover letter & supporting materials
+    cover = (parsed.get("COVER_LETTER") or "").strip()
+    if not cover or len(cover.split()) < 80:
+        errors.append("COVER_LETTER missing or too short (< 80 words)")
+
+    dm = (parsed.get("LINKEDIN_DM") or "").strip()
+    if not dm or len(dm.split()) < 10:
+        errors.append("LINKEDIN_DM missing or too short (< 10 words)")
+
+    why = (parsed.get("WHY_I_FIT") or "").strip()
+    if not why or len(why) < 20:
+        errors.append("WHY_I_FIT missing or empty")
+
+    return len(errors) == 0, errors
 
 
 def normalize_parsed(parsed: dict, cfg: Config | None = None) -> dict:
@@ -514,6 +565,11 @@ def apply_changes_to_html(parsed: dict, output_path: Path, cfg: Config | None = 
         html_content = html_content.replace(f"{{{{{tag}}}}}", escape_html(new_text))
 
     html_content = strip_unused_bullet_placeholders(html_content)
+    remaining = re.findall(r"\{\{([A-Z0-9_]+)\}\}", html_content)
+    if remaining:
+        raise ValueError(
+            f"Tailored HTML contains unreplaced placeholders: {', '.join(sorted(set(remaining)))}"
+        )
     output_path.write_text(html_content)
     log.info("Saved tailored HTML: %s", output_path)
     return changes

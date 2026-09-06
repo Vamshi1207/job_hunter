@@ -161,11 +161,24 @@ def complete_prompt(prompt: str, *, effort: str = "high") -> str:
         raise
 
 
+def _is_tailor_prompt_truncated(prompt: str, text: str) -> bool:
+    """Check if tailor prompt response was truncated before finishing all sections."""
+    if not text or not text.strip():
+        return True
+    if "<TITLE>" in prompt or "Return ONLY these tagged blocks" in prompt:
+        if "<TITLE>" in text and not any(tag in text for tag in ("</ANALYSIS>", "</WHY_I_FIT>", "</COVER_LETTER>")):
+            return True
+    return False
+
+
 def _try_nvidia_models_with_model(prompt: str, cfg, *, timeout: int, effort: str) -> tuple[str, str]:
     for model in nvidia_model_chain(cfg):
         try:
             text = _call_nvidia(prompt, cfg, timeout=timeout, effort=effort, model=model)
             if text.strip():
+                if _is_tailor_prompt_truncated(prompt, text):
+                    log.warning("NVIDIA %s returned truncated output (missing closing tags) — falling back to next model", model)
+                    continue
                 return text, model
             log.warning("NVIDIA %s returned empty output", model)
         except Exception as exc:
@@ -214,9 +227,10 @@ def _call_nvidia(prompt: str, cfg, *, timeout: int, effort: str, model: str | No
         extra_body = {"chat_template_kwargs": {"thinking": True, "reasoning_effort": "high"}}
     elif is_lightning:
         stream = True
+        reasoning_budget = int(cfg.get("pipeline.nvidia.reasoning_budget", min(4096, max(1024, max_tokens // 4))))
         extra_body = {
             "chat_template_kwargs": {"enable_thinking": True},
-            "reasoning_budget": max_tokens,
+            "reasoning_budget": reasoning_budget,
         }
     else:
         stream = True

@@ -22,6 +22,7 @@ from pipeline.tailor import (
     resume_plain_text,
     save_materials,
     source_of_truth_text,
+    validate_tailored_output,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
@@ -86,8 +87,19 @@ async def process_job(job: dict, fill_form: bool, on_progress=None) -> Path | No
             continue
 
         parsed = parse_tagged_output(llm_output)
-        if not parsed.get("TITLE") and not parsed.get("SUMMARY"):
-            log.error("Could not parse tagged resume output on attempt %s", attempt)
+        is_valid, validation_errors = validate_tailored_output(parsed, cfg)
+        if not is_valid:
+            log.error(
+                "Tailor attempt %s produced incomplete output: %s",
+                attempt,
+                "; ".join(validation_errors),
+            )
+            feedback_history += (
+                f"\nAttempt {attempt} REJECTED - INCOMPLETE MATERIALS:\n"
+                f"Issues: {'; '.join(validation_errors)}\n"
+                "You MUST output all employer titles, at least 2 bullets per employer, all Key Skills categories, "
+                "and complete Cover Letter, LinkedIn DM, and Why I Fit sections without truncation.\n"
+            )
             continue
         scoring = "Scoring ATS"
         if max_attempts > 1:
