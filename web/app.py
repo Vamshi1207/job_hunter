@@ -829,15 +829,31 @@ def start_run(body: RunRequest) -> dict:
 
 @app.get("/api/runs/active")
 def active_run() -> dict:
+    _BROWSER_KINDS = {"hunt", "resolve", "unsave"}
     with _run_lock:
-        run = _active_run_locked()
+        _reclaim_finished_runs_locked()
+        all_active = [
+            r for r in _runs.values()
+            if r.get("status") in {"running", "stopping"}
+        ]
+        # Prefer the most-recent browser run for the primary run_id the UI tracks
+        browser_run = next(
+            (r for r in reversed(all_active) if r.get("kind") in _BROWSER_KINDS), None
+        )
+        tailor_runs = [r for r in all_active if r.get("kind") == "run"]
+        run = browser_run or (all_active[-1] if all_active else None)
         if not run:
-            return {"id": None, "kind": None, "status": None}
+            return {
+                "id": None, "kind": None, "status": None,
+                "browser_busy": False, "tailor_count": 0,
+            }
         return {
             "id": run["id"],
             "kind": run["kind"],
             "status": run["status"],
             "browser": bool(run.get("browser")),
+            "browser_busy": browser_run is not None,
+            "tailor_count": len(tailor_runs),
         }
 
 
@@ -937,24 +953,42 @@ def start_apply_resolve() -> dict:
 
 @app.post("/api/hunt")
 def start_hunt(body: HuntRequest) -> dict:
+    # Only block on browser-using runs; pure tailor runs (kind="run") can coexist.
+    _BROWSER_KINDS = {"hunt", "resolve", "unsave"}
     with _run_lock:
         busy = _active_run_locked()
-        thread = (busy or {}).get("thread")
+        # Find a browser-busy run specifically
+        browser_busy_run = next(
+            (
+                r for r in reversed(list(_runs.values()))
+                if r.get("status") in {"running", "stopping"}
+                and r.get("kind") in _BROWSER_KINDS
+            ),
+            None,
+        )
+        thread = (browser_busy_run or {}).get("thread")
         stopping = bool(
-            busy
+            browser_busy_run
             and (
-                busy.get("status") == "stopping"
-                or (busy.get("stop") is not None and busy["stop"].is_set())
+                browser_busy_run.get("status") == "stopping"
+                or (browser_busy_run.get("stop") is not None and browser_busy_run["stop"].is_set())
             )
         )
-    if busy and not stopping:
-        raise HTTPException(status_code=409, detail="A hunt is already running.")
-    if busy and stopping:
+    if browser_busy_run and not stopping:
+        raise HTTPException(status_code=409, detail="A hunt or browser task is already running.")
+    if browser_busy_run and stopping:
         if thread is not None and thread.is_alive():
             thread.join(timeout=8)
         with _run_lock:
-            busy = _active_run_locked()
-        if busy:
+            browser_busy_run = next(
+                (
+                    r for r in reversed(list(_runs.values()))
+                    if r.get("status") in {"running", "stopping"}
+                    and r.get("kind") in _BROWSER_KINDS
+                ),
+                None,
+            )
+        if browser_busy_run:
             raise HTTPException(
                 status_code=409,
                 detail="Previous hunt is still closing the browser. Try Hunt again in a few seconds.",

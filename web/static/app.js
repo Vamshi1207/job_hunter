@@ -38,17 +38,26 @@ function setLamp(mode) {
   $("lamp").className = "lamp" + (mode ? " " + mode : "");
 }
 
-function setControls(mode) {
-  const idle = mode === "idle";
-  const running = mode === "running";
-  $("hunt").disabled = !idle;
-  $("run").disabled = !idle;
+function setControls(mode, kind) {
+  // kind = "hunt" | "run" | "resolve" | undefined
+  // Hunt/resolve/apply-resolve buttons are only blocked when the browser is busy.
+  // Tailor (run) submissions are always allowed — they don't use the browser.
+  const browserBusy = mode === "running" && kind !== "run";
+  const stopping = mode === "stopping";
+
+  $("hunt").disabled = browserBusy || stopping;
   const resolveBtn = $("resolve-apply");
-  if (resolveBtn) resolveBtn.disabled = !idle;
-  $("stop").hidden = idle;
-  $("stop").disabled = !running;
-  $("stop").textContent = running || idle ? "Stop" : "Stopping…";
-  if (idle) hideCamoufox();
+  if (resolveBtn) resolveBtn.disabled = browserBusy || stopping;
+
+  // Tailor submit: disabled only when this specific run is a browser run stopping,
+  // or we simply leave it always enabled (handled per-form below).
+  // Never disable $("run") based on a tailor or hunt run.
+  $("run").disabled = false;
+
+  $("stop").hidden = !(browserBusy || stopping);
+  $("stop").disabled = !(browserBusy || stopping) || stopping;
+  $("stop").textContent = stopping ? "Stopping…" : "Stop";
+  if (mode === "idle") hideCamoufox();
 }
 
 function applyCamoufoxStage(needsAction, hint) {
@@ -1207,13 +1216,14 @@ function showTab(detail, tabId, btn) {
   body.textContent = map[tabId] || "Nothing in this file yet.";
 }
 
-function watchRun(runId, mode) {
+function watchRun(runId, mode, runKind) {
   if (state.events) state.events.close();
   state.jobs = [];
   state.huntStage = "";
+  state.runKind = runKind || "hunt"; // track what kind of run is being watched
   renderProgress("");
   setLamp("on");
-  setControls(mode === "stopping" ? "stopping" : "running");
+  setControls(mode === "stopping" ? "stopping" : "running", state.runKind);
   $("run-state").textContent = mode === "stopping" ? "stopping" : "running";
   setStrip("— strip open —\n");
   const src = new EventSource("/api/runs/" + runId + "/stream");
@@ -1273,14 +1283,13 @@ function watchRun(runId, mode) {
     try { payload = JSON.parse(ev.data); } catch (_) {}
     setLamp(payload.status === "done" ? "done" : "");
     $("run-state").textContent = payload.status || "done";
-    setControls("idle");
+    setControls("idle", state.runKind);
+    state.runKind = null;
     const first = payload.package_id || (payload.packages && payload.packages[0]);
     await loadPackages(first);
     renderProgress(progressFromJobs());
     if (first) openPackage(first);
     if (payload.error && payload.status !== "stopped") setStrip("ERROR: " + payload.error, true);
-    $("hunt").disabled = false;
-    $("run").disabled = false;
     hideCamoufox();
   });
   src.onerror = () => {
@@ -1296,7 +1305,7 @@ $("refresh").addEventListener("click", () => {
   loadPackages();
 });
 $("hunt").addEventListener("click", async () => {
-  setControls("running");
+  setControls("running", "hunt");
   try {
     const run = await api("/api/hunt", {
       method: "POST",
@@ -1304,31 +1313,31 @@ $("hunt").addEventListener("click", async () => {
       body: JSON.stringify({ max_jobs: state.hunt.max_jobs }),
     });
     state.runId = run.id;
-    watchRun(run.id);
+    watchRun(run.id, undefined, "hunt");
   } catch (err) {
     setStrip(err.message);
     setLamp("");
-    setControls("idle");
+    setControls("idle", "hunt");
   }
 });
 const resolveApplyBtn = $("resolve-apply");
 if (resolveApplyBtn) {
   resolveApplyBtn.addEventListener("click", async () => {
-    setControls("running");
+    setControls("running", "resolve");
     try {
       const run = await api("/api/apply/resolve", { method: "POST" });
       if (!run.id) {
         setStrip(run.line || "Every tailored posting already has an Apply link.");
-        setControls("idle");
+        setControls("idle", "resolve");
         return;
       }
       state.runId = run.id;
-      watchRun(run.id);
+      watchRun(run.id, undefined, "resolve");
       setStrip(`Reading Apply links for ${run.count} posting(s). CVs are not rewritten.`);
     } catch (err) {
       setStrip(err.message);
       setLamp("");
-      setControls("idle");
+      setControls("idle", "resolve");
     }
   });
 }
@@ -1346,7 +1355,11 @@ $("stop").addEventListener("click", async () => {
 });
 $("intake").addEventListener("submit", async (ev) => {
   ev.preventDefault();
-  setControls("running");
+  // Don't use setControls here — we don't want to grey out Hunt/Resolve.
+  // Instead just disable the submit button itself while this tailor is in flight.
+  const submitBtn = $("run");
+  submitBtn.disabled = true;
+  submitBtn.textContent = "Tailoring…";
   $("inspect-note").hidden = true;
   $("inspect-note").textContent = "";
   try {
@@ -1365,13 +1378,44 @@ $("intake").addEventListener("submit", async (ev) => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
-    state.runId = run.id;
-    watchRun(run.id);
+    // Don't replace state.runId if a hunt is already being watched.
+    // Just watch this tailor in a lightweight way (the hunt/resolve stream stays active).
+    if (!state.runKind || state.runKind === "run") {
+      state.runId = run.id;
+      watchRun(run.id, undefined, "run");
+    } else {
+      // A browser run is being watched — attach a silent watcher just to restore the button.
+      const src = new EventSource("/api/runs/" + run.id + "/stream");
+      src.addEventListener("done", async (ev2) => {
+        src.close();
+        let payload = {};
+        try { payload = JSON.parse(ev2.data); } catch (_) {}
+        submitBtn.disabled = false;
+        submitBtn.textContent = "Tailor Resume";
+        const first = payload.package_id || (payload.packages && payload.packages[0]);
+        if (first) await loadPackages(first);
+        if (first) openPackage(first);
+        setStrip((payload.error && payload.status !== "stopped")
+          ? "ERROR: " + payload.error
+          : `✓ Tailored: ${payload.company || ""} ${payload.role || ""}`.trim(), true);
+      });
+      src.onerror = () => {
+        submitBtn.disabled = false;
+        submitBtn.textContent = "Tailor Resume";
+      };
+      setStrip(`Tailoring in background: ${company || urls || "JD paste"}…`, true);
+      return; // early return — don't fall into the catch path
+    }
   } catch (err) {
     $("inspect-note").hidden = false;
     $("inspect-note").textContent = err.message;
     setLamp("");
-    setControls("idle");
+  } finally {
+    // Restore button text unless watchRun took ownership (it will manage it via done event)
+    if (!state.runKind || state.runKind !== "run") {
+      submitBtn.disabled = false;
+      submitBtn.textContent = "Tailor Resume";
+    }
   }
 });
 
@@ -1394,7 +1438,8 @@ loadPackages().catch((err) => {
     const active = await api("/api/runs/active");
     if (!active.id) return;
     state.runId = active.id;
-    watchRun(active.id, active.status === "stopping" ? "stopping" : "running");
+    const kind = active.kind || "hunt";
+    watchRun(active.id, active.status === "stopping" ? "stopping" : "running", kind);
     if (active.browser) applyCamoufoxStage(true, "Sign in or extra verification happens here");
     if (active.status === "stopping") setStrip("Hunt is stopping…", true);
   } catch (_) {}
