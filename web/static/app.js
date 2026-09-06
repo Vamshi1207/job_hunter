@@ -143,6 +143,8 @@ function upsertJob(data) {
     apply_url: data.apply_url || "",
     apply_kind: data.apply_kind || "",
     detail: data.status === "working" ? (data.detail || "") : "",
+    error_msg: data.status === "failed" ? (data.line || data.error || "") : "",
+    jd: data.jd || "",
   };
   const key = jobKey(incoming);
   const idx = state.jobs.findIndex((row) => jobKey(row) === key);
@@ -157,6 +159,9 @@ function upsertJob(data) {
       ats_score: incoming.ats_score == null ? prev.ats_score : incoming.ats_score,
       apply_url: incoming.apply_url || prev.apply_url,
       apply_kind: incoming.apply_kind || prev.apply_kind,
+      // Preserve error_msg across status transitions only when staying failed
+      error_msg: incoming.status === "failed" ? (incoming.error_msg || prev.error_msg) : "",
+      jd: incoming.jd || prev.jd,
     };
   } else {
     state.jobs.push(incoming);
@@ -990,7 +995,21 @@ function appendBoardRow(body, item, active) {
   }
   if (item.applied) tr.classList.add("is-applied-row");
   if (pkg && pkg.id) tr.dataset.id = pkg.id;
-  const statusHtml = `<span class="job-status job-status-${escapeAttr(statusTone(item))}">${escapeHtml(item.statusLabel)}</span>`;
+
+  // Build status cell — for failed live rows add a tooltip + retry button
+  let statusHtml;
+  if (item.live && item.status === "failed" && row) {
+    const errMsg = row.error_msg || "";
+    const tip = errMsg ? ` title="${escapeAttr(errMsg)}"` : "";
+    statusHtml = `<span class="job-status job-status-failed failed-with-retry"${tip}>
+      <span class="failed-label">Failed</span>
+      ${errMsg ? `<span class="failed-reason">${escapeHtml(errMsg)}</span>` : ""}
+      <button type="button" class="retry-btn" data-company="${escapeAttr(row.company || "")}" data-role="${escapeAttr(row.role || "")}" data-url="${escapeAttr(row.url || "")}" data-jd="${escapeAttr(row.jd || "")}" title="Retry tailoring">↺ Retry</button>
+    </span>`;
+  } else {
+    statusHtml = `<span class="job-status job-status-${escapeAttr(statusTone(item))}">${escapeHtml(item.statusLabel)}</span>`;
+  }
+
   tr.innerHTML = boardCells(
     item.role,
     item.company,
@@ -1008,6 +1027,7 @@ function appendBoardRow(body, item, active) {
   bindRebuild(tr);
   bindApply(tr);
   bindMarkApplied(tr);
+  bindRetry(tr);
   if (item.packageId) {
     tr.tabIndex = 0;
     tr.style.cursor = "pointer";
@@ -1023,6 +1043,59 @@ function appendBoardRow(body, item, active) {
     });
   }
   body.appendChild(tr);
+}
+
+function bindRetry(tr) {
+  const btn = tr.querySelector(".retry-btn");
+  if (!btn) return;
+  btn.addEventListener("click", async (ev) => {
+    ev.preventDefault();
+    ev.stopPropagation();
+    const company = btn.dataset.company || "";
+    const role    = btn.dataset.role    || "";
+    const url     = btn.dataset.url     || "";
+    const jd      = btn.dataset.jd      || "";
+    btn.disabled = true;
+    btn.textContent = "Queuing…";
+    try {
+      const run = await api("/api/runs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ urls: url, jd, company, role }),
+      });
+      // Optimistically flip the row to queued
+      upsertJob({ company, role, url, status: "queued", error_msg: "" });
+      renderBoard(state.activeId);
+      setStrip(`↺ Retrying: ${company || url || "job"}…`, true);
+      // Attach a background watcher
+      const src = new EventSource("/api/runs/" + run.id + "/stream");
+      src.onmessage = (ev2) => {
+        try {
+          const data = JSON.parse(ev2.data);
+          if (["found","queued","processing","package","failed","stopped"].includes(data.type)) {
+            upsertJob({ ...data, status: data.status || data.type });
+            renderBoard(state.activeId);
+            if (data.package_id) loadPackages(data.package_id);
+          }
+          if (data.line && data.type !== "progress") setStrip(data.line, true);
+        } catch (_) {}
+      };
+      src.addEventListener("done", async (ev2) => {
+        src.close();
+        let payload = {};
+        try { payload = JSON.parse(ev2.data); } catch (_) {}
+        const first = payload.package_id || (payload.packages && payload.packages[0]);
+        if (first) { await loadPackages(first); openPackage(first); }
+        if (payload.error && payload.status !== "stopped")
+          setStrip("ERROR: " + payload.error, true);
+      });
+      src.onerror = () => {};
+    } catch (err) {
+      btn.disabled = false;
+      btn.textContent = "↺ Retry";
+      setStrip("Retry failed: " + err.message, true);
+    }
+  });
 }
 
 function appendGroup(body, label, items, active) {

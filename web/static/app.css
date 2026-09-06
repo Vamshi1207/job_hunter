@@ -175,6 +175,79 @@ h2 { font-size: 1.15rem; }
 .job-status-stopped { color: #5a6a7a; }
 .job-status-failed { color: #8a2b2b; }
 
+/* Failed row: tooltip popup + retry button */
+.failed-with-retry {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  cursor: default;
+}
+.failed-label {
+  color: #8a2b2b;
+}
+.failed-reason {
+  display: none;
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: #2a1010;
+  color: #f5c0c0;
+  border: 1px solid #8a2b2b;
+  border-radius: 6px;
+  padding: 0.45rem 0.65rem;
+  font-size: 0.72rem;
+  font-family: var(--sans);
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+  white-space: pre-wrap;
+  max-width: 320px;
+  width: max-content;
+  z-index: 100;
+  box-shadow: 0 4px 16px rgba(0,0,0,.45);
+  pointer-events: none;
+  line-height: 1.45;
+}
+.failed-reason::after {
+  content: "";
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 5px solid transparent;
+  border-top-color: #8a2b2b;
+}
+.failed-with-retry:hover .failed-reason {
+  display: block;
+}
+.retry-btn {
+  font-size: 0.68rem;
+  font-family: var(--mono);
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #8a2b2b;
+  background: rgba(138,43,43,.12);
+  border: 1px solid rgba(138,43,43,.35);
+  border-radius: 4px;
+  padding: 0.1rem 0.35rem;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s, color 0.15s;
+  line-height: 1.4;
+}
+.retry-btn:hover:not(:disabled) {
+  background: rgba(138,43,43,.25);
+  color: #c04040;
+}
+.retry-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+
 .job-row-live td {
   cursor: default;
 }
