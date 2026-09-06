@@ -14,10 +14,10 @@ from pipeline.config import load_config
 log = logging.getLogger(__name__)
 
 NVIDIA_DEFAULT_URL = "https://integrate.api.nvidia.com/v1"
-NVIDIA_DEFAULT_MODEL = "nvidia/nemotron-3.5-lightning-30b-a3b"
+NVIDIA_DEFAULT_MODEL = "nvidia/nemotron-3-ultra-550b-a55b"
 NVIDIA_FALLBACK_MODELS = [
-    "nvidia/nemotron-3-ultra-550b-a55b",
     "deepseek-ai/deepseek-v4-flash-0731",
+    "nvidia/nemotron-3.5-lightning-30b-a3b",
 ]
 
 
@@ -88,7 +88,7 @@ def primary_provider(cfg=None) -> str:
 
 
 def nvidia_model_chain(cfg=None) -> list[str]:
-    """Primary model (nemotron-3.5-lightning), then nemotron-3-ultra, then deepseek-v4-flash."""
+    """Primary model (nemotron-3-ultra), then deepseek-v4-flash, then nemotron-3.5-lightning."""
     cfg = cfg or load_config()
     primary = str(cfg.get("pipeline.model") or NVIDIA_DEFAULT_MODEL).strip()
     if not _looks_like_nvidia_model(primary):
@@ -133,7 +133,7 @@ def get_last_used_model() -> str:
 
 
 def complete_prompt(prompt: str, *, effort: str = "high") -> str:
-    """Return model text. Tries Nemotron 3.5 Lightning, then Nemotron 3 Ultra, then DeepSeek V4 Flash, then agy."""
+    """Return model text. Tries Nemotron 3 Ultra, then DeepSeek V4 Flash, then Nemotron 3.5 Lightning, then agy."""
     global _last_used_model
     cfg = load_config()
     timeout = int(cfg.get("pipeline.llm_timeout_seconds", 600))

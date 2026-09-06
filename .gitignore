@@ -4,6 +4,7 @@ cv_master.md
 cv_master.tex
 jobs.yaml
 applied.yaml
+deleted.yaml
 .env
 .camoufox-profile/
 .cursor/mcp.json
@@ -26,3 +27,4 @@ experience-bank/*
 !experience-bank/example-project.md
 !experience-bank/about-variants.example.md
 docs/architecture/*.visual-check.*
+benchmarks/

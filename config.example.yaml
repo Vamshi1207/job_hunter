@@ -175,7 +175,7 @@ pipeline:
   max_attempts: 3
   # nvidia = OpenAI-compatible NVIDIA NIM (NVIDIA_API_KEY). agy = Gemini CLI.
   provider: nvidia
-  model: nvidia/nemotron-3.5-lightning-30b-a3b
+  model: nvidia/nemotron-3-ultra-550b-a55b
   fallback_provider: agy
   fallback_model: gemini-3.1-pro
   workers: 5                 # parallel tailor jobs (stay under nvidia.rpm)
@@ -188,8 +188,8 @@ pipeline:
     top_p: 0.95
     enable_thinking: true
     fallback_models:
-      - nvidia/nemotron-3-ultra-550b-a55b
       - deepseek-ai/deepseek-v4-flash-0731
+      - nvidia/nemotron-3.5-lightning-30b-a3b
   # Form fill is off unless you pass --fill-form. Submit is never clicked.
   auto_apply: false
 

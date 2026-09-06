@@ -124,7 +124,7 @@ class DeskAPITests(unittest.TestCase):
         css = (Path(__file__).resolve().parent / "static" / "app.css").read_text()
         self.assertIn("min-height: 16rem", css)
         self.assertIn("table-layout: fixed", css)
-        self.assertIn("overflow-wrap: anywhere", css)
+        self.assertIn("text-overflow: ellipsis", css)
         self.assertIn(".edit-files", css)
         self.assertIn("flex-direction: column", css)
         self.assertIn(".applied-stamp", css)
