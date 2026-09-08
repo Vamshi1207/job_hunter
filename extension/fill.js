@@ -2757,6 +2757,7 @@
       });
     };
 
+    const startTs = Date.now();
     const configuredModel = payload.model || (payload.stats && payload.stats.model) || "nvidia/nemotron-3-ultra-550b-a55b";
     statusHUD.show({
       id: requestId,
