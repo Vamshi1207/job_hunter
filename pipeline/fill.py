@@ -388,9 +388,11 @@ def answer_form_questions(
     *,
     package_id: str = "",
     page_url: str = "",
+    feedback: str = "",
     with_stats: bool = False,
 ) -> list[dict] | tuple[list[dict], dict]:
     """Answer leftover application questions from memory + this role's tailored CV."""
+    has_feedback = bool(feedback and str(feedback).strip())
     cleaned: list[dict] = []
     for item in questions or []:
         label = str(item.get("label") or "").strip()
@@ -435,8 +437,8 @@ def answer_form_questions(
         }
         return ([], empty_stats) if with_stats else []
 
-    # Check for answers cached previously for this package
-    cached_list = load_package_answers_cache(cfg, package_id) if package_id else []
+    # Check for answers cached previously for this package (bypass if user provided feedback)
+    cached_list = [] if has_feedback else (load_package_answers_cache(cfg, package_id) if package_id else [])
     cached_by_norm = {
         (item.get("normalized_label") or normalize_question_label(item.get("label", ""))): item
         for item in cached_list
@@ -495,8 +497,17 @@ def answer_form_questions(
     company_name = ctx.get("company") or "this company"
     role_name = ctx.get("role") or "this role"
 
-    prompt = f"""You are answering job application form questions as {cfg.full_name}, an experienced Senior Software Engineer applying for '{role_name}' at {company_name}.
+    feedback_section = ""
+    if has_feedback:
+        feedback_section = f"""
+### User Direction & Refinement Feedback:
+The candidate reviewed the previous answer and provided this direct feedback for this revision:
+"{str(feedback).strip()}"
+Strictly incorporate this direction (e.g. emphasize requested technologies, adjust length or tone) while remaining completely truthful to the profile.
+"""
 
+    prompt = f"""You are answering job application form questions as {cfg.full_name}, an experienced Senior Software Engineer applying for '{role_name}' at {company_name}.
+{feedback_section}
 ### Grounding & Truthfulness:
 Answer ONLY from the source materials below (Memory, CV, Projects, Writing rules). Do NOT invent employers, tools, users, revenue, or metrics that do not exist in the source materials. If a question cannot be answered honestly from the profile, set skip=true.
 

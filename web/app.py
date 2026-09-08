@@ -338,6 +338,7 @@ class FormAnswerRequest(BaseModel):
     url: str = ""
     package_id: str = ""
     questions: list[FormQuestion] = Field(default_factory=list)
+    feedback: str = ""
 
 
 class RememberJobRequest(BaseModel):
@@ -786,7 +787,14 @@ def apply_answer(body: FormAnswerRequest) -> dict:
         for item in body.questions
     ]
     t0 = time.perf_counter()
-    answers, stats = answer_form_questions(cfg, questions, package_id=package_id, page_url=body.url, with_stats=True)
+    answers, stats = answer_form_questions(
+        cfg,
+        questions,
+        package_id=package_id,
+        page_url=body.url,
+        feedback=body.feedback,
+        with_stats=True,
+    )
     stats["latency_ms"] = round((time.perf_counter() - t0) * 1000)
     return {"package_id": package_id, "answers": answers, "stats": stats, "never_submit": True}
 

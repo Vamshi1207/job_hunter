@@ -1246,6 +1246,72 @@
           color: #fee2e2;
           transform: translateY(-1px);
         }
+        .hud-refine-box {
+          margin-top: 8px;
+          margin-bottom: 6px;
+          background: rgba(15, 23, 42, 0.6);
+          border: 1px solid rgba(255, 255, 255, 0.12);
+          border-radius: 8px;
+          padding: 8px 10px;
+        }
+        .hud-refine-label {
+          font-size: 10px;
+          font-weight: 700;
+          color: #94a3b8;
+          text-transform: uppercase;
+          letter-spacing: 0.05em;
+          margin-bottom: 5px;
+          display: flex;
+          align-items: center;
+          gap: 4px;
+        }
+        .hud-refine-row {
+          display: flex;
+          gap: 6px;
+          align-items: center;
+        }
+        .hud-refine-input {
+          flex: 1;
+          background: rgba(0, 0, 0, 0.45);
+          border: 1px solid rgba(255, 255, 255, 0.15);
+          border-radius: 6px;
+          padding: 6px 9px;
+          font-size: 11.5px;
+          color: #f8fafc;
+          outline: none;
+          transition: border-color 0.15s, box-shadow 0.15s;
+          font-family: inherit;
+        }
+        .hud-refine-input:focus {
+          border-color: #38bdf8;
+          box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.2);
+        }
+        .hud-refine-input::placeholder {
+          color: #64748b;
+        }
+        .hud-refine-btn {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          gap: 4px;
+          background: #2563eb;
+          color: #ffffff;
+          border: none;
+          border-radius: 6px;
+          padding: 6px 10px;
+          font-size: 11px;
+          font-weight: 600;
+          cursor: pointer;
+          white-space: nowrap;
+          transition: background 0.15s, transform 0.1s;
+        }
+        .hud-refine-btn:hover {
+          background: #1d4ed8;
+          transform: translateY(-1px);
+        }
+        .hud-refine-btn:active {
+          transform: translateY(0);
+        }
         .hud-progress-line {
           position: absolute;
           bottom: 0;
@@ -1686,6 +1752,29 @@
                 </button>
               </div>
               <div class="hud-preview-box">${escapeHtml(opts.answerPreview)}</div>
+              ${
+                opts.canRefine && typeof opts.onFeedback === "function"
+                  ? `
+                <div class="hud-refine-box">
+                  <div class="hud-refine-label">
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M12 20h9M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/>
+                    </svg>
+                    <span>Refine with AI:</span>
+                  </div>
+                  <div class="hud-refine-row">
+                    <input type="text" class="hud-refine-input" id="hud-refine-input" placeholder="e.g. Focus more on Kafka, make it shorter, mention Uber…" autocomplete="off" />
+                    <button type="button" class="hud-refine-btn" id="hud-refine-btn" title="Submit feedback and regenerate answer">
+                      <span>Regenerate</span>
+                      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/>
+                      </svg>
+                    </button>
+                  </div>
+                </div>
+              `
+                  : ""
+              }
             `
                 : detail
                 ? `<div class="hud-detail">${escapeHtml(detail)}</div>`
@@ -2210,6 +2299,39 @@
             }
           });
         }
+      }
+
+      // 7.5. Refine / Feedback Box
+      const refineInput = shadow.getElementById("hud-refine-input");
+      const refineBtn = shadow.getElementById("hud-refine-btn");
+      if (refineInput && refineBtn) {
+        const triggerRefine = () => {
+          const val = refineInput.value.trim();
+          if (!val) {
+            refineInput.focus();
+            return;
+          }
+          const task = tasks.values().next().value;
+          if (task && typeof task.onFeedback === "function") {
+            task.onFeedback(val);
+          }
+        };
+
+        refineBtn.addEventListener("click", (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          triggerRefine();
+        });
+
+        refineInput.addEventListener("keydown", (e) => {
+          e.stopPropagation();
+          if (e.key === "Enter") {
+            e.preventDefault();
+            triggerRefine();
+          }
+        });
+        refineInput.addEventListener("keyup", (e) => e.stopPropagation());
+        refineInput.addEventListener("keypress", (e) => e.stopPropagation());
       }
 
       // 8. Escape Key
@@ -2757,163 +2879,219 @@
       });
     };
 
-    const startTs = Date.now();
     const configuredModel = payload.model || (payload.stats && payload.stats.model) || "nvidia/nemotron-3-ultra-550b-a55b";
-    statusHUD.show({
-      id: requestId,
-      state: "thinking",
-      title: isMulti ? `Job Desk AI (${questions.length} Questions)` : "Job Desk AI",
-      company: payload.company || "",
-      role: payload.role || "",
-      model: configuredModel,
-      targetField,
-      questionKind,
-      message: isMulti
-        ? `Consulting LLM for ${questions.length} questions…`
-        : "Consulting LLM with your profile & role context…",
-      detail: isMulti
-        ? `Synthesizing answers across ${questions.length} questions`
-        : "Synthesizing answer grounded in resume experience & writing guidelines",
-      timer: true,
-      onCancel: doCancel,
-    });
 
-    let data = {};
-    try {
-      data = await new Promise((resolve, reject) => {
-        chrome.runtime.sendMessage(
-          {
-            type: "job-desk-answer-question",
+    async function executeQuery(userFeedback = "") {
+      const requestId = "req_" + Date.now() + "_" + Math.random().toString(36).slice(2, 8);
+      let isCancelled = false;
+
+      validFields.forEach((f) => statusHUD.highlight(f, "active"));
+
+      const doCancel = () => {
+        if (isCancelled) return;
+        isCancelled = true;
+        validFields.forEach((f) => statusHUD.clearHighlight(f));
+        try {
+          chrome.runtime.sendMessage({
+            type: "job-desk-cancel-answer",
             requestId,
-            body: {
-              url: location.href,
-              package_id: payload.package_id || "",
-              questions,
-            },
-          },
-          (response) => {
-            if (isCancelled) return resolve({ cancelled: true });
-            if (chrome.runtime.lastError) {
-              return reject(new Error(chrome.runtime.lastError.message));
-            }
-            if (!response) {
-              return reject(new Error("No response from extension background worker"));
-            }
-            if (response.cancelled) {
-              return resolve({ cancelled: true });
-            }
-            if (!response.ok) {
-              return reject(new Error(response.error || "Desk did not answer this question"));
-            }
-            resolve(response.data || {});
-          }
-        );
-      });
-    } catch (netErr) {
-      if (isCancelled) return 0;
-      validFields.forEach((f) => statusHUD.clearHighlight(f));
+          });
+          chrome.runtime.sendMessage({
+            type: "job-desk-badge",
+            text: "—",
+            color: "#94a3b8",
+          });
+        } catch (_) {}
+        statusHUD.show({
+          id: requestId,
+          state: "skipped",
+          title: "Request Cancelled",
+          company: payload.company || "",
+          role: payload.role || "",
+          targetField,
+          questionKind,
+          message: "Question answering was cancelled.",
+          detail: "No answer was requested or inserted into this field.",
+          autoDismiss: 5000,
+        });
+      };
+
+      const startTs = Date.now();
+      const isRefine = Boolean(userFeedback && userFeedback.trim());
+
       statusHUD.show({
         id: requestId,
-        state: "error",
-        title: "Could Not Generate Answer",
+        state: "thinking",
+        title: isRefine
+          ? "Refining Answer…"
+          : (isMulti ? `Job Desk AI (${questions.length} Questions)` : "Job Desk AI"),
         company: payload.company || "",
         role: payload.role || "",
+        model: configuredModel,
         targetField,
-        message: netErr.message || "Could not reach Job Desk backend.",
-        detail: "Ensure the local Job Desk server is running on http://127.0.0.1:8000 and this role was opened via Apply.",
-        autoDismiss: 9000,
+        questionKind,
+        message: isRefine
+          ? `Regenerating answer with your feedback…`
+          : (isMulti
+            ? `Consulting LLM for ${questions.length} questions…`
+            : "Consulting LLM with your profile & role context…"),
+        detail: isRefine
+          ? `Feedback: "${userFeedback.trim()}"`
+          : (isMulti
+            ? `Synthesizing answers across ${questions.length} questions`
+            : "Synthesizing answer grounded in resume experience & writing guidelines"),
+        timer: true,
+        onCancel: doCancel,
       });
-      throw netErr;
-    }
 
-    if (isCancelled || data.cancelled) {
-      return 0;
-    }
+      let data = {};
+      try {
+        data = await new Promise((resolve, reject) => {
+          chrome.runtime.sendMessage(
+            {
+              type: "job-desk-answer-question",
+              requestId,
+              body: {
+                url: location.href,
+                package_id: payload.package_id || "",
+                questions,
+                feedback: userFeedback || "",
+              },
+            },
+            (response) => {
+              if (isCancelled) return resolve({ cancelled: true });
+              if (chrome.runtime.lastError) {
+                return reject(new Error(chrome.runtime.lastError.message));
+              }
+              if (!response) {
+                return reject(new Error("No response from extension background worker"));
+              }
+              if (response.cancelled) {
+                return resolve({ cancelled: true });
+              }
+              if (!response.ok) {
+                return reject(new Error(response.error || "Desk did not answer this question"));
+              }
+              resolve(response.data || {});
+            }
+          );
+        });
+      } catch (netErr) {
+        if (isCancelled) return 0;
+        validFields.forEach((f) => statusHUD.clearHighlight(f));
+        statusHUD.show({
+          id: requestId,
+          state: "error",
+          title: "Could Not Generate Answer",
+          company: payload.company || "",
+          role: payload.role || "",
+          targetField,
+          message: netErr.message || "Could not reach Job Desk backend.",
+          detail: "Ensure the local Job Desk server is running on http://127.0.0.1:8000 and this role was opened via Apply.",
+          autoDismiss: 9000,
+        });
+        throw netErr;
+      }
 
-    const elapsed = Math.max(1, Math.round((Date.now() - startTs) / 1000));
-    const stats = data.stats || null;
-    const answers = data.answers || [];
+      if (isCancelled || data.cancelled) {
+        return 0;
+      }
 
-    if (!answers.length || answers.every((a) => a.skip || !a.value)) {
-      validFields.forEach((f) => statusHUD.clearHighlight(f));
+      const elapsed = Math.max(1, Math.round((Date.now() - startTs) / 1000));
+      const stats = data.stats || null;
+      const answers = data.answers || [];
+
+      if (!answers.length || answers.every((a) => a.skip || !a.value)) {
+        validFields.forEach((f) => statusHUD.clearHighlight(f));
+        statusHUD.show({
+          id: requestId,
+          state: "skipped",
+          title: "Question Skipped",
+          company: payload.company || "",
+          role: payload.role || "",
+          model: (stats && stats.model) || configuredModel,
+          targetField,
+          questionKind,
+          isGuardrail: true,
+          message: "Grounding guardrail: Question skipped by LLM.",
+          detail: "No factual verification found in your CV or Memory profile for this question (e.g. salary expectation, undisclosed tool, or demographics). Left blank to avoid hallucination.",
+          stats,
+          elapsed,
+          autoDismiss: 10000,
+        });
+        return 0;
+      }
+
+      let filledCount = 0;
+      const previewSnippets = [];
+
+      for (let i = 0; i < questions.length; i++) {
+        const q = questions[i];
+        const ans = answers.find((a) => a.key === q.key) || answers[i];
+        const field = queryAllDeep('[data-job-desk-q="' + q.key + '"]')[0] || validFields[i];
+        if (ans && !ans.skip && ans.value) {
+          if (applyAnswer(field, ans.value, true)) {
+            filledCount++;
+            statusHUD.highlight(field, "success");
+            previewSnippets.push(isMulti ? `Q: ${q.label}\nA: ${ans.value}` : String(ans.value));
+          } else {
+            previewSnippets.push(isMulti ? `Q: ${q.label} (Not inserted)\nA: ${ans.value}` : String(ans.value));
+          }
+        }
+      }
+
+      const fullPreview = previewSnippets.join("\n\n");
+
+      if (filledCount === 0) {
+        validFields.forEach((f) => statusHUD.clearHighlight(f));
+        statusHUD.show({
+          id: requestId,
+          state: "error",
+          title: "Answer Ready (Not Inserted)",
+          company: payload.company || "",
+          role: payload.role || "",
+          targetField,
+          message: "Generated an answer but could not put it into this field automatically.",
+          detail: "Click 'Copy Answer' below and press ⌘V (or Ctrl+V) to paste it directly.",
+          answerPreview: fullPreview,
+          stats,
+          elapsed,
+          canRefine: true,
+          onFeedback: (fb) => executeQuery(fb),
+        });
+        return 0;
+      }
+
+      const isCached = Boolean(stats && stats.from_cache);
+      const who = [payload.company, payload.role].filter(Boolean).join(" — ");
       statusHUD.show({
         id: requestId,
-        state: "skipped",
-        title: "Question Skipped",
+        state: "success",
+        title: isRefine
+          ? "Answer Refined & Inserted"
+          : (isCached
+            ? (isMulti ? `${filledCount} Answers (Cached)` : "Question Answered (Cached)")
+            : (isMulti ? `${filledCount} Questions Answered` : "Question Answered")),
         company: payload.company || "",
         role: payload.role || "",
         model: (stats && stats.model) || configuredModel,
         targetField,
         questionKind,
-        isGuardrail: true,
-        message: "Grounding guardrail: Question skipped by LLM.",
-        detail: "No factual verification found in your CV or Memory profile for this question (e.g. salary expectation, undisclosed tool, or demographics). Left blank to avoid hallucination.",
-        stats,
-        elapsed,
-        autoDismiss: 10000,
-      });
-      return 0;
-    }
-
-    let filledCount = 0;
-    const previewSnippets = [];
-
-    for (let i = 0; i < questions.length; i++) {
-      const q = questions[i];
-      const ans = answers.find((a) => a.key === q.key) || answers[i];
-      const field = queryAllDeep('[data-job-desk-q="' + q.key + '"]')[0] || validFields[i];
-      if (ans && !ans.skip && ans.value) {
-        if (applyAnswer(field, ans.value, true)) {
-          filledCount++;
-          statusHUD.highlight(field, "success");
-          previewSnippets.push(isMulti ? `Q: ${q.label}\nA: ${ans.value}` : String(ans.value));
-        } else {
-          previewSnippets.push(isMulti ? `Q: ${q.label} (Not inserted)\nA: ${ans.value}` : String(ans.value));
-        }
-      }
-    }
-
-    const fullPreview = previewSnippets.join("\n\n");
-
-    if (filledCount === 0) {
-      validFields.forEach((f) => statusHUD.clearHighlight(f));
-      statusHUD.show({
-        id: requestId,
-        state: "error",
-        title: "Answer Ready (Not Inserted)",
-        company: payload.company || "",
-        role: payload.role || "",
-        targetField,
-        message: "Generated an answer but could not put it into this field automatically.",
-        detail: "Click 'Copy Answer' below and press ⌘V (or Ctrl+V) to paste it directly.",
+        message: (who ? who + ": " : "") + (isRefine
+          ? "Answer refined with your feedback & inserted into form field."
+          : (isCached
+            ? (isMulti ? `${filledCount} answers loaded from cache & inserted.` : "Answer loaded from cache & inserted into form field.")
+            : (isMulti ? `${filledCount} answers verified & inserted.` : "Answer verified & inserted into form field."))),
         answerPreview: fullPreview,
         stats,
         elapsed,
+        canRefine: true,
+        onFeedback: (fb) => executeQuery(fb),
       });
-      return 0;
+      return filledCount;
     }
 
-    const isCached = Boolean(stats && stats.from_cache);
-    const who = [payload.company, payload.role].filter(Boolean).join(" — ");
-    statusHUD.show({
-      id: requestId,
-      state: "success",
-      title: isCached
-        ? (isMulti ? `${filledCount} Answers (Cached)` : "Question Answered (Cached)")
-        : (isMulti ? `${filledCount} Questions Answered` : "Question Answered"),
-      company: payload.company || "",
-      role: payload.role || "",
-      model: (stats && stats.model) || configuredModel,
-      targetField,
-      questionKind,
-      message: (who ? who + ": " : "") + (isCached
-        ? (isMulti ? `${filledCount} answers loaded from cache & inserted.` : "Answer loaded from cache & inserted into form field.")
-        : (isMulti ? `${filledCount} answers verified & inserted.` : "Answer verified & inserted into form field.")),
-      answerPreview: fullPreview,
-      stats,
-      elapsed,
-    });
-    return filledCount;
+    return executeQuery("");
   }
 
   async function applyFields(payload) {

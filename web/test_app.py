@@ -385,7 +385,28 @@ class DeskAPITests(unittest.TestCase):
             body2 = res2.json()
             self.assertEqual(body2["answers"][0]["value"], "About 70 percent coding")
             self.assertTrue(body2.get("stats", {}).get("from_cache"))
-            self.assertEqual(mock_llm.call_count, 1)
+            # Re-generating with user feedback bypasses cache and regenerates answer with LLM
+            mock_llm.return_value = '[{"key":"q0_again","value":"Over 80 percent coding with Kafka focus","skip":false}]'
+            res_fb = self.client.post(
+                "/api/apply/answer",
+                json={
+                    "url": "https://job-boards.greenhouse.io/acme/jobs/11111",
+                    "package_id": folder.name,
+                    "questions": [
+                        {
+                            "key": "q0_again",
+                            "label": "What percentage of time do you generally enjoy spending coding? *",
+                            "kind": "text",
+                        }
+                    ],
+                    "feedback": "Focus more on Kafka and make it 80%",
+                },
+            )
+            self.assertEqual(res_fb.status_code, 200)
+            body_fb = res_fb.json()
+            self.assertEqual(body_fb["answers"][0]["value"], "Over 80 percent coding with Kafka focus")
+            self.assertFalse(body_fb.get("stats", {}).get("from_cache"))
+            self.assertEqual(mock_llm.call_count, 2)
 
             # Marking the package applied clears the answers cache
             mark_res = self.client.post(f"/api/packages/{folder.name}/applied", json={"applied": True})
@@ -409,7 +430,7 @@ class DeskAPITests(unittest.TestCase):
             )
             self.assertEqual(res_1pwd.status_code, 200)
             self.assertEqual(res_1pwd.json()["answers"][0]["key"], "q_1pwd")
-            self.assertEqual(mock_llm.call_count, 2)
+            self.assertEqual(mock_llm.call_count, 3)
 
     def test_extension_lives_at_repo_extension_dir(self):
         root = Path(__file__).resolve().parents[1]
@@ -421,6 +442,8 @@ class DeskAPITests(unittest.TestCase):
         self.assertIn("jobDeskAnswerSelected", fill_js)
         self.assertIn("queryAllDeep", fill_js)
         self.assertIn("offerResumeFallback", fill_js)
+        self.assertIn("hud-refine-btn", fill_js)
+        self.assertIn("hud-refine-input", fill_js)
         self.assertNotIn("answerCustom", fill_js)
         self.assertIn("background.js", manifest)
         self.assertTrue((root / "extension" / "fill.js").exists())
