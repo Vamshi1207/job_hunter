@@ -107,6 +107,7 @@ def package_fill_payload(
         "fields": fields,
         "files": files,
         "cached_answers": load_package_answers_cache(cfg, package_id) if package_id else [],
+        "model": str(cfg.get("pipeline.model") or "nvidia/nemotron-3-ultra-550b-a55b").strip(),
         "never_submit": True,
     }
 
@@ -418,7 +419,7 @@ def answer_form_questions(
             break
     if not cleaned:
         empty_stats = {
-            "model": cfg.get("pipeline.nvidia.model") or "nvidia/nemotron-3-ultra-550b-a55b",
+            "model": cfg.get("pipeline.model") or cfg.get("pipeline.nvidia.model") or "nvidia/nemotron-3-ultra-550b-a55b",
             "company": "",
             "role": "",
             "sources": {},

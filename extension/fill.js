@@ -700,11 +700,12 @@
     }
 
     function formatModelName(name) {
-      if (!name) return "Nemotron 3.5 Lightning";
+      if (!name) return "Nemotron 550B Ultra";
       const low = String(name).toLowerCase();
       if (low === "cache" || low.includes("cache")) return "Local Cache (Instant)";
-      if (low.includes("lightning") || low.includes("3.5")) return "Nemotron 3.5 Lightning";
-      if (low.includes("nemotron")) return "Nemotron-3 Ultra";
+      if (low.includes("550b") || low.includes("nemotron-3-ultra") || low.includes("ultra")) return "Nemotron 550B Ultra";
+      if (low.includes("lightning") || low.includes("30b")) return "Nemotron 3.5 Lightning";
+      if (low.includes("nemotron")) return "Nemotron 550B Ultra";
       if (low.includes("deepseek")) return "DeepSeek V4 Flash";
       if (low.includes("gemini")) return "Gemini 3.1 Pro";
       if (low.includes("claude")) return "Claude 3.5 Sonnet";
@@ -2756,13 +2757,14 @@
       });
     };
 
-    const startTs = Date.now();
+    const configuredModel = payload.model || (payload.stats && payload.stats.model) || "nvidia/nemotron-3-ultra-550b-a55b";
     statusHUD.show({
       id: requestId,
       state: "thinking",
       title: isMulti ? `Job Desk AI (${questions.length} Questions)` : "Job Desk AI",
       company: payload.company || "",
       role: payload.role || "",
+      model: configuredModel,
       targetField,
       questionKind,
       message: isMulti
@@ -2839,6 +2841,7 @@
         title: "Question Skipped",
         company: payload.company || "",
         role: payload.role || "",
+        model: (stats && stats.model) || configuredModel,
         targetField,
         questionKind,
         isGuardrail: true,
@@ -2899,6 +2902,7 @@
         : (isMulti ? `${filledCount} Questions Answered` : "Question Answered"),
       company: payload.company || "",
       role: payload.role || "",
+      model: (stats && stats.model) || configuredModel,
       targetField,
       questionKind,
       message: (who ? who + ": " : "") + (isCached
