@@ -395,16 +395,17 @@ h2 { font-size: 1.15rem; }
   margin-left: 0.35rem;
 }
 
-.board .col-role    { width: 18%; }
-.board .col-company { width: 10%; }
-.board .col-location { width: 11%; }
-.board .col-mode    { width: 6%; }
+.board .col-role    { width: 17%; }
+.board .col-company { width: 9%; }
+.board .col-location { width: 10%; }
+.board .col-mode    { width: 5%; }
 .board .col-ats     { width: 4%; }
+.board .col-freedom { width: 5%; }
 .board .col-status  { width: 9%; }
 .board .col-resume  { width: 4%; }
 .board .col-edit    { width: 10%; }
 .board .col-link    { width: 5%; }
-.board .col-apply   { width: 16%; }
+.board .col-apply   { width: 15%; }
 .board .col-delete  { width: 5%; }
 
 .applied-stamp {
@@ -567,6 +568,7 @@ h2 { font-size: 1.15rem; }
 
 .board td.col-mode,
 .board td.col-ats,
+.board td.col-freedom,
 .board td.col-status,
 .board td.col-resume,
 .board td.col-link,

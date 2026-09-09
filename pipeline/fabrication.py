@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import re
 from pathlib import Path
 
@@ -10,6 +11,8 @@ from pipeline.config import Config, load_config
 LEVEL_MIN = 0
 LEVEL_MAX = 5
 DEFAULT_LEVEL = 1
+DEFAULT_MAX_AUTO = 3
+AUTO_VALUES = frozenset({"auto", "automatic"})
 
 LEVEL_LABELS = {
     0: "Strict — master CV / memory / bank only",
@@ -25,6 +28,27 @@ LEVEL_LABELS = {
 # Kept high on purpose — no extreme fabrication even at level 5.
 _HONESTY_FLOOR_AT_80 = (90, 85, 80, 75, 72, 70)
 
+# JD tokens that often require stretch vs a Python/Node/AWS profile.
+_STRETCH_TOKENS = (
+    "typescript",
+    "graphql",
+    "terraform",
+    "snowflake",
+    "databricks",
+    "rust",
+    "golang",
+    "next.js",
+    "nextjs",
+    "postgis",
+    "langchain",
+    "langgraph",
+    "ruby on rails",
+    "spring boot",
+    "kotlin",
+    "c++",
+    "scala",
+)
+
 
 def clamp_level(value) -> int:
     try:
@@ -34,8 +58,33 @@ def clamp_level(value) -> int:
     return max(LEVEL_MIN, min(LEVEL_MAX, level))
 
 
-def fabrication_freedom(cfg: Config | None = None) -> int:
+def is_auto_freedom(cfg: Config | None = None) -> bool:
+    """True when freedom is chosen per job (default), not locked in config."""
     cfg = cfg or load_config()
+    raw = cfg.get("pipeline.fabrication_freedom", "auto")
+    if raw is None:
+        return True
+    if isinstance(raw, str) and raw.strip().lower() in AUTO_VALUES:
+        return True
+    return False
+
+
+def fabrication_freedom_max(cfg: Config | None = None) -> int:
+    cfg = cfg or load_config()
+    raw = cfg.get("pipeline.fabrication_freedom_max")
+    if raw is None and not is_auto_freedom(cfg):
+        # Manual lock: the locked level is also the cap.
+        return fabrication_freedom(cfg)
+    if raw is None:
+        return DEFAULT_MAX_AUTO
+    return clamp_level(raw)
+
+
+def fabrication_freedom(cfg: Config | None = None) -> int:
+    """Locked level when manual; DEFAULT_LEVEL when auto (use choose_* for real runs)."""
+    cfg = cfg or load_config()
+    if is_auto_freedom(cfg):
+        return DEFAULT_LEVEL
     return clamp_level(cfg.get("pipeline.fabrication_freedom", DEFAULT_LEVEL))
 
 
@@ -52,6 +101,111 @@ def honesty_gate(freedom: int, ats_threshold: int) -> int:
     except (TypeError, ValueError):
         threshold = 80
     return max(0, min(100, _HONESTY_FLOOR_AT_80[freedom] + (threshold - 80)))
+
+
+def config_with_freedom(cfg: Config, level: int) -> Config:
+    """Shallow pipeline override so one job can tailor at a chosen freedom without mutating config.yaml."""
+    data = copy.deepcopy(cfg.data)
+    data.setdefault("pipeline", {})
+    data["pipeline"]["fabrication_freedom"] = clamp_level(level)
+    return Config(data, cfg.root)
+
+
+def _tech_gap_count(cfg: Config, jd_text: str, role: str = "") -> int:
+    """Count required-side stretch skills / foreign languages absent from the source of truth."""
+    from pipeline.search import phrase_in
+    from pipeline.stack_match import required_languages, split_required_bonus, user_language_families
+    from pipeline.tailor import source_of_truth_text
+
+    source = (source_of_truth_text(cfg) or "").lower()
+    required, _bonus = split_required_bonus(jd_text or "")
+    hay = f"{role or ''}\n{required}".lower()
+    gaps = 0
+    for token in _STRETCH_TOKENS:
+        if phrase_in(hay, token) and not phrase_in(source, token):
+            gaps += 1
+    # bare "go" only when clearly required (stack_match handles this)
+    listing = {"jd": jd_text or "", "role": role or ""}
+    foreign = required_languages(listing) - user_language_families(cfg)
+    gaps += len(foreign)
+    return gaps
+
+
+def choose_fabrication_freedom(
+    cfg: Config,
+    jd_text: str,
+    job: dict | None = None,
+) -> dict:
+    """Pick freedom 0–max before any tailor LLM call, from stack/skill overlap (no LLM)."""
+    job = job or {}
+    if not is_auto_freedom(cfg):
+        level = fabrication_freedom(cfg)
+        return {
+            "level": level,
+            "mode": "manual",
+            "reason": f"locked in config at level {level}",
+            "gaps": None,
+            "coverage": None,
+            "stack": None,
+            "fit": job.get("fit"),
+            "max": fabrication_freedom_max(cfg),
+        }
+
+    from pipeline.search import phrase_in, preferred_skills, score_listing
+    from pipeline.stack_match import stack_decision
+
+    max_level = fabrication_freedom_max(cfg)
+    listing = dict(job)
+    listing["jd"] = jd_text or listing.get("jd") or ""
+    role = (listing.get("role") or "").strip()
+    skills = preferred_skills(cfg)
+    hay = f"{role}\n{listing['jd']}".lower()
+    hits = sum(1 for skill in skills if phrase_in(hay, skill)) if skills else 0
+    coverage = (hits / len(skills)) if skills else 0.5
+    gaps = _tech_gap_count(cfg, listing["jd"], role)
+    decision = stack_decision(listing, cfg)
+    fit = listing.get("fit")
+    if fit is None and (role or listing.get("url")):
+        try:
+            fit = score_listing(listing, cfg)
+        except Exception:
+            fit = None
+
+    if gaps <= 0 and coverage >= 0.35:
+        level = 0
+    elif gaps <= 1 and coverage >= 0.25:
+        level = 1
+    elif gaps <= 2:
+        level = 2
+    elif gaps <= 4:
+        level = 3
+    else:
+        level = 4
+
+    if decision == "doubt":
+        level = max(level, 2)
+    if isinstance(fit, (int, float)):
+        # High hunt fit can only tighten freedom; never force invent upward.
+        if fit >= 12:
+            level = min(level, 1)
+        elif fit >= 8:
+            level = min(level, 2)
+
+    level = min(clamp_level(level), max_level)
+    reason = (
+        f"auto stack={decision} coverage={coverage:.0%} gaps={gaps} "
+        f"fit={fit if fit is not None else '—'} max={max_level}"
+    )
+    return {
+        "level": level,
+        "mode": "auto",
+        "reason": reason,
+        "gaps": gaps,
+        "coverage": round(coverage, 3),
+        "stack": decision,
+        "fit": fit,
+        "max": max_level,
+    }
 
 
 def freedom_instructions(level: int, *, pages: int, ats_threshold: int) -> str:
@@ -191,45 +345,69 @@ def retry_freedom_rules(level: int) -> str:
     )
 
 
-def update_fabrication_freedom(cfg_path: Path, level: int) -> int:
-    """Persist fabrication_freedom into config.yaml (preserves most comments)."""
-    level = clamp_level(level)
+def _set_yaml_key(text: str, key: str, value: str) -> str:
+    """Set or insert a pipeline-level scalar key (preserves most comments)."""
+    pattern = rf"(?m)^(?P<indent>\s*){re.escape(key)}\s*:.*$"
+    if re.search(pattern, text):
+        return re.sub(pattern, rf"\g<indent>{key}: {value}", text, count=1)
+    if re.search(r"(?m)^pipeline:\s*$", text):
+        return re.sub(
+            r"(?m)^(pipeline:\s*\n)",
+            rf"\1  {key}: {value}\n",
+            text,
+            count=1,
+        )
+    if text and not text.endswith("\n"):
+        text += "\n"
+    return text + f"\npipeline:\n  {key}: {value}\n"
+
+
+def update_fabrication_freedom(cfg_path: Path, level) -> int | str:
+    """Persist fabrication_freedom (0–5 or 'auto') into config.yaml."""
     path = Path(cfg_path)
     text = path.read_text() if path.exists() else ""
-    if re.search(r"(?m)^\s*fabrication_freedom\s*:", text):
-        text = re.sub(
-            r"(?m)^(?P<indent>\s*)fabrication_freedom\s*:.*$",
-            rf"\g<indent>fabrication_freedom: {level}",
-            text,
-            count=1,
-        )
-    elif re.search(r"(?m)^pipeline:\s*$", text):
-        text = re.sub(
-            r"(?m)^(pipeline:\s*\n)",
-            rf"\1  fabrication_freedom: {level}\n",
-            text,
-            count=1,
-        )
-    else:
-        if text and not text.endswith("\n"):
-            text += "\n"
-        text += f"\npipeline:\n  fabrication_freedom: {level}\n"
+    if isinstance(level, str) and level.strip().lower() in AUTO_VALUES:
+        text = _set_yaml_key(text, "fabrication_freedom", "auto")
+        path.write_text(text)
+        load_config(force=True)
+        return "auto"
+    level_i = clamp_level(level)
+    text = _set_yaml_key(text, "fabrication_freedom", str(level_i))
     path.write_text(text)
     load_config(force=True)
-    return level
+    return level_i
+
+
+def update_fabrication_freedom_max(cfg_path: Path, max_level: int) -> int:
+    max_level = clamp_level(max_level)
+    path = Path(cfg_path)
+    text = path.read_text() if path.exists() else ""
+    text = _set_yaml_key(text, "fabrication_freedom_max", str(max_level))
+    path.write_text(text)
+    load_config(force=True)
+    return max_level
 
 
 def settings_payload(cfg: Config | None = None) -> dict:
     cfg = cfg or load_config()
-    level = fabrication_freedom(cfg)
     threshold = int(cfg.get("pipeline.ats_threshold", 80) or 80)
+    auto = is_auto_freedom(cfg)
+    max_level = fabrication_freedom_max(cfg)
+    level = fabrication_freedom(cfg)
     return {
-        "fabrication_freedom": level,
-        "label": level_label(level),
+        "mode": "auto" if auto else "manual",
+        "fabrication_freedom": "auto" if auto else level,
+        "fabrication_freedom_max": max_level,
+        "label": (
+            f"Automatic per job (cap {max_level}/5)"
+            if auto
+            else level_label(level)
+        ),
         "levels": [
             {"value": i, "label": LEVEL_LABELS[i]} for i in range(LEVEL_MIN, LEVEL_MAX + 1)
         ],
         "ats_threshold": threshold,
-        "honesty_gate": honesty_gate(level, threshold),
+        "honesty_gate": None if auto else honesty_gate(level, threshold),
+        "honesty_gates": {str(i): honesty_gate(i, threshold) for i in range(LEVEL_MIN, LEVEL_MAX + 1)},
         "pages": cfg.cv_pages,
     }

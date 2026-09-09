@@ -154,14 +154,26 @@ class DeskAPITests(unittest.TestCase):
         got = self.client.get("/api/settings")
         self.assertEqual(got.status_code, 200)
         self.assertIn("fabrication_freedom", got.json())
+        auto = self.client.patch(
+            "/api/settings",
+            json={"fabrication_freedom": "auto", "fabrication_freedom_max": 3},
+        )
+        self.assertEqual(auto.status_code, 200)
+        self.assertEqual(auto.json()["mode"], "auto")
+        self.assertEqual(auto.json()["fabrication_freedom"], "auto")
+        self.assertEqual(auto.json()["fabrication_freedom_max"], 3)
         patched = self.client.patch("/api/settings", json={"fabrication_freedom": 3})
         self.assertEqual(patched.status_code, 200)
         self.assertEqual(patched.json()["fabrication_freedom"], 3)
+        self.assertEqual(patched.json()["mode"], "manual")
         self.assertEqual(patched.json()["honesty_gate"], 75)
         again = self.client.get("/api/settings")
         self.assertEqual(again.json()["fabrication_freedom"], 3)
-        # restore default for other tests sharing the temp config
-        self.client.patch("/api/settings", json={"fabrication_freedom": 1})
+        # restore auto default for other tests sharing the temp config
+        self.client.patch(
+            "/api/settings",
+            json={"fabrication_freedom": "auto", "fabrication_freedom_max": 3},
+        )
 
     def test_inspect_linkedin_is_blocked_and_uses_pasted_jd(self):
         res = self.client.post(

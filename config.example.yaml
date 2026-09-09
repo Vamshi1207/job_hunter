@@ -172,8 +172,9 @@ pipeline:
   applied_file: applied.yaml
   html_template: resumes/template.html
   ats_threshold: 80
-  # 0=strict source only … 5=fabricate to hit ATS. Desk UI can change this live.
-  fabrication_freedom: 1
+  # 0–5 lock, or auto = choose per job before tailor (desk default).
+  fabrication_freedom: auto
+  fabrication_freedom_max: 3   # cap when mode is auto (keeps invent bounded)
   max_attempts: 3
   # nvidia = OpenAI-compatible NVIDIA NIM (NVIDIA_API_KEY). agy = Gemini CLI.
   provider: nvidia

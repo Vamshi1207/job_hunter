@@ -191,6 +191,13 @@ def package_summary(cfg: Config, folder: Path) -> dict:
     from pipeline.cv_export import list_package_exports
 
     exports = list_package_exports(folder)
+    freedom = job_meta.get("fabrication_freedom")
+    if freedom is None:
+        freedom = eval_data.get("fabrication_freedom")
+    try:
+        freedom = int(freedom) if freedom is not None and freedom != "" else None
+    except (TypeError, ValueError):
+        freedom = None
     return {
         "id": folder.name,
         "company": company,
@@ -213,6 +220,13 @@ def package_summary(cfg: Config, folder: Path) -> dict:
         "score": eval_data.get("score"),
         "ats_score": eval_data.get("score"),
         "honesty": eval_data.get("honesty"),
+        "fabrication_freedom": freedom,
+        "fabrication_freedom_mode": job_meta.get("fabrication_freedom_mode")
+        or eval_data.get("fabrication_freedom_mode")
+        or "",
+        "fabrication_freedom_reason": job_meta.get("fabrication_freedom_reason")
+        or eval_data.get("fabrication_freedom_reason")
+        or "",
         "applied": applied,
         "applied_at": applied_at,
         "critique": eval_data.get("critique") or "",
@@ -223,6 +237,7 @@ def package_summary(cfg: Config, folder: Path) -> dict:
             "critique": eval_data.get("critique") or "",
             "gaps": eval_data.get("gaps") or [],
             "retry_history": eval_data.get("retry_history") or "",
+            "fabrication_freedom": freedom,
         },
     }
 

@@ -15,7 +15,16 @@ log = logging.getLogger(__name__)
 
 OnEvent = Callable[[dict], None]
 _ROW_FIELDS = frozenset(
-    {"package_id", "detail", "location", "work_mode", "ats_score", "apply_url", "apply_kind"}
+    {
+        "package_id",
+        "detail",
+        "location",
+        "work_mode",
+        "ats_score",
+        "apply_url",
+        "apply_kind",
+        "fabrication_freedom",
+    }
 )
 
 
@@ -60,6 +69,11 @@ def job_row_event(listing: dict, *, status: str, event_type: str, **extra: Any) 
         "location": extra.get("location") or placed.get("location_display") or placed.get("location") or "",
         "work_mode": extra.get("work_mode") or placed.get("work_mode") or "",
         "ats_score": extra["ats_score"] if "ats_score" in extra else listing.get("ats_score"),
+        "fabrication_freedom": (
+            extra["fabrication_freedom"]
+            if "fabrication_freedom" in extra
+            else listing.get("fabrication_freedom")
+        ),
         "apply_url": extra.get("apply_url") or listing.get("apply_url") or "",
         "apply_kind": extra.get("apply_kind") or listing.get("apply_kind") or "",
     }
@@ -239,15 +253,19 @@ class JobProgress:
         step = (detail or "Writing CV").strip() or "Writing CV"
         existing = next((row for row in self.rows if row_key(row) == row_key(listing)), None)
         first = not existing or existing.get("status") != "working"
+        extra = {}
+        if listing.get("fabrication_freedom") is not None:
+            extra["fabrication_freedom"] = listing.get("fabrication_freedom")
         self._push(
             listing,
             status="working",
             event_type="processing",
             detail=step,
             line=f"{step}: {company} — {role}" if first else "",
+            **extra,
         )
 
-    def ready(self, listing: dict, package_id: str, *, skipped: bool = False, ats_score=None) -> None:
+    def ready(self, listing: dict, package_id: str, *, skipped: bool = False, ats_score=None, fabrication_freedom=None) -> None:
         company, role, _url = row_key(listing)
         status = "skipped" if skipped else "ready"
         line = (
@@ -258,6 +276,9 @@ class JobProgress:
         extra = {"package_id": package_id, "line": line}
         if ats_score is not None:
             extra["ats_score"] = ats_score
+        freedom = fabrication_freedom if fabrication_freedom is not None else listing.get("fabrication_freedom")
+        if freedom is not None:
+            extra["fabrication_freedom"] = freedom
         self._push(
             listing,
             status=status,
@@ -328,6 +349,23 @@ def _ats_score(folder) -> int | None:
     return None
 
 
+def _package_freedom(folder) -> int | None:
+    try:
+        job_path = folder / "job.json"
+        if job_path.exists():
+            data = json.loads(job_path.read_text())
+            if isinstance(data, dict) and data.get("fabrication_freedom") is not None:
+                return int(data["fabrication_freedom"])
+        eval_path = folder / "evaluation.json"
+        if eval_path.exists():
+            data = json.loads(eval_path.read_text())
+            if isinstance(data, dict) and data.get("fabrication_freedom") is not None:
+                return int(data["fabrication_freedom"])
+    except (TypeError, AttributeError, OSError, json.JSONDecodeError, ValueError):
+        return None
+    return None
+
+
 async def hunt_and_tailor(
     cfg: Config,
     *,
@@ -382,7 +420,14 @@ async def hunt_and_tailor(
                     remember_apply_target(cfg, job)
                 except Exception as exc:
                     log.warning("Could not append jobs.yaml: %s", exc)
-                board.ready(job, output_dir.name, ats_score=_ats_score(output_dir))
+                board.ready(
+                    job,
+                    output_dir.name,
+                    ats_score=_ats_score(output_dir),
+                    fabrication_freedom=job.get("fabrication_freedom")
+                    if job.get("fabrication_freedom") is not None
+                    else _package_freedom(output_dir),
+                )
             else:
                 board.failed(job, f"No package for {job['company']} — {job['role']}")
             return {
@@ -420,7 +465,13 @@ async def hunt_and_tailor(
         prior = find_existing_package(cfg, job)
         if prior:
             log.info("Already processed %s — %s. Skipping.", job["company"], job["role"])
-            board.ready(job, prior.name, skipped=True, ats_score=_ats_score(prior))
+            board.ready(
+                job,
+                prior.name,
+                skipped=True,
+                ats_score=_ats_score(prior),
+                fabrication_freedom=_package_freedom(prior),
+            )
             results.append(
                 {
                     "company": job["company"],

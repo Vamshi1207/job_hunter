@@ -826,6 +826,10 @@ async def save_materials(
         "apply_url": (job or {}).get("apply_url") or "",
         "apply_kind": (job or {}).get("apply_kind") or "",
     }
+    if (job or {}).get("fabrication_freedom") is not None:
+        meta["fabrication_freedom"] = job.get("fabrication_freedom")
+        meta["fabrication_freedom_mode"] = job.get("fabrication_freedom_mode") or ""
+        meta["fabrication_freedom_reason"] = job.get("fabrication_freedom_reason") or ""
     (output_dir / "job.json").write_text(json.dumps(meta, indent=2))
 
     (output_dir / "cover_letter.md").write_text(parsed.get("COVER_LETTER") or "")

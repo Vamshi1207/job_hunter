@@ -419,7 +419,8 @@ def me() -> dict:
 
 
 class SettingsUpdate(BaseModel):
-    fabrication_freedom: Optional[int] = None
+    fabrication_freedom: Optional[object] = None  # "auto" or 0–5
+    fabrication_freedom_max: Optional[int] = None
 
 
 @app.get("/api/settings")
@@ -431,14 +432,32 @@ def get_settings() -> dict:
 
 @app.patch("/api/settings")
 def patch_settings(body: SettingsUpdate) -> dict:
-    from pipeline.fabrication import clamp_level, settings_payload, update_fabrication_freedom
+    from pipeline.fabrication import (
+        clamp_level,
+        settings_payload,
+        update_fabrication_freedom,
+        update_fabrication_freedom_max,
+    )
     from pipeline.config import load_config
 
     cfg = _load_cfg()
-    if body.fabrication_freedom is None:
-        raise HTTPException(status_code=400, detail="fabrication_freedom is required")
-    level = clamp_level(body.fabrication_freedom)
-    update_fabrication_freedom(cfg.root / "config.yaml", level)
+    path = cfg.root / "config.yaml"
+    changed = False
+    if body.fabrication_freedom is not None:
+        raw = body.fabrication_freedom
+        if isinstance(raw, str) and raw.strip().lower() in ("auto", "automatic"):
+            update_fabrication_freedom(path, "auto")
+        else:
+            update_fabrication_freedom(path, clamp_level(raw))
+        changed = True
+    if body.fabrication_freedom_max is not None:
+        update_fabrication_freedom_max(path, clamp_level(body.fabrication_freedom_max))
+        changed = True
+    if not changed:
+        raise HTTPException(
+            status_code=400,
+            detail="fabrication_freedom or fabrication_freedom_max is required",
+        )
     load_config(force=True)
     return settings_payload(load_config(force=True))
 

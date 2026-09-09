@@ -128,27 +128,30 @@ async function loadMe() {
 }
 
 function applyFreedomSettings(pipeline) {
-  const select = $("fabrication-freedom");
+  const select = $("fabrication-freedom-max");
   const note = $("freedom-note");
   const status = $("freedom-status");
   if (!select) return;
-  const levels = (pipeline && pipeline.levels) || [
-    { value: 0, label: "0 — Strict — master CV / memory / bank only" },
-    { value: 1, label: "1 — Keyword alignment — rephrase existing work only" },
-    { value: 2, label: "2 — Related skills — Key Skills extensions only" },
-    { value: 3, label: "3 — Adjacent reframing — broaden real bullets carefully" },
-    { value: 4, label: "4 — Aggressive ATS — invent plausible skills & soft metrics" },
-    { value: 5, label: "5 — Max ATS — fabricate to hit the score threshold" },
-  ];
-  const current = pipeline && pipeline.fabrication_freedom != null ? Number(pipeline.fabrication_freedom) : 1;
-  select.innerHTML = levels
-    .map((item) => `<option value="${item.value}">${item.value} — ${escapeHtml(String(item.label).replace(/^\d+\s*[—-]\s*/, ""))}</option>`)
+  const maxLevel = pipeline && pipeline.fabrication_freedom_max != null
+    ? Number(pipeline.fabrication_freedom_max)
+    : 3;
+  select.innerHTML = [0, 1, 2, 3, 4, 5]
+    .map((value) => `<option value="${value}">L${value} max</option>`)
     .join("");
-  select.value = String(current);
+  select.value = String(Number.isFinite(maxLevel) ? maxLevel : 3);
   if (note && pipeline) {
+    const mode = pipeline.mode || "auto";
+    const gates = pipeline.honesty_gates || {};
+    const gateHint = gates[String(select.value)] != null
+      ? ` · at L${select.value} honesty ≥ ${gates[String(select.value)]}`
+      : "";
     note.textContent =
-      `ATS target ${pipeline.ats_threshold || 80}+ · honesty gate ${pipeline.honesty_gate ?? "—"} · ` +
-      `${pipeline.pages || 2}-page CV. 0 = source only; 5 = invent for ATS.`;
+      (mode === "auto"
+        ? "Freedom is chosen automatically per job before the LLM runs. "
+        : "Freedom is locked in config. ") +
+      `ATS target ${pipeline.ats_threshold || 80}+ · ${pipeline.pages || 2}-page CV` +
+      gateHint +
+      ".";
   }
   if (status) {
     status.hidden = true;
@@ -157,7 +160,7 @@ function applyFreedomSettings(pipeline) {
 }
 
 async function saveFreedomSetting() {
-  const select = $("fabrication-freedom");
+  const select = $("fabrication-freedom-max");
   const status = $("freedom-status");
   if (!select) return;
   const value = Number(select.value);
@@ -166,14 +169,17 @@ async function saveFreedomSetting() {
     const updated = await api("/api/settings", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ fabrication_freedom: value }),
+      body: JSON.stringify({
+        fabrication_freedom: "auto",
+        fabrication_freedom_max: value,
+      }),
     });
     applyFreedomSettings(updated);
     if (status) {
       status.hidden = false;
-      status.textContent = `Saved: freedom ${updated.fabrication_freedom} (honesty gate ${updated.honesty_gate}). Applies to the next tailor run.`;
+      status.textContent = `Saved: auto freedom (cap L${updated.fabrication_freedom_max}).`;
     }
-    setStrip(`Fabrication freedom set to ${updated.fabrication_freedom}/5 — ${updated.label}`, true);
+    setStrip(`Auto fabrication freedom capped at L${updated.fabrication_freedom_max}/5`, true);
   } catch (err) {
     if (status) {
       status.hidden = false;
@@ -198,6 +204,7 @@ function upsertJob(data) {
     location: data.location || "",
     work_mode: data.work_mode || "",
     ats_score: data.ats_score,
+    fabrication_freedom: data.fabrication_freedom,
     apply_url: data.apply_url || "",
     apply_kind: data.apply_kind || "",
     detail: data.status === "working" ? (data.detail || "") : "",
@@ -215,6 +222,8 @@ function upsertJob(data) {
       location: incoming.location || prev.location,
       work_mode: incoming.work_mode || prev.work_mode,
       ats_score: incoming.ats_score == null ? prev.ats_score : incoming.ats_score,
+      fabrication_freedom:
+        incoming.fabrication_freedom == null ? prev.fabrication_freedom : incoming.fabrication_freedom,
       apply_url: incoming.apply_url || prev.apply_url,
       apply_kind: incoming.apply_kind || prev.apply_kind,
       // Preserve error_msg across status transitions only when staying failed
@@ -369,13 +378,25 @@ function atsLabel(row, pkg) {
   return String(score);
 }
 
-function boardCells(role, company, location, mode, ats, statusHtml, resume, edit, link, apply, del) {
+function freedomLabel(row, pkg) {
+  const raw =
+    row && row.fabrication_freedom != null
+      ? row.fabrication_freedom
+      : pkg && pkg.fabrication_freedom != null
+        ? pkg.fabrication_freedom
+        : null;
+  if (raw == null || raw === "") return "—";
+  return `L${raw}`;
+}
+
+function boardCells(role, company, location, mode, ats, freedom, statusHtml, resume, edit, link, apply, del) {
   return `
       <td class="col-role" title="${escapeAttr(role || "Role")}">${escapeHtml(role || "Role")}</td>
       <td class="col-company" title="${escapeAttr(company || "")}">${escapeHtml(company || "")}</td>
       <td class="col-location" title="${escapeAttr(location)}">${escapeHtml(location)}</td>
       <td class="col-mode">${escapeHtml(mode)}</td>
       <td class="col-ats ats-cell">${escapeHtml(ats)}</td>
+      <td class="col-freedom" title="${escapeAttr(freedom === "—" ? "" : "Fabrication freedom used")}">${escapeHtml(freedom)}</td>
       <td class="col-status">${statusHtml}</td>
       <td class="col-resume">${resume}</td>
       <td class="col-edit">${edit}</td>
@@ -933,7 +954,7 @@ function escapeAttr(value) {
 async function loadPackages(selectId) {
   if (!state.jobs.length && !state.packages.length) {
     $("package-list").innerHTML =
-      '<tr class="empty-row"><td colspan="11">Loading packages…</td></tr>';
+      '<tr class="empty-row"><td colspan="12">Loading packages…</td></tr>';
   }
   const data = await api("/api/packages");
   state.packages = data.packages || [];
@@ -953,6 +974,13 @@ function boardItem(row, pkg) {
   const applyKind = (row && row.apply_kind) || (pkg && pkg.apply_kind) || "";
   const atsRaw = row && row.ats_score != null ? row.ats_score : pkg && (pkg.ats_score != null ? pkg.ats_score : pkg.score);
   const atsNum = atsRaw == null || atsRaw === "" ? null : Number(atsRaw);
+  const freedomRaw =
+    row && row.fabrication_freedom != null
+      ? row.fabrication_freedom
+      : pkg && pkg.fabrication_freedom != null
+        ? pkg.fabrication_freedom
+        : null;
+  const freedomNum = freedomRaw == null || freedomRaw === "" ? -1 : Number(freedomRaw);
   const committedApplied = applied && !heldTab;
   return {
     row,
@@ -966,6 +994,8 @@ function boardItem(row, pkg) {
     mode: workModeLabel((row && row.work_mode) || (pkg && pkg.work_mode)),
     ats: atsLabel(row, pkg),
     atsNum: Number.isFinite(atsNum) ? atsNum : -1,
+    freedom: freedomLabel(row, pkg),
+    freedomNum: Number.isFinite(freedomNum) ? freedomNum : -1,
     status,
     statusLabel: applied && !inProgress ? "Applied" : statusLabel(row || status),
     resume: resumeText,
@@ -1014,6 +1044,7 @@ function sortItems(items) {
   const dir = state.board.sortDir === "asc" ? 1 : -1;
   const value = (item) => {
     if (key === "ats") return item.atsNum;
+    if (key === "freedom") return item.freedomNum;
     if (key === "modified") return item.modified;
     if (key === "resume") return item.hasPdf ? 1 : 0;
     if (key === "edit") return item.hasEdit ? 1 : 0;
@@ -1074,6 +1105,7 @@ function appendBoardRow(body, item, active) {
     item.location,
     item.mode,
     item.ats,
+    item.freedom,
     statusHtml,
     item.live ? liveResumeCell(row) : resumeCell(pkg),
     item.live ? liveEditCell(row) : editCell(pkg),
@@ -1160,7 +1192,7 @@ function appendGroup(body, label, items, active) {
   if (!items.length) return;
   const header = document.createElement("tr");
   header.className = "group-row";
-  header.innerHTML = `<th scope="colgroup" colspan="11">${escapeHtml(label)} <span class="group-count">${items.length}</span></th>`;
+  header.innerHTML = `<th scope="colgroup" colspan="12">${escapeHtml(label)} <span class="group-count">${items.length}</span></th>`;
   body.appendChild(header);
   for (const item of items) appendBoardRow(body, item, active);
 }
@@ -1171,7 +1203,7 @@ function renderBoard(active) {
   const tab = state.board.tab || "queue";
   if (!state.packages.length && !state.jobs.length) {
     body.innerHTML =
-      '<tr class="empty-row"><td colspan="11">No packages yet. Hunt from your profile, or paste job URLs.</td></tr>';
+      '<tr class="empty-row"><td colspan="12">No packages yet. Hunt from your profile, or paste job URLs.</td></tr>';
     setBoardHeading({ ready: 0, applied: 0, progress: 0, hunt: "", queueTotal: 0, appliedTotal: 0 });
     return;
   }
@@ -1186,7 +1218,7 @@ function renderBoard(active) {
       tab === "applied" && !(state.board.query || "").trim()
         ? "No applied jobs yet. Mark a job applied from the queue; it moves here on refresh."
         : "No jobs match this search.";
-    body.innerHTML = `<tr class="empty-row"><td colspan="11">${empty}</td></tr>`;
+    body.innerHTML = `<tr class="empty-row"><td colspan="12">${empty}</td></tr>`;
     setBoardHeading({
       ready: 0,
       applied: appliedTotal,
@@ -1435,7 +1467,7 @@ $("refresh").addEventListener("click", () => {
   renderProgress("");
   loadPackages();
 });
-const freedomSelect = $("fabrication-freedom");
+const freedomSelect = $("fabrication-freedom-max");
 if (freedomSelect) {
   freedomSelect.addEventListener("change", () => {
     saveFreedomSetting().catch((err) => setStrip(err.message, true));
@@ -1605,7 +1637,7 @@ $("intake").addEventListener("submit", async (ev) => {
 loadMe().catch(() => {});
 bindBoardControls();
 loadPackages().catch((err) => {
-  $("package-list").innerHTML = `<tr class="empty-row"><td colspan="11">${escapeHtml(err.message)}</td></tr>`;
+  $("package-list").innerHTML = `<tr class="empty-row"><td colspan="12">${escapeHtml(err.message)}</td></tr>`;
 });
 (function bindFillBookmarklet() {
   const link = $("fill-bookmarklet");

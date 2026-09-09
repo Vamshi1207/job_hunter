@@ -24,14 +24,14 @@
       <details class="settings-wrap" id="settings-wrap">
         <summary>Tailor settings</summary>
         <div class="settings-body">
-          <label class="freedom-control">
-            Fabrication freedom
-            <select id="fabrication-freedom" aria-describedby="freedom-note"></select>
-          </label>
           <p class="field-note" id="freedom-note">
-            0 = only master CV / memory / experience bank. 5 = invent to hit the ATS threshold.
-            ATS score target still applies at every level. Page count from config still applies.
+            Fabrication freedom is chosen automatically per job from stack/skill fit before the LLM runs.
+            Cap limits how far auto may go (honesty gates still apply).
           </p>
+          <label class="freedom-control">
+            Auto freedom cap
+            <select id="fabrication-freedom-max" aria-describedby="freedom-note"></select>
+          </label>
           <p class="hint" id="freedom-status" hidden></p>
         </div>
       </details>
@@ -113,6 +113,7 @@
             <col class="col-location">
             <col class="col-mode">
             <col class="col-ats">
+            <col class="col-freedom">
             <col class="col-status">
             <col class="col-resume">
             <col class="col-edit">
@@ -127,6 +128,7 @@
               <th scope="col" class="col-location"><button type="button" class="th-sort" data-key="location">Location</button></th>
               <th scope="col" class="col-mode"><button type="button" class="th-sort" data-key="mode">Mode</button></th>
               <th scope="col" class="col-ats"><button type="button" class="th-sort" data-key="ats">ATS</button></th>
+              <th scope="col" class="col-freedom"><button type="button" class="th-sort" data-key="freedom">Freedom</button></th>
               <th scope="col" class="col-status"><button type="button" class="th-sort" data-key="status">Status</button></th>
               <th scope="col" class="col-resume"><button type="button" class="th-sort" data-key="resume">Resume</button></th>
               <th scope="col" class="col-edit"><button type="button" class="th-sort" data-key="edit">Edit</button></th>

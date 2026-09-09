@@ -2884,6 +2884,47 @@ class FabricationFreedomMatrixTests(unittest.TestCase):
                 self.assertEqual(gate, 70)
                 self.assertFalse(90 >= 80 and 0 >= gate)
 
+    def test_choose_fabrication_freedom_auto_respects_max_and_gaps(self):
+        from pipeline.fabrication import choose_fabrication_freedom, config_with_freedom
+        from pipeline.config import Config
+        from unittest.mock import patch
+
+        cfg = Config(
+            {
+                "user": {"full_name": "T"},
+                "pipeline": {"fabrication_freedom": "auto", "fabrication_freedom_max": 3, "ats_threshold": 80},
+                "hunt": {
+                    "preferred_skills": ["Python", "AWS", "Docker", "Kafka"],
+                    "reject_skills": ["Java", "C++"],
+                },
+            },
+            Path("/tmp"),
+        )
+        easy = (
+            "Software Engineer. Required: Python, AWS, Docker, Kafka. "
+            "Build REST APIs and event-driven services."
+        )
+        hard = (
+            "Staff Backend Engineer. Required: TypeScript, GraphQL, Terraform, Snowflake, Golang. "
+            "Must have 6+ years TypeScript and GraphQL at scale."
+        )
+        with patch("pipeline.tailor.source_of_truth_text", return_value="Python AWS Docker Kafka Node.js"):
+            easy_choice = choose_fabrication_freedom(cfg, easy, {"role": "Software Engineer", "jd": easy})
+            hard_choice = choose_fabrication_freedom(cfg, hard, {"role": "Staff Backend", "jd": hard})
+        self.assertEqual(easy_choice["mode"], "auto")
+        self.assertLessEqual(easy_choice["level"], 1)
+        self.assertGreaterEqual(hard_choice["level"], 2)
+        self.assertLessEqual(hard_choice["level"], 3)
+        locked = Config(
+            {"pipeline": {"fabrication_freedom": 2, "fabrication_freedom_max": 5}},
+            Path("/tmp"),
+        )
+        locked_choice = choose_fabrication_freedom(locked, hard, {"role": "X", "jd": hard})
+        self.assertEqual(locked_choice["mode"], "manual")
+        self.assertEqual(locked_choice["level"], 2)
+        job_cfg = config_with_freedom(cfg, 0)
+        self.assertEqual(job_cfg.get("pipeline.fabrication_freedom"), 0)
+
     def test_update_fabrication_freedom_persists_each_level(self):
         from pipeline.fabrication import update_fabrication_freedom, fabrication_freedom
         from pipeline.config import Config, load_config

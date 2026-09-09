@@ -13,7 +13,11 @@ if __package__ is None:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from pipeline.config import load_config
-from pipeline.fabrication import fabrication_freedom, honesty_gate
+from pipeline.fabrication import (
+    choose_fabrication_freedom,
+    config_with_freedom,
+    honesty_gate,
+)
 from pipeline.jobs import load_jobs
 from pipeline.playbook import render_playbook
 from pipeline.tailor import (
@@ -65,16 +69,33 @@ async def process_job(job: dict, fill_form: bool, on_progress=None) -> Path | No
     company, role, jd_text = job["company"], job["role"], job["jd"]
     max_attempts = int(cfg.get("pipeline.max_attempts", 3))
     threshold = int(cfg.get("pipeline.ats_threshold", 80))
-    freedom = fabrication_freedom(cfg)
+    choice = choose_fabrication_freedom(cfg, jd_text, job)
+    freedom = int(choice["level"])
     min_honesty = honesty_gate(freedom, threshold)
-    source = source_of_truth_text(cfg)
+    job_cfg = config_with_freedom(cfg, freedom)
+    job["fabrication_freedom"] = freedom
+    job["fabrication_freedom_mode"] = choice.get("mode") or "auto"
+    job["fabrication_freedom_reason"] = choice.get("reason") or ""
+    source = source_of_truth_text(job_cfg)
 
-    log.info("Processing %s — %s (freedom=%s, ats>=%s, honesty>=%s)", company, role, freedom, threshold, min_honesty)
+    log.info(
+        "Processing %s — %s (freedom=%s %s, ats>=%s, honesty>=%s) — %s",
+        company,
+        role,
+        freedom,
+        choice.get("mode"),
+        threshold,
+        min_honesty,
+        choice.get("reason"),
+    )
+    note(f"Freedom {freedom} ({choice.get('mode') or 'auto'})")
 
     feedback_history = ""
     best_output = ""
     best_score = -1
     best_eval: dict = {}
+
+    from unittest.mock import patch
 
     for attempt in range(1, max_attempts + 1):
         log.info("Tailor attempt %s/%s", attempt, max_attempts)
@@ -82,15 +103,16 @@ async def process_job(job: dict, fill_form: bool, on_progress=None) -> Path | No
         if max_attempts > 1:
             writing = f"{writing} ({attempt}/{max_attempts})"
         note(writing)
-        llm_output = await asyncio.to_thread(
-            generate_tailored_materials, company, role, jd_text, feedback_history
-        )
+        with patch("pipeline.tailor.load_config", return_value=job_cfg):
+            llm_output = await asyncio.to_thread(
+                generate_tailored_materials, company, role, jd_text, feedback_history
+            )
         if not llm_output.strip():
             log.error("Empty LLM output on attempt %s", attempt)
             continue
 
-        parsed = parse_tagged_output(llm_output)
-        is_valid, validation_errors = validate_tailored_output(parsed, cfg)
+        parsed = parse_tagged_output(llm_output, job_cfg)
+        is_valid, validation_errors = validate_tailored_output(parsed, job_cfg)
         if not is_valid:
             log.error(
                 "Tailor attempt %s produced incomplete output: %s",
@@ -108,11 +130,15 @@ async def process_job(job: dict, fill_form: bool, on_progress=None) -> Path | No
         if max_attempts > 1:
             scoring = f"{scoring} ({attempt}/{max_attempts})"
         note(scoring)
-        plain = resume_plain_text(parsed)
-        eval_result = await asyncio.to_thread(evaluate_ats_score, jd_text, plain, source)
+        plain = resume_plain_text(parsed, job_cfg)
+        with patch("pipeline.tailor.load_config", return_value=job_cfg):
+            eval_result = await asyncio.to_thread(evaluate_ats_score, jd_text, plain, source)
         score = int(eval_result.get("score") or 0)
         honesty = int(eval_result.get("honesty") or 0)
         critique = eval_result.get("critique") or "No critique provided."
+        eval_result["fabrication_freedom"] = freedom
+        eval_result["fabrication_freedom_mode"] = choice.get("mode")
+        eval_result["fabrication_freedom_reason"] = choice.get("reason")
 
         log.info("Score %s/100 (honesty %s/100, freedom %s)", score, honesty, freedom)
         log.info("Critique: %s", critique)
@@ -144,7 +170,7 @@ async def process_job(job: dict, fill_form: bool, on_progress=None) -> Path | No
             f"(need score>={threshold}, honesty>={min_honesty})\n"
             f"Critique: {critique}\n"
             f"Gaps: {eval_result.get('gaps')}\n"
-            f"Also protect the {cfg.cv_pages}-page budget — drop lower-value bullets if needed.\n"
+            f"Also protect the {job_cfg.cv_pages}-page budget — drop lower-value bullets if needed.\n"
         )
 
     if not best_output:
@@ -152,15 +178,16 @@ async def process_job(job: dict, fill_form: bool, on_progress=None) -> Path | No
         return None
 
     note("Saving package")
-    output_dir = await save_materials(
-        company,
-        role,
-        best_output,
-        eval_result=best_eval,
-        feedback_history=feedback_history,
-        job=job,
-        on_progress=on_progress,
-    )
+    with patch("pipeline.tailor.load_config", return_value=job_cfg):
+        output_dir = await save_materials(
+            company,
+            role,
+            best_output,
+            eval_result=best_eval,
+            feedback_history=feedback_history,
+            job=job,
+            on_progress=on_progress,
+        )
 
     pdf_path = output_dir / f"{cfg.cv_stem}.pdf"
     cl_path = output_dir / "cover_letter.md"
