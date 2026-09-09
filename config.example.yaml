@@ -172,6 +172,8 @@ pipeline:
   applied_file: applied.yaml
   html_template: resumes/template.html
   ats_threshold: 80
+  # 0=strict source only … 5=fabricate to hit ATS. Desk UI can change this live.
+  fabrication_freedom: 1
   max_attempts: 3
   # nvidia = OpenAI-compatible NVIDIA NIM (NVIDIA_API_KEY). agy = Gemini CLI.
   provider: nvidia
@@ -189,7 +191,7 @@ pipeline:
     enable_thinking: true
     fallback_models:
       - deepseek-ai/deepseek-v4-flash-0731
-      - nvidia/nemotron-3.5-lightning-30b-a3b
+      - google/gemma-4-31b-it
   # Form fill is off unless you pass --fill-form. Submit is never clicked.
   auto_apply: false
 

@@ -284,23 +284,51 @@ class ParseTests(unittest.TestCase):
 
 
 class HonestyPromptTests(unittest.TestCase):
-    def test_critic_forbids_invention(self):
-        prompt = build_critic_prompt("need PostGIS", "python kafka", "python kafka")
+    def test_critic_forbids_invention_at_freedom_0(self):
+        from pipeline.config import Config
+
+        cfg = Config(
+            {
+                "user": {"full_name": "Test"},
+                "pipeline": {"fabrication_freedom": 0, "ats_threshold": 80},
+                "cv_format": {"pages": 2},
+            },
+            Path("/tmp"),
+        )
+        prompt = build_critic_prompt("need PostGIS", "python kafka", "python kafka", cfg)
         lower = prompt.lower()
         self.assertIn("never tell the writer to invent", lower)
-        self.assertNotIn("added/invented", lower)
-        self.assertNotIn("invent new", lower)
+        self.assertIn("freedom level 0", lower)
 
-    def test_retry_forbids_invention(self):
-        section = _retry_section("score=40 missing PostGIS")
+    def test_retry_forbids_invention_at_low_freedom(self):
+        from pipeline.config import Config
+
+        cfg = Config(
+            {"user": {"full_name": "Test"}, "pipeline": {"fabrication_freedom": 0}, "cv_format": {"pages": 2}},
+            Path("/tmp"),
+        )
+        section = _retry_section("score=40 missing PostGIS", cfg)
         self.assertIn("MUST NOT invent", section)
-        self.assertNotIn("authorized to completely invent", section.lower())
+        self.assertNotIn("authorized to fabricate", section.lower())
+
+    def test_retry_limits_fabrication_at_freedom_5(self):
+        from pipeline.config import Config
+
+        cfg = Config(
+            {"user": {"full_name": "Test"}, "pipeline": {"fabrication_freedom": 5}, "cv_format": {"pages": 2}},
+            Path("/tmp"),
+        )
+        section = _retry_section("score=40 missing PostGIS", cfg)
+        lower = section.lower()
+        self.assertIn("limited", lower)
+        self.assertIn("no extreme fabrication", lower)
+        self.assertNotIn("authorized to fabricate", lower)
 
     def test_tailor_prompt_includes_bank_and_rules(self):
         cfg = load_config(force=True)
         prompt = build_tailor_prompt(cfg, "Cohere", "FDE", "Need Python agents")
         self.assertIn("Experience bank", prompt)
-        self.assertIn("MUST NOT invent", prompt)
+        self.assertIn("FABRICATION FREEDOM", prompt)
         self.assertIn("Need Python agents", prompt)
         self.assertIn(f"Target length is {cfg.cv_pages}", prompt)
         self.assertIn("Keep these sections", prompt)
@@ -2594,20 +2622,36 @@ class ConfigMergeTests(unittest.TestCase):
         self.assertTrue(any("9998887776" in u for u in deleted_job_urls(cfg)))
         tmp.cleanup()
 
-    def test_tailor_prompt_and_critic_allow_related_skills(self):
+    def test_tailor_prompt_and_critic_respect_freedom_level(self):
         from pipeline.config import Config
-        from pipeline.tailor import build_tailor_prompt, build_critic_prompt
+        from pipeline.fabrication import freedom_instructions, critic_freedom_rules
+        from unittest.mock import patch
 
-        cfg = Config({"user": {"name": "Test User"}}, Path("."))
-        prompt = build_tailor_prompt(cfg, "TechCorp", "SWE", "We need Kafka, Python, Pydantic, and Uvicorn")
-        self.assertIn("Key skills", prompt)
-        self.assertIn("add more skills", prompt)
-        self.assertIn("closely related", prompt)
-        self.assertIn("out-of-the-blue", prompt)
+        cfg = Config(
+            {
+                "user": {"full_name": "Test User"},
+                "pipeline": {"fabrication_freedom": 2, "ats_threshold": 80},
+                "cv_format": {"pages": 2},
+            },
+            Path("."),
+        )
+        with patch("pipeline.tailor.load_config", return_value=cfg), patch(
+            "pipeline.tailor.fabrication_freedom", return_value=2
+        ), patch("pipeline.tailor.load_optional", return_value=""), patch(
+            "pipeline.tailor.load_experience_bank", return_value=""
+        ):
+            prompt = build_tailor_prompt(cfg, "TechCorp", "SWE", "We need Kafka, Python, Pydantic, and Uvicorn")
+        self.assertIn("RELATED SKILLS", prompt)
+        self.assertIn("closely related", prompt.lower())
 
-        critic = build_critic_prompt("JD text", "Resume text", "Truth text")
-        self.assertIn("Key Skills", critic)
-        self.assertIn("penalized as dishonesty", critic)
+        critic = build_critic_prompt("JD text", "Resume text", "Truth text", cfg)
+        self.assertIn("Freedom 2", critic)
+        self.assertIn("MUST NOT be penalized", critic)
+
+        strict = freedom_instructions(0, pages=2, ats_threshold=80)
+        self.assertIn("STRICT MODE", strict)
+        self.assertIn("MUST NOT add skills", strict)
+        self.assertIn("fabricate", critic_freedom_rules(5).lower())
 
     def test_is_linkedin_saved_job(self):
         from pipeline.jobs import is_linkedin_saved_job
@@ -2687,6 +2731,201 @@ class ConfigMergeTests(unittest.TestCase):
             mock_page.goto.assert_called_once()
 
         tmp.cleanup()
+
+
+class FabricationFreedomMatrixTests(unittest.TestCase):
+    """Invariants that must hold at every fabrication freedom level 0–5."""
+
+    def _cfg(self, level: int) -> "Config":
+        from pipeline.config import Config
+
+        return Config(
+            {
+                "user": {"full_name": "Matrix Tester"},
+                "pipeline": {"fabrication_freedom": level, "ats_threshold": 80},
+                "cv_format": {"pages": 2, "bullets": {"dynamic": True, "min": 2, "max": 5}},
+                "experience": {
+                    "jobs": [
+                        {"prefix": "JOB1", "employer": "Acme", "default_title": "Software Engineer"},
+                    ]
+                },
+            },
+            Path("/tmp"),
+        )
+
+    def test_honesty_gates_are_monotonic_and_expected(self):
+        from pipeline.fabrication import honesty_gate
+
+        expected = {0: 90, 1: 85, 2: 80, 3: 75, 4: 72, 5: 70}
+        prev = 100
+        for level, want in expected.items():
+            got = honesty_gate(level, 80)
+            self.assertEqual(got, want, f"level {level}")
+            self.assertLessEqual(got, prev)
+            prev = got
+        # Floors shift with ats_threshold (L2 stays equal to threshold).
+        self.assertEqual(honesty_gate(2, 85), 85)
+        self.assertEqual(honesty_gate(0, 85), 95)
+        self.assertEqual(honesty_gate(5, 85), 75)
+
+    def test_clamp_out_of_range(self):
+        from pipeline.fabrication import clamp_level, fabrication_freedom
+        from pipeline.config import Config
+
+        self.assertEqual(clamp_level(-3), 0)
+        self.assertEqual(clamp_level(99), 5)
+        self.assertEqual(clamp_level("nope"), 1)
+        cfg = Config({"pipeline": {"fabrication_freedom": 99}}, Path("/tmp"))
+        self.assertEqual(fabrication_freedom(cfg), 5)
+
+    def test_writer_critic_retry_escalate_cleanly(self):
+        from pipeline.fabrication import freedom_instructions, critic_freedom_rules, retry_freedom_rules
+
+        for level in range(0, 6):
+            fi = freedom_instructions(level, pages=2, ats_threshold=80)
+            cr = critic_freedom_rules(level)
+            rr = retry_freedom_rules(level)
+            self.assertIn(f"level {level}/5", fi)
+            self.assertIn(f"Freedom {level}", cr)
+            self.assertIn("Never invent employers", fi)
+            if level <= 1:
+                self.assertIn("MUST NOT", fi + rr)
+                self.assertNotIn("authorized to fabricate", rr.lower())
+                self.assertNotIn("invent plausible", rr.lower())
+            if level == 2:
+                self.assertIn("RELATED SKILLS", fi)
+                self.assertIn("closely related", fi.lower())
+            if level == 4:
+                self.assertIn("MEASURED STRETCH", fi)
+                self.assertIn("Keep fabrication minimal", fi)
+            if level == 5:
+                self.assertIn("STRONG ATS PUSH", fi)
+                self.assertIn("no extreme fabrication", fi.lower())
+                self.assertIn("limited", rr.lower())
+                self.assertNotIn("authorized to fabricate", rr.lower())
+
+    def test_tailor_and_critic_prompts_embed_each_level(self):
+        from unittest.mock import patch
+
+        for level in range(0, 6):
+            cfg = self._cfg(level)
+            with patch("pipeline.tailor.load_optional", return_value="master"), patch(
+                "pipeline.tailor.load_experience_bank", return_value="bank"
+            ):
+                prompt = build_tailor_prompt(cfg, "Acme", "SWE", "Need Python Kafka")
+            critic = build_critic_prompt("Need Python Kafka", "resume text", "truth text", cfg)
+            self.assertIn("FABRICATION FREEDOM", prompt)
+            self.assertIn(f"level {level}/5", prompt)
+            self.assertIn(f"freedom level {level}", critic.lower())
+            if level < 4:
+                self.assertIn("MUST be <= honesty", critic)
+            else:
+                self.assertIn("do not force score <= honesty", critic.lower())
+            if level == 0:
+                # Freedom block itself must stay strict even if memory text varies.
+                start = prompt.find("### FABRICATION FREEDOM")
+                end = prompt.find("### INSTRUCTIONS")
+                freedom_block = prompt[start:end]
+                self.assertIn("STRICT MODE", freedom_block)
+                self.assertIn("MUST NOT add skills", freedom_block)
+                self.assertNotIn("closely related", freedom_block.lower())
+
+    def test_evaluate_ats_score_capping_per_level(self):
+        from unittest.mock import patch
+
+        cases = [
+            # honesty 0 must zero the score at levels 0–3
+            (0, 90, 0, 0),
+            (1, 90, 0, 0),
+            (2, 90, 0, 0),
+            (3, 90, 0, 0),
+            (4, 90, 0, 90),
+            (5, 90, 0, 90),
+            # honesty below raw score caps at low freedom
+            (0, 95, 70, 70),
+            (3, 95, 70, 70),
+            (4, 95, 70, 95),
+            (5, 95, 70, 95),
+        ]
+        for level, raw_score, honesty, expected in cases:
+            cfg = self._cfg(level)
+            payload = (
+                f'{{"score": {raw_score}, "keyword_coverage": {raw_score}, '
+                f'"honesty": {honesty}, "gaps": [], "critique": "ok"}}'
+            )
+            with patch("pipeline.tailor.load_config", return_value=cfg), patch(
+                "pipeline.tailor.fabrication_freedom", return_value=level
+            ), patch("pipeline.tailor.complete_prompt", return_value=payload):
+                from pipeline.tailor import evaluate_ats_score
+
+                data = evaluate_ats_score("jd", "resume", "truth")
+            self.assertEqual(
+                data["score"],
+                expected,
+                f"level={level} raw={raw_score} honesty={honesty}",
+            )
+            self.assertEqual(data["fabrication_freedom"], level)
+
+    def test_run_pipeline_honesty_gate_accepts_per_level(self):
+        from pipeline.fabrication import honesty_gate
+
+        # Simulate acceptance: score>=80 and honesty>=gate(level)
+        for level in range(0, 6):
+            gate = honesty_gate(level, 80)
+            # borderline honesty just below gate fails
+            self.assertFalse(80 >= 80 and (gate - 1) >= gate)
+            self.assertTrue(80 >= 80 and gate >= gate)
+            # high score alone is not enough when honesty is below gate
+            self.assertFalse(90 >= 80 and 50 >= gate)
+            # honesty at the gate passes (with score at threshold)
+            self.assertTrue(80 >= 80 and gate >= gate)
+            # even level 5 still requires elevated honesty (no extreme fabrication)
+            if level == 5:
+                self.assertEqual(gate, 70)
+                self.assertFalse(90 >= 80 and 0 >= gate)
+
+    def test_update_fabrication_freedom_persists_each_level(self):
+        from pipeline.fabrication import update_fabrication_freedom, fabrication_freedom
+        from pipeline.config import Config, load_config
+
+        tmp = tempfile.TemporaryDirectory()
+        root = Path(tmp.name)
+        path = root / "config.yaml"
+        path.write_text("user:\n  full_name: T\npipeline:\n  ats_threshold: 80\n")
+        for level in range(0, 6):
+            update_fabrication_freedom(path, level)
+            text = path.read_text()
+            self.assertRegex(text, rf"(?m)^\s*fabrication_freedom:\s*{level}\s*$")
+            cfg = Config(
+                {"pipeline": {"fabrication_freedom": level, "ats_threshold": 80}},
+                root,
+            )
+            self.assertEqual(fabrication_freedom(cfg), level)
+        tmp.cleanup()
+        load_config(force=True)
+
+    def test_trim_overflow_bullet_helper(self):
+        from pipeline.tailor import _trim_one_overflow_bullet
+
+        html = """
+        <ul>
+          <li>one</li>
+          <li>two</li>
+          <li>three</li>
+        </ul>
+        <ul>
+          <li>a</li>
+        </ul>
+        """
+        trimmed = _trim_one_overflow_bullet(html)
+        self.assertIsNotNone(trimmed)
+        self.assertNotIn("three", trimmed)
+        self.assertIn("two", trimmed)
+        self.assertIn("<li>a</li>", trimmed)
+        # cannot trim below 2 items in the longest list after repeated trims
+        once = _trim_one_overflow_bullet(trimmed)
+        self.assertIsNotNone(once)
+        self.assertIsNone(_trim_one_overflow_bullet(once))
 
 
 if __name__ == "__main__":

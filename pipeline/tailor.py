@@ -1,4 +1,4 @@
-"""Tailor an HTML CV from the master CV + experience bank. Never invent."""
+"""Tailor an HTML CV from the master CV + experience bank. Freedom level controls invention."""
 
 from __future__ import annotations
 
@@ -19,6 +19,12 @@ from pipeline.cv_format import (
     page_height_px,
     page_size,
     tailor_layout_instructions,
+)
+from pipeline.fabrication import (
+    critic_freedom_rules,
+    fabrication_freedom,
+    freedom_instructions,
+    retry_freedom_rules,
 )
 from pipeline.llm import complete_prompt
 
@@ -237,16 +243,17 @@ def _tag_schema(cfg: Config | None = None) -> str:
     return "\n".join(lines)
 
 
-def _retry_section(feedback_history: str) -> str:
+def _retry_section(feedback_history: str, cfg: Config | None = None) -> str:
     if not feedback_history:
         return ""
+    cfg = cfg or load_config()
+    level = fabrication_freedom(cfg)
     return f"""
 ### PREVIOUS ATTEMPT FEEDBACK
 {feedback_history}
 
-You may ONLY: add related skills to Key Skills sections to match JD keywords and support claims, reorder skills, swap in a closer experience-bank variant, inject JD wording for skills already in the master CV or bank, or tighten the summary.
-You MUST NOT invent technologies, domains, employers, job titles, metrics, or responsibilities.
-If a JD requirement cannot be met honestly, leave it as a gap.
+{retry_freedom_rules(level)}
+If a JD requirement cannot be met within the current fabrication freedom level, leave it as a gap or drop a lower-value bullet to protect the page budget.
 """
 
 
@@ -261,6 +268,8 @@ def build_tailor_prompt(cfg: Config, company: str, role: str, jd_text: str, feed
     visa = cfg.get("visa.description") or cfg.get("visa.status") or ""
     signoff = cfg.get("outreach.signoff") or f"— {cfg.preferred_name}"
     dm_words = cfg.get("outreach.linkedin_dm_max_words", 60)
+    level = fabrication_freedom(cfg)
+    ats_threshold = int(cfg.get("pipeline.ats_threshold", 80) or 80)
 
     return f"""
 You are tailoring application materials for {cfg.full_name} applying to '{role}' at {company}.
@@ -268,7 +277,7 @@ You are tailoring application materials for {cfg.full_name} applying to '{role}'
 ### Job description
 {jd_text}
 
-### Master CV (source of truth — do not contradict)
+### Master CV (source of truth — do not contradict employers/dates/education)
 {master}
 
 ### Experience bank (pick matching role-type variants; fill remaining bullets from the master CV)
@@ -278,7 +287,7 @@ You are tailoring application materials for {cfg.full_name} applying to '{role}'
 {project_mem}
 Visa: {visa}
 
-### Writing rules (must follow)
+### Writing rules (must follow; fabrication limits come from FABRICATION FREEDOM below, not from inventing freely)
 {feedback_mem}
 
 ### Cover letter / DM / why-I-fit templates
@@ -294,22 +303,23 @@ Why I fit template:
 Sign-off: {signoff}
 LinkedIn DM max words: {dm_words}
 
-{_retry_section(feedback_history)}
+{freedom_instructions(level, pages=cfg.cv_pages, ats_threshold=ats_threshold)}
+
+{_retry_section(feedback_history, cfg)}
 
 ### INSTRUCTIONS
 {tailor_layout_instructions(cfg)}
 - Classify the JD into a role type, then SELECT bullets from the experience bank whose target matches. {_bullet_count_instruction(cfg)}
-- If the bank has fewer bullets than needed, fill the rest from the master CV. Never pad with invented work.
-- You MUST NOT invent employers, job titles, metrics, or responsibilities. In experience bullets, do not invent technologies the candidate did not use.
-- Text changes only. Do not add/remove jobs, projects, education, or employers.
-- Inject JD keywords only where they describe work the candidate actually did.
-- Rewrite the tagline and summary for this role. Summary must stay interview-defensible.
-- Key skills: Reorder each skills list so JD-relevant items come first. You may also add more skills, libraries, tools, frameworks, and protocols to the Key Skills sections to support the candidate's claims and achieve a higher ATS score, PROVIDED they are closely related and natural extensions of the candidate's actual work/tech stack. You MUST NOT add completely out-of-the-blue technologies, unrelated languages, or fabricated domains (e.g., do not add Rust, C++, mobile development, or ungrounded domains).
-- Job title lines: honest titles only. Do not use Staff / Senior Staff / Principal unless those are the actual titles in the master CV.
+- If the bank has fewer bullets than needed, fill the rest from the master CV within the freedom level above.
+- Text changes only. Do not add/remove jobs, projects, education, or employers from the template.
+- Rewrite the tagline and summary for this role within the freedom level. Prefer interview-defensible claims at levels 0–3.
+- Key skills: Reorder each skills list so JD-relevant items come first. What you may add is governed by FABRICATION FREEDOM above.
+- Job title lines: use the actual employer titles unless freedom level explicitly allows otherwise. Do not use Staff / Senior Staff / Principal unless those are the actual titles in the master CV.
 - Do not include dates in TITLE tags (dates are already in the HTML template).
 - Cover letter: 250-400 words, cite something specific about {company} if the JD contains it; otherwise stay concrete about the role. Include the visa line if relevant.
 - LinkedIn DM: ≤{dm_words} words, no emoji, no "hope this finds you well".
-- Why I fit: exactly 3 bullets, each ≤25 words, each tied to one JD requirement using verified evidence.
+- Why I fit: exactly 3 bullets, each ≤25 words, each tied to one JD requirement using evidence allowed at the current freedom level.
+- Hard page budget: the rendered PDF MUST fit `cv_format.pages` ({cfg.cv_pages}). Prefer fewer / shorter bullets over overflow.
 
 ### OUTPUT FORMAT
 Return ONLY these tagged blocks. For every content tag except ROLE_TYPE and ANALYSIS, put <R_TAG> immediately before it.
@@ -439,9 +449,23 @@ def resume_plain_text(parsed: dict, cfg: Config | None = None) -> str:
     return "\n".join(lines).strip()
 
 
-def build_critic_prompt(jd_text: str, tailored_resume: str, source_of_truth: str) -> str:
+def build_critic_prompt(
+    jd_text: str,
+    tailored_resume: str,
+    source_of_truth: str,
+    cfg: Config | None = None,
+) -> str:
+    cfg = cfg or load_config()
+    level = fabrication_freedom(cfg)
+    ats_threshold = int(cfg.get("pipeline.ats_threshold", 80) or 80)
+    score_cap = (
+        "overall score should reflect ATS readiness; do not force score <= honesty when "
+        "freedom level explicitly allows fabrication beyond the source."
+        if level >= 4
+        else "overall score MUST be <= honesty."
+    )
     return f"""
-You are a resume auditor. Score keyword coverage and honesty. You are not a keyword stuffer.
+You are a resume auditor. Score keyword coverage and honesty for fabrication freedom level {level}/5.
 
 ### Job description
 {jd_text}
@@ -453,27 +477,29 @@ You are a resume auditor. Score keyword coverage and honesty. You are not a keyw
 {tailored_resume}
 
 Rules:
-- keyword_coverage (0-100): how well the tailored resume surfaces existing experience and related skills that match the JD.
-- honesty (0-100): 100 means claims are supported by the source of truth. Deduct for fake employers, false job titles, fabricated metrics, or completely ungrounded/out-of-the-blue technologies. Closely related technologies, tools, libraries, or protocols added to the Key Skills section to legitimately support the candidate's actual work/tech stack and match JD keywords are ALLOWED and must NOT be penalized as dishonesty.
-- overall score MUST be <= honesty.
-- NEVER tell the writer to invent, fabricate, or add experience the candidate does not have.
-- If the JD requires something absent, list it under gaps and suggest adjacent-evidence framing or an honest omission.
-- allowed_fixes may only be: add related skills to Key Skills sections to match JD keywords and support claims, reorder skills, swap experience-bank variants, inject JD wording for skills already in the source of truth, tighten summary.
+- Target ATS score threshold: {ats_threshold}. Critique should help the writer reach it within freedom level {level}.
+- keyword_coverage (0-100): how well the tailored resume surfaces JD-relevant keywords allowed at this freedom level.
+- honesty (0-100): score relative to freedom level {level} (see below), not absolute literalism when higher freedom is set.
+- {score_cap}
+- Hard page budget reminder: critique may require dropping bullets to fit {cfg.cv_pages} page(s).
+{critic_freedom_rules(level)}
+- If the JD requires something absent and freedom does not allow filling it, list it under gaps.
 
 Return exactly this JSON:
 {{
-  "score": <int 0-100, <= honesty>,
+  "score": <int 0-100>,
   "keyword_coverage": <int 0-100>,
   "honesty": <int 0-100>,
-  "gaps": ["<honest gap>"],
-  "critique": "<what to change using only allowed_fixes>"
+  "gaps": ["<gap>"],
+  "critique": "<what to change using only allowed_fixes for freedom {level}>"
 }}
 """.strip()
 
 
 def evaluate_ats_score(jd_text: str, tailored_resume: str, source_of_truth: str = "") -> dict:
-    prompt = build_critic_prompt(jd_text, tailored_resume, source_of_truth)
-    log.info("Evaluating keyword coverage + honesty")
+    cfg = load_config()
+    prompt = build_critic_prompt(jd_text, tailored_resume, source_of_truth, cfg)
+    log.info("Evaluating keyword coverage + honesty (freedom=%s)", fabrication_freedom(cfg))
     try:
         out = complete_prompt(prompt, effort="low")
         match = re.search(r"\{.*\}", out, re.DOTALL)
@@ -483,7 +509,11 @@ def evaluate_ats_score(jd_text: str, tailored_resume: str, source_of_truth: str 
         honesty = int(data.get("honesty", 0) or 0)
         score = int(data.get("score", 0) or 0)
         data["honesty"] = honesty
-        data["score"] = min(score, honesty) if honesty else score
+        level = fabrication_freedom(cfg)
+        # At low freedom, score cannot exceed honesty (including honesty=0 → score 0).
+        # At 4–5, ATS score can stand alone so fabrication is not honesty-capped.
+        data["score"] = score if level >= 4 else min(score, honesty)
+        data["fabrication_freedom"] = level
         return data
     except Exception as exc:
         log.error("Evaluation failed: %s", exc)
@@ -611,6 +641,7 @@ def write_changes_file(path: Path, changes: list[dict], eval_result: dict | None
 
 
 LETTER_HEIGHT_PX = 11 * 96
+_LI_ITEM_RE = re.compile(r"[ \t]*<li\b[^>]*>.*?</li>\s*", re.IGNORECASE | re.DOTALL)
 
 
 def pdf_scale(content_height_px: float, max_pages: int, page_h_px: float = LETTER_HEIGHT_PX) -> float:
@@ -624,26 +655,72 @@ def pdf_scale(content_height_px: float, max_pages: int, page_h_px: float = LETTE
     return min(1.0, (limit / content_height_px) * 0.99)
 
 
+def _trim_one_overflow_bullet(html: str):
+    """Remove the last <li> from the longest experience/project list. Returns None if nothing trimmed."""
+    uls = list(re.finditer(r"<ul\b[^>]*>.*?</ul>", html, flags=re.IGNORECASE | re.DOTALL))
+    if not uls:
+        return None
+    best = None
+    best_count = 0
+    for match in uls:
+        items = list(_LI_ITEM_RE.finditer(match.group(0)))
+        if len(items) > best_count:
+            best = (match, items)
+            best_count = len(items)
+    if not best or best_count < 2:
+        return None
+    ul_match, items = best
+    last = items[-1]
+    new_ul = ul_match.group(0)[: last.start()] + ul_match.group(0)[last.end() :]
+    return html[: ul_match.start()] + new_ul + html[ul_match.end() :]
+
+
 async def html_to_pdf(html_path: Path, pdf_path: Path, max_pages: int | None = None) -> None:
     from playwright.async_api import async_playwright
 
     cfg = load_config()
     max_pages = int(max_pages) if max_pages is not None else cfg.cv_pages
     max_pages = max(1, max_pages)
-    file_url = "file://" + os.path.abspath(html_path)
+    html_path = Path(html_path)
+    height = page_height_px(cfg)
+    page_budget = height * max_pages
+
     async with async_playwright() as playwright:
         browser = await playwright.chromium.launch(headless=True)
         page = await browser.new_page()
-        await page.goto(file_url, wait_until="networkidle")
-        await page.emulate_media(media="print")
-        await page.evaluate("() => document.fonts.ready")
-        body_height = await page.evaluate("() => document.documentElement.scrollHeight")
-        height = page_height_px(cfg)
-        scale = pdf_scale(float(body_height), max_pages, height)
-        page_budget = height * max_pages
+
+        for trim_round in range(8):
+            file_url = "file://" + os.path.abspath(html_path)
+            await page.goto(file_url, wait_until="networkidle")
+            await page.emulate_media(media="print")
+            await page.evaluate("() => document.fonts.ready")
+            body_height = float(await page.evaluate("() => document.documentElement.scrollHeight"))
+            if body_height <= page_budget or max_pages == 1:
+                break
+            html = html_path.read_text()
+            trimmed = _trim_one_overflow_bullet(html)
+            if not trimmed or trimmed == html:
+                log.warning(
+                    "HTML height %.0fpx still exceeds cv_format.pages=%s (%.0fpx); no more bullets to trim.",
+                    body_height,
+                    max_pages,
+                    page_budget,
+                )
+                break
+            html_path.write_text(trimmed)
+            log.info(
+                "Trimmed a bullet to fit cv_format.pages=%s (height %.0fpx > %.0fpx, round %s)",
+                max_pages,
+                body_height,
+                page_budget,
+                trim_round + 1,
+            )
+
+        body_height = float(await page.evaluate("() => document.documentElement.scrollHeight"))
+        scale = pdf_scale(body_height, max_pages, height)
         if body_height > page_budget and max_pages > 1:
             log.warning(
-                "HTML height %.0fpx exceeds cv_format.pages=%s (%.0fpx). Not shrinking — trim a bullet.",
+                "HTML height %.0fpx still exceeds cv_format.pages=%s (%.0fpx) after trim.",
                 body_height,
                 max_pages,
                 page_budget,

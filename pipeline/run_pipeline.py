@@ -13,6 +13,7 @@ if __package__ is None:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from pipeline.config import load_config
+from pipeline.fabrication import fabrication_freedom, honesty_gate
 from pipeline.jobs import load_jobs
 from pipeline.playbook import render_playbook
 from pipeline.tailor import (
@@ -64,9 +65,11 @@ async def process_job(job: dict, fill_form: bool, on_progress=None) -> Path | No
     company, role, jd_text = job["company"], job["role"], job["jd"]
     max_attempts = int(cfg.get("pipeline.max_attempts", 3))
     threshold = int(cfg.get("pipeline.ats_threshold", 80))
+    freedom = fabrication_freedom(cfg)
+    min_honesty = honesty_gate(freedom, threshold)
     source = source_of_truth_text(cfg)
 
-    log.info("Processing %s — %s", company, role)
+    log.info("Processing %s — %s (freedom=%s, ats>=%s, honesty>=%s)", company, role, freedom, threshold, min_honesty)
 
     feedback_history = ""
     best_output = ""
@@ -111,7 +114,7 @@ async def process_job(job: dict, fill_form: bool, on_progress=None) -> Path | No
         honesty = int(eval_result.get("honesty") or 0)
         critique = eval_result.get("critique") or "No critique provided."
 
-        log.info("Score %s/100 (honesty %s/100)", score, honesty)
+        log.info("Score %s/100 (honesty %s/100, freedom %s)", score, honesty, freedom)
         log.info("Critique: %s", critique)
 
         if score > best_score:
@@ -119,15 +122,29 @@ async def process_job(job: dict, fill_form: bool, on_progress=None) -> Path | No
             best_output = llm_output
             best_eval = eval_result
 
-        if score >= threshold and honesty >= threshold:
-            log.info("Threshold %s reached with honest materials.", threshold)
+        if score >= threshold and honesty >= min_honesty:
+            log.info(
+                "Threshold reached: score %s>=%s, honesty %s>=%s (freedom %s).",
+                score,
+                threshold,
+                honesty,
+                min_honesty,
+                freedom,
+            )
             break
 
-        log.warning("Below threshold or honesty gate. Refining without inventing.")
+        log.warning(
+            "Below gates (need score>=%s honesty>=%s at freedom %s). Refining.",
+            threshold,
+            min_honesty,
+            freedom,
+        )
         feedback_history += (
-            f"\nAttempt {attempt} score={score} honesty={honesty}\n"
+            f"\nAttempt {attempt} score={score} honesty={honesty} freedom={freedom} "
+            f"(need score>={threshold}, honesty>={min_honesty})\n"
             f"Critique: {critique}\n"
             f"Gaps: {eval_result.get('gaps')}\n"
+            f"Also protect the {cfg.cv_pages}-page budget — drop lower-value bullets if needed.\n"
         )
 
     if not best_output:

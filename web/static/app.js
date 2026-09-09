@@ -124,6 +124,64 @@ async function loadMe() {
     const pathEl = $("helper-path");
     if (pathEl) pathEl.textContent = me.apply_helper.extension_path;
   }
+  applyFreedomSettings(me.pipeline || null);
+}
+
+function applyFreedomSettings(pipeline) {
+  const select = $("fabrication-freedom");
+  const note = $("freedom-note");
+  const status = $("freedom-status");
+  if (!select) return;
+  const levels = (pipeline && pipeline.levels) || [
+    { value: 0, label: "0 — Strict — master CV / memory / bank only" },
+    { value: 1, label: "1 — Keyword alignment — rephrase existing work only" },
+    { value: 2, label: "2 — Related skills — Key Skills extensions only" },
+    { value: 3, label: "3 — Adjacent reframing — broaden real bullets carefully" },
+    { value: 4, label: "4 — Aggressive ATS — invent plausible skills & soft metrics" },
+    { value: 5, label: "5 — Max ATS — fabricate to hit the score threshold" },
+  ];
+  const current = pipeline && pipeline.fabrication_freedom != null ? Number(pipeline.fabrication_freedom) : 1;
+  select.innerHTML = levels
+    .map((item) => `<option value="${item.value}">${item.value} — ${escapeHtml(String(item.label).replace(/^\d+\s*[—-]\s*/, ""))}</option>`)
+    .join("");
+  select.value = String(current);
+  if (note && pipeline) {
+    note.textContent =
+      `ATS target ${pipeline.ats_threshold || 80}+ · honesty gate ${pipeline.honesty_gate ?? "—"} · ` +
+      `${pipeline.pages || 2}-page CV. 0 = source only; 5 = invent for ATS.`;
+  }
+  if (status) {
+    status.hidden = true;
+    status.textContent = "";
+  }
+}
+
+async function saveFreedomSetting() {
+  const select = $("fabrication-freedom");
+  const status = $("freedom-status");
+  if (!select) return;
+  const value = Number(select.value);
+  select.disabled = true;
+  try {
+    const updated = await api("/api/settings", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ fabrication_freedom: value }),
+    });
+    applyFreedomSettings(updated);
+    if (status) {
+      status.hidden = false;
+      status.textContent = `Saved: freedom ${updated.fabrication_freedom} (honesty gate ${updated.honesty_gate}). Applies to the next tailor run.`;
+    }
+    setStrip(`Fabrication freedom set to ${updated.fabrication_freedom}/5 — ${updated.label}`, true);
+  } catch (err) {
+    if (status) {
+      status.hidden = false;
+      status.textContent = err.message || String(err);
+    }
+  } finally {
+    select.disabled = false;
+  }
 }
 
 function jobKey(row) {
@@ -1377,6 +1435,12 @@ $("refresh").addEventListener("click", () => {
   renderProgress("");
   loadPackages();
 });
+const freedomSelect = $("fabrication-freedom");
+if (freedomSelect) {
+  freedomSelect.addEventListener("change", () => {
+    saveFreedomSetting().catch((err) => setStrip(err.message, true));
+  });
+}
 $("hunt").addEventListener("click", async () => {
   setControls("running", "hunt");
   try {

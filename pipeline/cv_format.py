@@ -225,7 +225,8 @@ def tailor_layout_instructions(cfg: Config) -> str:
         [
             f"- Target length is {pages} {page_word} (`config.yaml` cv_format.pages). "
             f"Keep bullets to at most {lines} line{'s' if lines != 1 else ''} so the HTML template fits. "
-            f"Do not exceed {pages} {page_word}. Do not invent to fill space.",
+            f"Do not exceed {pages} {page_word}. Prefer dropping a weaker bullet over overflowing. "
+            f"Do not pad empty space.",
             f"- Keep these sections on one page (do not strand a heading): {keep_txt}.",
             f"- Section order is {', '.join(order)} (`cv_format.section_order`).",
             f"- Header alignment: {_str(cfg, 'header_align', 'center')}. "

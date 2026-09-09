@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Newsreader:opsz,wght@6..72,500;6..72,600&family=Figtree:wght@400;500;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/app.css?v=board10">
+  <link rel="stylesheet" href="/static/app.css?v=board11">
 </head>
 <body>
   <header class="mast">
@@ -20,6 +20,23 @@
   </header>
 
   <main class="desk">
+    <section class="settings-panel">
+      <details class="settings-wrap" id="settings-wrap">
+        <summary>Tailor settings</summary>
+        <div class="settings-body">
+          <label class="freedom-control">
+            Fabrication freedom
+            <select id="fabrication-freedom" aria-describedby="freedom-note"></select>
+          </label>
+          <p class="field-note" id="freedom-note">
+            0 = only master CV / memory / experience bank. 5 = invent to hit the ATS threshold.
+            ATS score target still applies at every level. Page count from config still applies.
+          </p>
+          <p class="hint" id="freedom-status" hidden></p>
+        </div>
+      </details>
+    </section>
+
     <section class="intake-panel">
       <details class="intake-wrap" id="intake-wrap">
         <summary>Add postings by URL or description</summary>
@@ -161,6 +178,6 @@
       </div>
     </form>
   </dialog>
-  <script src="/static/app.js?v=board13"></script>
+  <script src="/static/app.js?v=board14"></script>
 </body>
 </html>

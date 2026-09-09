@@ -84,6 +84,50 @@ h2 { font-size: 1.15rem; }
   flex: 0 0 auto;
 }
 
+.settings-panel {
+  flex: 0 0 auto;
+  padding: 0.85rem 1.5rem 0;
+}
+
+.settings-wrap {
+  background: var(--card);
+  border: 1px solid var(--rule);
+  padding: 0.55rem 1rem 0.75rem;
+}
+
+.settings-wrap summary {
+  cursor: pointer;
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #3d4c5c;
+  list-style: none;
+}
+
+.settings-wrap summary::-webkit-details-marker { display: none; }
+
+.settings-body {
+  display: grid;
+  gap: 0.55rem;
+  margin-top: 0.65rem;
+}
+
+.freedom-control {
+  display: grid;
+  gap: 0.35rem;
+  font-size: 0.92rem;
+}
+
+.freedom-control select {
+  font: inherit;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--rule);
+  background: #fff;
+  color: var(--ink);
+  max-width: 36rem;
+}
+
 .intake-panel {
   padding: 1rem 1.5rem 0;
 }

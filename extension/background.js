@@ -55,27 +55,65 @@ async function showTabHUD(tab, frameId, opts) {
   } catch (_) {}
 }
 
+function getStoredProfile() {
+  return new Promise((resolve) => {
+    try {
+      if (typeof chrome !== "undefined" && chrome.storage && chrome.storage.local) {
+        chrome.storage.local.get("jobDeskProfilePayload", (data) => {
+          resolve((data && data.jobDeskProfilePayload) || null);
+        });
+      } else {
+        resolve(null);
+      }
+    } catch (_) {
+      resolve(null);
+    }
+  });
+}
+
+function saveStoredProfile(payload) {
+  try {
+    if (payload && payload.fields && typeof chrome !== "undefined" && chrome.storage && chrome.storage.local) {
+      chrome.storage.local.set({ jobDeskProfilePayload: payload });
+    }
+  } catch (_) {}
+}
+
 async function payloadForUrl(url) {
   let res;
+  let body = {};
   try {
     res = await fetch(DESK + "/api/apply/for-page?url=" + encodeURIComponent(url));
+    if (res && res.ok) {
+      body = await res.json().catch(() => ({}));
+    }
   } catch (err) {
+    const cached = await getStoredProfile();
+    if (cached && cached.fields) return cached;
     throw new Error(
       "Cannot connect to Job Desk at " +
         DESK +
         ". Please ensure the local desk server is running (e.g. 'python3 -m web.app')."
     );
   }
-  let body = {};
-  try {
-    body = await res.json();
-  } catch (_) {}
-  if (!res.ok) {
-    throw new Error(body.detail || res.statusText || "Desk did not match this form");
-  }
+
+  // If no specific package matched for this URL, fall back to base profile fields
   if (!body || !body.fields) {
-    throw new Error("Desk returned an empty fill payload");
+    try {
+      const profRes = await fetch(DESK + "/api/apply/profile");
+      if (profRes && profRes.ok) {
+        body = await profRes.json().catch(() => ({}));
+      }
+    } catch (_) {}
   }
+
+  if (!body || !body.fields) {
+    const cached = await getStoredProfile();
+    if (cached && cached.fields) return cached;
+    throw new Error("Desk did not match this form and no profile is loaded.");
+  }
+
+  saveStoredProfile(body);
 
   // Preload resume file binary in background worker (immune to webpage Mixed-Content and CSP restrictions)
   if (body.files && body.files.resume && body.files.resume.url) {
@@ -99,6 +137,22 @@ async function payloadForUrl(url) {
 // Background helper for content scripts to fetch files/APIs without page CSP restrictions
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (!msg || !msg.type) return;
+
+  if (msg.type === "job-desk-profile") {
+    (async () => {
+      try {
+        const res = await fetch(DESK + "/api/apply/profile");
+        const data = await res.json().catch(() => ({}));
+        if (data && data.fields) saveStoredProfile(data);
+        sendResponse({ ok: res.ok, data });
+      } catch (err) {
+        const cached = await getStoredProfile();
+        if (cached) sendResponse({ ok: true, data: cached });
+        else sendResponse({ ok: false, error: String(err && err.message ? err.message : err) });
+      }
+    })();
+    return true;
+  }
 
   if (msg.type === "job-desk-badge") {
     if (sender && sender.tab && sender.tab.id) {

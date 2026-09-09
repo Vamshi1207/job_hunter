@@ -147,6 +147,21 @@ class DeskAPITests(unittest.TestCase):
         self.assertGreaterEqual(body["hunt"]["login_wait_seconds"], 120)
         self.assertIn("6080", body["camoufox"]["vnc"])
         self.assertIn("/extension", body["apply_helper"]["extension_path"].replace("\\", "/"))
+        self.assertIn("fabrication_freedom", body["pipeline"])
+        self.assertIn("levels", body["pipeline"])
+
+    def test_settings_fabrication_freedom_round_trip(self):
+        got = self.client.get("/api/settings")
+        self.assertEqual(got.status_code, 200)
+        self.assertIn("fabrication_freedom", got.json())
+        patched = self.client.patch("/api/settings", json={"fabrication_freedom": 3})
+        self.assertEqual(patched.status_code, 200)
+        self.assertEqual(patched.json()["fabrication_freedom"], 3)
+        self.assertEqual(patched.json()["honesty_gate"], 75)
+        again = self.client.get("/api/settings")
+        self.assertEqual(again.json()["fabrication_freedom"], 3)
+        # restore default for other tests sharing the temp config
+        self.client.patch("/api/settings", json={"fabrication_freedom": 1})
 
     def test_inspect_linkedin_is_blocked_and_uses_pasted_jd(self):
         res = self.client.post(
@@ -431,6 +446,78 @@ class DeskAPITests(unittest.TestCase):
             self.assertEqual(res_1pwd.status_code, 200)
             self.assertEqual(res_1pwd.json()["answers"][0]["key"], "q_1pwd")
             self.assertEqual(mock_llm.call_count, 3)
+
+    def test_apply_profile_endpoint_returns_user_profile_fields(self):
+        res = self.client.get("/api/apply/profile")
+        self.assertEqual(res.status_code, 200)
+        body = res.json()
+        self.assertIn("fields", body)
+        fields = body["fields"]
+        self.assertIn("linkedin", fields)
+        self.assertIn("github", fields)
+        self.assertIn("phone", fields)
+        self.assertIn("email", fields)
+        self.assertTrue(body["never_submit"])
+
+    def test_apply_answer_fast_paths_profile_questions_without_llm(self):
+        from unittest.mock import patch
+
+        folder = self._package()
+        (folder / "job.json").write_text(
+            '{"company": "Acme", "role": "Software Engineer",'
+            ' "url": "https://job-boards.greenhouse.io/acme/jobs/11111",'
+            ' "apply_url": "https://job-boards.greenhouse.io/acme/jobs/11111",'
+            ' "apply_kind": "ats"}'
+        )
+        with patch("pipeline.llm.complete_prompt") as mock_llm:
+            res = self.client.post(
+                "/api/apply/answer",
+                json={
+                    "url": "https://job-boards.greenhouse.io/acme/jobs/11111",
+                    "package_id": folder.name,
+                    "questions": [
+                        {"key": "q_li", "label": "LinkedIn Profile", "kind": "text"},
+                        {"key": "q_gh", "label": "GitHub Profile URL", "kind": "text"},
+                        {"key": "q_ph", "label": "Phone Number", "kind": "text"},
+                        {"key": "q_em", "label": "Email Address", "kind": "text"},
+                    ],
+                },
+            )
+            self.assertEqual(res.status_code, 200)
+            body = res.json()
+            # 0 LLM calls made: resolved entirely from profile!
+            self.assertEqual(mock_llm.call_count, 0)
+            answers = {a["key"]: a["value"] for a in body["answers"]}
+            self.assertTrue(len(answers["q_li"]) > 0)
+            self.assertTrue(len(answers["q_gh"]) > 0)
+            self.assertTrue(len(answers["q_ph"]) > 0)
+            self.assertTrue(len(answers["q_em"]) > 0)
+            self.assertEqual(body["stats"]["model"], "profile")
+            self.assertTrue(body["stats"]["from_cache"])
+
+    def test_apply_answer_answers_profile_questions_without_package_id(self):
+        from unittest.mock import patch
+
+        with patch("pipeline.llm.complete_prompt") as mock_llm:
+            res = self.client.post(
+                "/api/apply/answer",
+                json={
+                    "url": "https://jobs.example.com/untracked-posting",
+                    "package_id": "",
+                    "questions": [
+                        {"key": "q_li", "label": "Please provide your LinkedIn profile", "kind": "text"},
+                        {"key": "q_gh", "label": "GitHub", "kind": "text"},
+                        {"key": "q_ph", "label": "Mobile Phone", "kind": "text"},
+                    ],
+                },
+            )
+            self.assertEqual(res.status_code, 200)
+            body = res.json()
+            self.assertEqual(mock_llm.call_count, 0)
+            answers = {a["key"]: a["value"] for a in body["answers"]}
+            self.assertTrue(len(answers["q_li"]) > 0)
+            self.assertTrue(len(answers["q_gh"]) > 0)
+            self.assertTrue(len(answers["q_ph"]) > 0)
 
     def test_extension_lives_at_repo_extension_dir(self):
         root = Path(__file__).resolve().parents[1]

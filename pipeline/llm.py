@@ -1,4 +1,4 @@
-"""LLM calls: Nemotron 3.5 Lightning, Nemotron 3 Ultra, DeepSeek V4 Flash, then agy/Gemini."""
+"""LLM calls: Nemotron 3 Ultra, DeepSeek V4 Flash, Gemma 4, then agy/Gemini."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ NVIDIA_DEFAULT_URL = "https://integrate.api.nvidia.com/v1"
 NVIDIA_DEFAULT_MODEL = "nvidia/nemotron-3-ultra-550b-a55b"
 NVIDIA_FALLBACK_MODELS = [
     "deepseek-ai/deepseek-v4-flash-0731",
-    "nvidia/nemotron-3.5-lightning-30b-a3b",
+    "google/gemma-4-31b-it",
 ]
 
 
@@ -88,7 +88,7 @@ def primary_provider(cfg=None) -> str:
 
 
 def nvidia_model_chain(cfg=None) -> list[str]:
-    """Primary model (nemotron-3-ultra), then deepseek-v4-flash, then nemotron-3.5-lightning."""
+    """Primary model (nemotron-3-ultra), then deepseek-v4-flash, then gemma-4-31b."""
     cfg = cfg or load_config()
     primary = str(cfg.get("pipeline.model") or NVIDIA_DEFAULT_MODEL).strip()
     if not _looks_like_nvidia_model(primary):
@@ -216,6 +216,7 @@ def _call_nvidia(prompt: str, cfg, *, timeout: int, effort: str, model: str | No
     _limiter_for(cfg).acquire()
     model = (model or str(cfg.get("pipeline.model") or NVIDIA_DEFAULT_MODEL)).strip()
     is_deepseek = "deepseek" in model.lower()
+    is_gemma = "gemma" in model.lower()
     is_lightning = "lightning" in model.lower()
     base_url = str(cfg.get("pipeline.nvidia.base_url") or NVIDIA_DEFAULT_URL).rstrip("/")
     temperature = float(cfg.get("pipeline.nvidia.temperature", 1.0 if effort == "high" else 0.3))
@@ -225,6 +226,10 @@ def _call_nvidia(prompt: str, cfg, *, timeout: int, effort: str, model: str | No
     if is_deepseek:
         stream = False
         extra_body = {"chat_template_kwargs": {"thinking": True, "reasoning_effort": "high"}}
+    elif is_gemma:
+        # NVIDIA catalog: google/gemma-4-31b-it uses enable_thinking (same as sample payload).
+        stream = True
+        extra_body = {"chat_template_kwargs": {"enable_thinking": True}}
     elif is_lightning:
         stream = True
         reasoning_budget = int(cfg.get("pipeline.nvidia.reasoning_budget", min(4096, max(1024, max_tokens // 4))))

@@ -22,7 +22,7 @@ When writing or editing materials for this user:
 
 3. **No pitch-deck phrasing.** Cut "10x", "redefining X", "passionate about". Use concrete capability + behaviour.
 
-4. **Never invent metrics.** If the user has not confirmed a number, drop the claim.
+4. **Fabrication freedom is a config dial** (`pipeline.fabrication_freedom` 0–5 on the desk). Do not hardcode "never invent" or "feel free to invent" here — that setting owns invention. Still chase the ATS threshold and page count at every level.
 
 4a. **Don't claim measurement frameworks the user hasn't actually built.** "Cohort analysis", "retention model", "funnel analysis" only if confirmed.
 

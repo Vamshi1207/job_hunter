@@ -392,26 +392,28 @@
     );
   }
 
-  function pick(text, key) {
-    const t = text;
-    if (key === "first_name") return /\bfirst\b|\bgiven\b|fname|first_name|firstname/.test(t) && !/\blast\b/.test(t);
-    if (key === "last_name") return /\blast\b|\bsurname\b|\bfamily\b|lname|last_name|lastname/.test(t);
-    if (key === "full_name") return (/\bfull name\b|\byour name\b|^name$|\bname\b/.test(t)) && !/\bfirst\b|\blast\b|\bcompany\b|\buser/.test(t);
-    if (key === "email") return /\bemail\b|e-mail/.test(t);
-    if (key === "phone") return /\bphone\b|\bmobile\b|\btel\b/.test(t);
-    if (key === "linkedin") return /\blinkedin\b/.test(t);
-    if (key === "github") return /\bgithub\b/.test(t);
-    if (key === "website") return /\bwebsite\b|\bportfolio\b|\bpersonal url\b|\bhomepage\b/.test(t);
-    if (key === "city") return /\bcity\b/.test(t) && !/\bcountry\b/.test(t);
-    if (key === "country") return /\bcountry\b/.test(t);
-    if (key === "location") return /\blocation\b|\baddress\b|\bcity,/.test(t);
-    if (key === "cover_letter") return /\bcover letter\b|\bcoverletter\b|\badditional information\b/.test(t);
-    if (key === "why_i_fit") return /\bwhy (are you|this)|interest|motivation|why you/.test(t);
-    if (key === "heard_about") return /\bhear about\b|\bsource\b|\bhow did you/.test(t);
-    if (key === "sponsorship_now") return /\bsponsor/.test(t) && /\bnow\b|\bcurrent|\brequire/.test(t) && !/\bfuture\b/.test(t);
-    if (key === "sponsorship_future") return /\bsponsor/.test(t) && /\bfuture\b|\blater\b/.test(t);
-    if (key === "work_authorization") return /\bauthori[sz]ed\b|\bwork (status|permit|rights)|eligible to work/.test(t);
-    if (key === "resume") return /\bresume\b|\bcv\b|\bcurriculum\b/.test(t);
+  function pick(text, key, el) {
+    const t = String(text || "").trim();
+    const type = (el && el.type) || "";
+    const auto = (el && el.getAttribute && el.getAttribute("autocomplete")) || "";
+    if (key === "first_name") return (/\bfirst\b|\bgiven\b|fname|first_name|firstname/i.test(t) || auto === "given-name") && !/\blast\b/i.test(t);
+    if (key === "last_name") return /\blast\b|\bsurname\b|\bfamily\b|lname|last_name|lastname/i.test(t) || auto === "family-name";
+    if (key === "full_name") return ((/\bfull name\b|\byour name\b|^name$|\bname\b/i.test(t)) || auto === "name") && !/\b(first|last|company|user|username|file)\b/i.test(t);
+    if (key === "email") return /\bemail\b|e-mail/i.test(t) || type === "email" || auto === "email" || /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/.test(t);
+    if (key === "phone") return /\b(phone|mobile|cell|telephone|contact\s*number)\b/i.test(t) || type === "tel" || auto === "tel";
+    if (key === "linkedin") return /\b(linked[\s_-]*in|linkedin)\b/i.test(t);
+    if (key === "github") return /\b(git[\s_-]*hub|github|git[\s_-]*repo|repository\s*url|github\.com)\b/i.test(t);
+    if (key === "website") return /\b(website|portfolio|personal\s*url|personal\s*website|homepage|blog)\b/i.test(t) || auto === "url";
+    if (key === "city") return /\bcity\b/i.test(t) && !/\bcountry\b/i.test(t);
+    if (key === "country") return /\bcountry\b/i.test(t);
+    if (key === "location") return /\blocation\b|\baddress\b|\bcity,/i.test(t);
+    if (key === "cover_letter") return /\bcover letter\b|\bcoverletter\b|\badditional information\b/i.test(t);
+    if (key === "why_i_fit") return /\bwhy (are you|this)|interest|motivation|why you/i.test(t);
+    if (key === "heard_about") return /\b(hear about|how did you hear|referral source)\b/i.test(t);
+    if (key === "sponsorship_now") return /\bsponsor/i.test(t) && /\b(now|current|require)\b/i.test(t) && !/\bfuture\b/i.test(t);
+    if (key === "sponsorship_future") return /\bsponsor/i.test(t) && /\b(future|later)\b/i.test(t);
+    if (key === "work_authorization") return /\bauthori[sz]ed\b|\bwork (status|permit|rights)|eligible to work/i.test(t);
+    if (key === "resume") return /\bresume\b|\bcv\b|\bcurriculum\b/i.test(t);
     return false;
   }
 
@@ -704,6 +706,7 @@
       const low = String(name).toLowerCase();
       if (low === "cache" || low.includes("cache")) return "Local Cache (Instant)";
       if (low.includes("550b") || low.includes("nemotron-3-ultra") || low.includes("ultra")) return "Nemotron 550B Ultra";
+      if (low.includes("gemma")) return "Gemma 4 31B";
       if (low.includes("lightning") || low.includes("30b")) return "Nemotron 3.5 Lightning";
       if (low.includes("nemotron")) return "Nemotron 550B Ultra";
       if (low.includes("deepseek")) return "DeepSeek V4 Flash";
@@ -2583,11 +2586,9 @@
     let parent = startEl.parentElement;
     for (let i = 0; i < 3 && parent && parent !== document.body && parent !== document.documentElement; i++) {
       if (parent.tagName === "FORM" || parent.tagName === "FIELDSET") break;
-      const parentTextarea = parent.querySelector("textarea, [contenteditable='true'], [role='textbox']");
-      if (parentTextarea && isAnswerTarget(parentTextarea)) return parentTextarea;
-      const allInputs = parent.querySelectorAll("textarea, select, input:not([type=hidden]):not([type=file]):not([type=submit]):not([type=button])");
-      if (allInputs.length === 1 && isAnswerTarget(allInputs[0])) {
-        return allInputs[0];
+      const allInputs = parent.querySelectorAll("input:not([type=hidden]):not([type=file]):not([type=submit]):not([type=button]), textarea, select, [contenteditable='true'], [role='textbox']");
+      for (const inp of allInputs) {
+        if (isAnswerTarget(inp)) return inp;
       }
       parent = parent.parentElement;
     }
@@ -2599,7 +2600,7 @@
         NodeFilter.SHOW_ELEMENT,
         {
           acceptNode(node) {
-            if (node.matches && node.matches("textarea, [contenteditable='true'], [role='textbox'], select, input:not([type=hidden]):not([type=file]):not([type=submit]):not([type=button])")) {
+            if (node.matches && node.matches("input:not([type=hidden]):not([type=file]):not([type=submit]):not([type=button]), textarea, select, [contenteditable='true'], [role='textbox']")) {
               if (isAnswerTarget(node)) return NodeFilter.FILTER_ACCEPT;
             }
             return NodeFilter.FILTER_SKIP;
@@ -2607,18 +2608,8 @@
         }
       );
       walker.currentNode = startEl;
-      let next = walker.nextNode();
-      let firstCandidate = next;
-      let steps = 0;
-      // If there is a textarea in the next 3 controls, prefer it over checkboxes/radios
-      while (next && steps < 4) {
-        if (next.tagName === "TEXTAREA" || next.getAttribute("role") === "textbox" || next.isContentEditable) {
-          return next;
-        }
-        next = walker.nextNode();
-        steps++;
-      }
-      if (firstCandidate && isAnswerTarget(firstCandidate)) return firstCandidate;
+      const next = walker.nextNode();
+      if (next && isAnswerTarget(next)) return next;
     } catch (_) {}
 
     return null;
@@ -2807,7 +2798,153 @@
     return markFill(el, setValue(el, value, force));
   }
 
+  function matchProfileAnswer(selectedText, field, profileValues) {
+    if (!profileValues || typeof profileValues !== "object") return null;
+
+    const sel = String(selectedText || "").trim();
+    const fieldLab = field ? labelOf(field) : "";
+    const fieldName = (field && field.name) || "";
+    const fieldPlaceholder = (field && field.placeholder) || "";
+    const fieldId = (field && field.id) || "";
+    const fieldType = (field && field.type) || "";
+    const fieldAuto = (field && field.getAttribute && field.getAttribute("autocomplete")) || "";
+
+    const candidateTexts = [
+      sel,
+      fieldLab,
+      [fieldName, fieldPlaceholder, fieldId].filter(Boolean).join(" "),
+    ].filter(Boolean);
+
+    for (const raw of candidateTexts) {
+      const text = raw.toLowerCase().trim();
+      if (!text) continue;
+
+      // 1. LinkedIn
+      if (/\b(linked[\s_-]*in|linkedin)\b/i.test(text)) {
+        const val = (profileValues.linkedin || "").trim();
+        if (val) return { key: "linkedin", title: "LinkedIn URL", value: val };
+      }
+
+      // 2. GitHub
+      if (/\b(git[\s_-]*hub|github|git[\s_-]*repo|repository\s*url|github\.com)\b/i.test(text)) {
+        const val = (profileValues.github || "").trim();
+        if (val) return { key: "github", title: "GitHub URL", value: val };
+      }
+
+      // 3. Phone
+      if (
+        /\b(phone|mobile|cell|telephone|contact\s*number)\b/i.test(text) ||
+        fieldType === "tel" ||
+        fieldAuto === "tel"
+      ) {
+        const val = (profileValues.phone || "").trim();
+        if (val) return { key: "phone", title: "Phone Number", value: val };
+      }
+
+      // 4. Email
+      if (
+        /\b(email|e-mail)\b/i.test(text) ||
+        fieldType === "email" ||
+        fieldAuto === "email" ||
+        /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/.test(text)
+      ) {
+        const val = (profileValues.email || "").trim();
+        if (val) return { key: "email", title: "Email Address", value: val };
+      }
+
+      // 5. Website / Portfolio
+      if (/\b(website|portfolio|personal\s*url|personal\s*website|homepage|personal\s*site|blog)\b/i.test(text) || fieldAuto === "url") {
+        const val = (profileValues.website || "").trim();
+        if (val) return { key: "website", title: "Website / Portfolio", value: val };
+      }
+
+      // 6. First Name
+      if ((/\b(first\s*name|given\s*name|fname|firstname)\b/i.test(text) || fieldAuto === "given-name") && !/\blast\b/i.test(text)) {
+        const val = (profileValues.first_name || "").trim();
+        if (val) return { key: "first_name", title: "First Name", value: val };
+      }
+
+      // 7. Last Name
+      if (/\b(last\s*name|surname|family\s*name|lname|lastname)\b/i.test(text) || fieldAuto === "family-name") {
+        const val = (profileValues.last_name || "").trim();
+        if (val) return { key: "last_name", title: "Last Name", value: val };
+      }
+
+      // 8. Full Name
+      if ((/\b(full\s*name|legal\s*name|your\s*name)\b/i.test(text) || fieldAuto === "name") || (/\bname\b/i.test(text) && !/\b(first|last|company|user|username|file)\b/i.test(text))) {
+        const val = (profileValues.full_name || "").trim();
+        if (val) return { key: "full_name", title: "Full Name", value: val };
+      }
+
+      // 9. City
+      if (/\b(city|current\s*city)\b/i.test(text) && !/\bcountry\b/i.test(text)) {
+        const val = (profileValues.city || "").trim();
+        if (val) return { key: "city", title: "City", value: val, isLocation: "city" };
+      }
+
+      // 10. Country
+      if (/\b(country|country\s*of\s*residence)\b/i.test(text)) {
+        const val = (profileValues.country || "").trim();
+        if (val) return { key: "country", title: "Country", value: val, isLocation: "country" };
+      }
+
+      // 11. Location / Address
+      if (/\b(location|address|current\s*location|where\s*are\s*you\s*(based|located))\b/i.test(text)) {
+        const val = (profileValues.location || [profileValues.city, profileValues.country].filter(Boolean).join(", ")).trim();
+        if (val) return { key: "location", title: "Location", value: val, isLocation: "location" };
+      }
+
+      // 12. Work Authorization
+      if (/\b(authori[sz]ed|work\s*(status|permit|rights|eligibility)|eligible\s*to\s*work|legal\s*right\s*to\s*work)\b/i.test(text)) {
+        const val = (profileValues.work_authorization || "").trim();
+        if (val) return { key: "work_authorization", title: "Work Authorization", value: val };
+      }
+
+      // 13. Sponsorship (Current)
+      if (/\bsponsor/i.test(text) && /\b(now|current|currently|require)\b/i.test(text) && !/\bfuture\b/i.test(text)) {
+        const val = (profileValues.sponsorship_now || "").trim();
+        if (val) return { key: "sponsorship_now", title: "Visa Sponsorship (Current)", value: val };
+      }
+
+      // 14. Sponsorship (Future)
+      if (/\bsponsor/i.test(text) && /\b(future|later|in\s*the\s*future)\b/i.test(text)) {
+        const val = (profileValues.sponsorship_future || "").trim();
+        if (val) return { key: "sponsorship_future", title: "Visa Sponsorship (Future)", value: val };
+      }
+
+      // 15. Heard About
+      if (/\b(how\s*did\s*you\s*hear|heard\s*about|referral\s*source)\b/i.test(text)) {
+        const val = (profileValues.heard_about || "").trim();
+        if (val) return { key: "heard_about", title: "Referral Source", value: val };
+      }
+    }
+
+    return null;
+  }
+
+  function applyProfileAnswer(field, match, profileValues) {
+    if (!field || !match || !match.value) return false;
+    if (match.isLocation) {
+      return fillLocationField(field, profileValues, match.isLocation);
+    }
+    if (match.key === "phone") {
+      const phoneGroup = field.closest(".form-group, .field, [class*='phone'], [class*='field'], [class*='input']") || field.parentElement;
+      if (phoneGroup) {
+        const countryDrop = phoneGroup.querySelector("select, [role='combobox'], button[aria-haspopup='listbox'], [class*='country']");
+        if (countryDrop && countryDrop !== field) {
+          chooseFromDropdown(countryDrop, ["Canada", "+1", "CA", profileValues.country || ""]);
+        }
+      }
+      return applyAnswer(field, match.value, true);
+    }
+    return applyAnswer(field, match.value, true);
+  }
+
   async function answerSelected(payload) {
+    if (payload) activePayload = payload;
+    payload = await ensurePayload(payload);
+    const profileValues = (payload && payload.fields) || {};
+
     const rawSel = (payload && payload.selectionText) || "";
     const domSel = (window.getSelection && String(window.getSelection()).trim()) || "";
     const selectionText = rawSel.trim() || domSel;
@@ -2835,16 +2972,72 @@
       return 0;
     }
 
-    const questions = validFields.map((f, i) =>
-      questionFromField(f, validFields.length === 1 ? selectionText : "", "q" + i)
+    // Fast-path: check if fields match user profile (LinkedIn, GitHub, phone, email, etc.)
+    // These answers require zero LLM call, executing instantly (~0ms)
+    const profileMatches = validFields.map((f) =>
+      matchProfileAnswer(validFields.length === 1 ? selectionText : "", f, profileValues)
+    );
+
+    let filledFromProfile = 0;
+    const remainingFields = [];
+    const previewSnippets = [];
+
+    for (let i = 0; i < validFields.length; i++) {
+      const f = validFields[i];
+      const match = profileMatches[i];
+      if (match) {
+        if (applyProfileAnswer(f, match, profileValues)) {
+          filledFromProfile++;
+          statusHUD.highlight(f, "success");
+          previewSnippets.push(validFields.length > 1 ? `${match.title}: ${match.value}` : String(match.value));
+        } else {
+          remainingFields.push(f);
+        }
+      } else {
+        remainingFields.push(f);
+      }
+    }
+
+    // If all target fields were answered from profile, complete immediately with zero LLM latency!
+    if (remainingFields.length === 0 && filledFromProfile > 0) {
+      const fullPreview = previewSnippets.join("\n");
+      const matchedTitle = (profileMatches.find(Boolean) && profileMatches.find(Boolean).title) || "Profile Answer";
+      const title = validFields.length === 1 ? `${matchedTitle} (Profile)` : `${filledFromProfile} Profile Answers`;
+      statusHUD.show({
+        id: "prof_" + Date.now(),
+        state: "success",
+        title,
+        company: payload.company || "",
+        role: payload.role || "",
+        model: "Profile (Instant)",
+        targetField: selectionText || matchedTitle,
+        questionKind: "profile",
+        message: validFields.length === 1
+          ? `Inserted ${matchedTitle} from your profile.`
+          : `Inserted ${filledFromProfile} answers directly from your profile.`,
+        detail: "Answered instantly from your configured profile with zero LLM latency.",
+        answerPreview: fullPreview,
+        elapsed: 0,
+        autoDismiss: 6000,
+      });
+      try {
+        chrome.runtime.sendMessage({ type: "job-desk-badge", text: "OK", color: "#16a34a" });
+      } catch (_) {}
+      return filledFromProfile;
+    }
+
+    // For any remaining questions (e.g. open-ended questions like "Why this company?"), query the LLM
+    const queryFields = remainingFields.length > 0 ? remainingFields : validFields;
+    const questions = queryFields.map((f, i) =>
+      questionFromField(f, queryFields.length === 1 ? selectionText : "", "q" + i)
     );
     const isMulti = questions.length > 1;
 
-    validFields.forEach((f) => statusHUD.highlight(f, "active"));
+    queryFields.forEach((f) => statusHUD.highlight(f, "active"));
 
     const targetField = isMulti
       ? `${questions.length} Questions (${questions.map((q) => q.label).slice(0, 2).join("; ")}${questions.length > 2 ? "…" : ""})`
-      : questions[0].label || selectionText || validFields[0].name || validFields[0].placeholder || "Form Question";
+      : questions[0].label || selectionText || queryFields[0].name || queryFields[0].placeholder || "Form Question";
     const questionKind = isMulti ? "multi-question" : questions[0].kind;
 
     const requestId = "req_" + Date.now() + "_" + Math.random().toString(36).slice(2, 8);
@@ -3111,10 +3304,10 @@
     for (const el of fields()) {
       if (el.type === "file") continue;
       const text = labelOf(el);
-      if (pick(text, "first_name") && markFill(el, setValue(el, values.first_name))) filled += 1;
-      else if (pick(text, "last_name") && markFill(el, setValue(el, values.last_name))) filled += 1;
-      else if (pick(text, "email") && markFill(el, setValue(el, values.email))) filled += 1;
-      else if (pick(text, "phone")) {
+      if (pick(text, "first_name", el) && markFill(el, setValue(el, values.first_name))) filled += 1;
+      else if (pick(text, "last_name", el) && markFill(el, setValue(el, values.last_name))) filled += 1;
+      else if (pick(text, "email", el) && markFill(el, setValue(el, values.email))) filled += 1;
+      else if (pick(text, "phone", el)) {
         const phoneGroup = el.closest(".form-group, .field, [class*='phone'], [class*='field'], [class*='input']") || el.parentElement;
         if (phoneGroup) {
           const countryDrop = phoneGroup.querySelector("select, [role='combobox'], button[aria-haspopup='listbox'], [class*='country']");
@@ -3124,19 +3317,19 @@
         }
         if (markFill(el, setValue(el, values.phone))) filled += 1;
       }
-      else if (pick(text, "linkedin") && markFill(el, setValue(el, values.linkedin))) filled += 1;
-      else if (pick(text, "github") && markFill(el, setValue(el, values.github))) filled += 1;
-      else if (pick(text, "website") && markFill(el, setValue(el, values.website))) filled += 1;
-      else if (pick(text, "city") && markFill(el, fillLocationField(el, values, "city"))) filled += 1;
-      else if (pick(text, "country") && markFill(el, fillLocationField(el, values, "country"))) filled += 1;
-      else if (pick(text, "location") && markFill(el, fillLocationField(el, values, "location"))) filled += 1;
-      else if (pick(text, "cover_letter") && markFill(el, setValue(el, values.cover_letter))) filled += 1;
-      else if (pick(text, "why_i_fit") && markFill(el, setValue(el, values.why_i_fit))) filled += 1;
-      else if (pick(text, "heard_about") && markFill(el, setValue(el, values.heard_about))) filled += 1;
-      else if (pick(text, "work_authorization") && markFill(el, setValue(el, values.work_authorization))) filled += 1;
-      else if (pick(text, "sponsorship_future") && markFill(el, chooseChoice(el, values.sponsorship_future))) filled += 1;
-      else if (pick(text, "sponsorship_now") && markFill(el, chooseChoice(el, values.sponsorship_now))) filled += 1;
-      else if (pick(text, "full_name") && markFill(el, setValue(el, values.full_name))) filled += 1;
+      else if (pick(text, "linkedin", el) && markFill(el, setValue(el, values.linkedin))) filled += 1;
+      else if (pick(text, "github", el) && markFill(el, setValue(el, values.github))) filled += 1;
+      else if (pick(text, "website", el) && markFill(el, setValue(el, values.website))) filled += 1;
+      else if (pick(text, "city", el) && markFill(el, fillLocationField(el, values, "city"))) filled += 1;
+      else if (pick(text, "country", el) && markFill(el, fillLocationField(el, values, "country"))) filled += 1;
+      else if (pick(text, "location", el) && markFill(el, fillLocationField(el, values, "location"))) filled += 1;
+      else if (pick(text, "cover_letter", el) && markFill(el, setValue(el, values.cover_letter))) filled += 1;
+      else if (pick(text, "why_i_fit", el) && markFill(el, setValue(el, values.why_i_fit))) filled += 1;
+      else if (pick(text, "heard_about", el) && markFill(el, setValue(el, values.heard_about))) filled += 1;
+      else if (pick(text, "work_authorization", el) && markFill(el, setValue(el, values.work_authorization))) filled += 1;
+      else if (pick(text, "sponsorship_future", el) && markFill(el, chooseChoice(el, values.sponsorship_future))) filled += 1;
+      else if (pick(text, "sponsorship_now", el) && markFill(el, chooseChoice(el, values.sponsorship_now))) filled += 1;
+      else if (pick(text, "full_name", el) && markFill(el, setValue(el, values.full_name))) filled += 1;
       else if (Array.isArray(payload.cached_answers) && payload.cached_answers.length > 0 && !el.value) {
         const cleanElLabel = text.trim().toLowerCase().replace(/^[\s*#\-•]+|[\s*:?]+$/g, "");
         if (cleanElLabel) {
@@ -3155,11 +3348,11 @@
   let activePayload = null;
 
   async function ensurePayload(payload) {
-    if (payload && payload.files) {
+    if (payload && (payload.fields || payload.files)) {
       activePayload = payload;
       return payload;
     }
-    if (activePayload && activePayload.files) {
+    if (activePayload && (activePayload.fields || activePayload.files)) {
       return activePayload;
     }
     try {
@@ -3175,8 +3368,19 @@
           }
         );
       });
-      if (payloadData) {
+      if (payloadData && payloadData.fields) {
         activePayload = payloadData;
+        return activePayload;
+      }
+      // Fallback directly to profile
+      const profData = await new Promise((resolve) => {
+        chrome.runtime.sendMessage({ type: "job-desk-profile" }, (response) => {
+          if (chrome.runtime.lastError || !response || !response.ok) resolve(null);
+          else resolve(response.data);
+        });
+      });
+      if (profData && profData.fields) {
+        activePayload = profData;
         return activePayload;
       }
     } catch (_) {}

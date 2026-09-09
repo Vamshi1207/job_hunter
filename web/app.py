@@ -377,6 +377,8 @@ def index() -> HTMLResponse:
 @app.get("/api/me")
 def me() -> dict:
     cfg = _load_cfg()
+    from pipeline.fabrication import settings_payload
+
     return {
         "name": cfg.full_name,
         "pages": cfg.cv_pages,
@@ -390,6 +392,7 @@ def me() -> dict:
             "section_order": cfg.get("cv_format.section_order"),
             "density": cfg.get("cv_format.density", "compact"),
         },
+        "pipeline": settings_payload(cfg),
         "hunt": {
             "max_jobs": hunt_limit(cfg),
             "roles": target_roles(cfg),
@@ -413,6 +416,31 @@ def me() -> dict:
             "userscript": "/static/fill-helper.user.js",
         },
     }
+
+
+class SettingsUpdate(BaseModel):
+    fabrication_freedom: Optional[int] = None
+
+
+@app.get("/api/settings")
+def get_settings() -> dict:
+    from pipeline.fabrication import settings_payload
+
+    return settings_payload(_load_cfg())
+
+
+@app.patch("/api/settings")
+def patch_settings(body: SettingsUpdate) -> dict:
+    from pipeline.fabrication import clamp_level, settings_payload, update_fabrication_freedom
+    from pipeline.config import load_config
+
+    cfg = _load_cfg()
+    if body.fabrication_freedom is None:
+        raise HTTPException(status_code=400, detail="fabrication_freedom is required")
+    level = clamp_level(body.fabrication_freedom)
+    update_fabrication_freedom(cfg.root / "config.yaml", level)
+    load_config(force=True)
+    return settings_payload(load_config(force=True))
 
 
 @app.post("/api/inspect")
@@ -762,6 +790,27 @@ def apply_for_page(url: str = "") -> dict:
     return payload
 
 
+@app.get("/api/apply/profile")
+def apply_profile() -> dict:
+    """User profile fill fields when no tailored package matches the current page."""
+    cfg = _load_cfg()
+    from pipeline.fill import fill_fields
+
+    return {
+        "package_id": "",
+        "company": "",
+        "role": "",
+        "posting_url": "",
+        "apply_url": "",
+        "apply_kind": "",
+        "fields": fill_fields(cfg),
+        "files": {},
+        "cached_answers": [],
+        "model": str(cfg.get("pipeline.model") or "nvidia/nemotron-3-ultra-550b-a55b").strip(),
+        "never_submit": True,
+    }
+
+
 @app.post("/api/apply/answer")
 def apply_answer(body: FormAnswerRequest) -> dict:
     """Answer leftover form questions from memory + this role's tailored CV. Never submits."""
@@ -777,16 +826,32 @@ def apply_answer(body: FormAnswerRequest) -> dict:
             public_base=_public_base(),
         )
         package_id = str((matched or {}).get("package_id") or "")
-    if not package_id:
-        raise HTTPException(
-            status_code=404,
-            detail="No tailored package matches this form. Open it with Apply on the desk first.",
-        )
+
     questions = [
         {"key": item.key, "label": item.label, "kind": item.kind, "options": list(item.options or [])}
         for item in body.questions
     ]
     t0 = time.perf_counter()
+
+    if not package_id:
+        # Check if requested questions can be answered directly from the profile without a tailored package
+        answers, stats = answer_form_questions(
+            cfg,
+            questions,
+            package_id="",
+            page_url=body.url,
+            feedback=body.feedback,
+            with_stats=True,
+        )
+        if answers and all(not a.get("skip") and a.get("value") for a in answers):
+            stats["latency_ms"] = round((time.perf_counter() - t0) * 1000)
+            return {"package_id": "", "answers": answers, "stats": stats, "never_submit": True}
+
+        raise HTTPException(
+            status_code=404,
+            detail="No tailored package matches this form. Open it with Apply on the desk first.",
+        )
+
     answers, stats = answer_form_questions(
         cfg,
         questions,

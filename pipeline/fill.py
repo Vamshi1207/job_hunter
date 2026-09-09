@@ -382,6 +382,89 @@ def _parse_question_answers(raw: str, keys: set[str]) -> list[dict]:
     return out
 
 
+def _match_profile_question(label: str, profile: dict) -> tuple[str, str] | None:
+    """Match a question label to a profile field, returning (field_name, value) or None."""
+    norm = normalize_question_label(label)
+    # Check LinkedIn
+    if re.search(r"\b(linked[\s_-]*in|linkedin)\b", norm, re.I):
+        val = (profile.get("linkedin") or "").strip()
+        if val:
+            return ("linkedin", val)
+    # Check GitHub
+    if re.search(r"\b(git[\s_-]*hub|github|git[\s_-]*repo|repository\s*url|github\.com)\b", norm, re.I):
+        val = (profile.get("github") or "").strip()
+        if val:
+            return ("github", val)
+    # Check Phone
+    if re.search(r"\b(phone|mobile|cell|telephone|contact\s*number)\b", norm, re.I):
+        val = str(profile.get("phone") or "").strip()
+        if val:
+            return ("phone", val)
+    # Check Email
+    if re.search(r"\b(email|e-mail)\b", norm, re.I):
+        val = (profile.get("email") or "").strip()
+        if val:
+            return ("email", val)
+    # Check Website / Portfolio
+    if re.search(r"\b(website|portfolio|personal\s*url|personal\s*website|homepage|blog)\b", norm, re.I):
+        val = (profile.get("website") or "").strip()
+        if val:
+            return ("website", val)
+    # Check First Name
+    if re.search(r"\b(first\s*name|given\s*name|fname|firstname)\b", norm, re.I) and not re.search(r"\blast\b", norm, re.I):
+        val = (profile.get("first_name") or "").strip()
+        if val:
+            return ("first_name", val)
+    # Check Last Name
+    if re.search(r"\b(last\s*name|surname|family\s*name|lname|lastname)\b", norm, re.I):
+        val = (profile.get("last_name") or "").strip()
+        if val:
+            return ("last_name", val)
+    # Check Full Name
+    if re.search(r"\b(full\s*name|legal\s*name|your\s*name)\b", norm, re.I) or (
+        re.search(r"\bname\b", norm, re.I) and not re.search(r"\b(first|last|company|user|username|file)\b", norm, re.I)
+    ):
+        val = (profile.get("full_name") or "").strip()
+        if val:
+            return ("full_name", val)
+    # Check City
+    if re.search(r"\bcity\b", norm, re.I) and not re.search(r"\bcountry\b", norm, re.I):
+        val = (profile.get("city") or "").strip()
+        if val:
+            return ("city", val)
+    # Check Country
+    if re.search(r"\bcountry\b", norm, re.I):
+        val = (profile.get("country") or "").strip()
+        if val:
+            return ("country", val)
+    # Check Location
+    if re.search(r"\b(location|address|where\s*are\s*you\s*(based|located))\b", norm, re.I):
+        val = (profile.get("location") or profile.get("city") or "").strip()
+        if val:
+            return ("location", val)
+    # Check Work Authorization
+    if re.search(r"\b(authori[sz]ed|work\s*(status|permit|rights|eligibility)|eligible\s*to\s*work|legal\s*right\s*to\s*work)\b", norm, re.I):
+        val = (profile.get("work_authorization") or "").strip()
+        if val:
+            return ("work_authorization", val)
+    # Check Sponsorship Now
+    if re.search(r"\bsponsor", norm, re.I) and re.search(r"\b(now|current|currently|require)\b", norm, re.I) and not re.search(r"\bfuture\b", norm, re.I):
+        val = (profile.get("sponsorship_now") or "").strip()
+        if val:
+            return ("sponsorship_now", val)
+    # Check Sponsorship Future
+    if re.search(r"\bsponsor", norm, re.I) and re.search(r"\b(future|later|in\s*the\s*future)\b", norm, re.I):
+        val = (profile.get("sponsorship_future") or "").strip()
+        if val:
+            return ("sponsorship_future", val)
+    # Check Heard About
+    if re.search(r"\b(how\s*did\s*you\s*hear|heard\s*about|referral\s*source)\b", norm, re.I):
+        val = (profile.get("heard_about") or "").strip()
+        if val:
+            return ("heard_about", val)
+    return None
+
+
 def answer_form_questions(
     cfg: Config,
     questions: list[dict],
@@ -437,6 +520,9 @@ def answer_form_questions(
         }
         return ([], empty_stats) if with_stats else []
 
+    ctx = _package_answer_context(cfg, package_id) if package_id else {}
+    profile = fill_fields(cfg, {"company": ctx.get("company", ""), "role": ctx.get("role", "")})
+
     # Check for answers cached previously for this package (bypass if user provided feedback)
     cached_list = [] if has_feedback else (load_package_answers_cache(cfg, package_id) if package_id else [])
     cached_by_norm = {
@@ -449,6 +535,18 @@ def answer_form_questions(
     to_query: list[dict] = []
 
     for item in cleaned:
+        # Match profile questions first (fast-path: zero LLM latency)
+        prof_match = _match_profile_question(item["label"], profile)
+        if prof_match:
+            cached_results[item["key"]] = {
+                "key": item["key"],
+                "value": prof_match[1],
+                "skip": False,
+                "from_profile": True,
+                "from_cache": True,
+            }
+            continue
+
         norm = normalize_question_label(item["label"])
         cached_entry = cached_by_norm.get(norm)
         if cached_entry:
@@ -461,16 +559,15 @@ def answer_form_questions(
         else:
             to_query.append(item)
 
-    ctx = _package_answer_context(cfg, package_id)
-
-    # If all requested questions were found in the cache, return immediately with 0 LLM latency
+    # If all requested questions were found in the cache or profile, return immediately with 0 LLM latency
     if not to_query:
         results = [cached_results[item["key"]] for item in cleaned]
         if with_stats:
+            has_profile = any(a.get("from_profile") for a in results)
             words_count = sum(len(str(a.get("value") or "").split()) for a in results if not a.get("skip"))
             chars_count = sum(len(str(a.get("value") or "")) for a in results if not a.get("skip"))
             stats = {
-                "model": "cache",
+                "model": "profile" if has_profile else "cache",
                 "company": ctx.get("company") or "",
                 "role": ctx.get("role") or "",
                 "sources": {
