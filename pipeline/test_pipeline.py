@@ -3099,8 +3099,8 @@ class FabricationFreedomMatrixTests(unittest.TestCase):
         self.assertEqual(progress_event["failed_gates"], 1)
         self.assertIn("1 below gates", progress_event["line"])
 
-    def test_default_fabrication_freedom_max_is_4(self):
-        from pipeline.fabrication import fabrication_freedom_max
+    def test_default_fabrication_freedom_bounds(self):
+        from pipeline.fabrication import fabrication_freedom_max, fabrication_freedom_min
         from pipeline.config import Config
 
         cfg = Config(
@@ -3110,7 +3110,8 @@ class FabricationFreedomMatrixTests(unittest.TestCase):
             },
             Path("/tmp"),
         )
-        self.assertEqual(fabrication_freedom_max(cfg), 4)
+        self.assertEqual(fabrication_freedom_max(cfg), 5)
+        self.assertEqual(fabrication_freedom_min(cfg), 1)
 
     def test_cover_letter_schema_and_prompt_omitted_when_disabled(self):
         from pipeline.tailor import all_tags, build_tailor_prompt, _tag_schema

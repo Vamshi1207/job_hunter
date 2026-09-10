@@ -11,7 +11,8 @@ from pipeline.config import Config, load_config, should_generate_cover_letter
 LEVEL_MIN = 0
 LEVEL_MAX = 5
 DEFAULT_LEVEL = 1
-DEFAULT_MAX_AUTO = 4
+DEFAULT_MIN_AUTO = 1
+DEFAULT_MAX_AUTO = 5
 AUTO_VALUES = frozenset({"auto", "automatic"})
 UNLIMITED_VALUES = frozenset({"none", "null", "unlimited", "off", "0-5", "5"})
 
@@ -68,6 +69,16 @@ def is_auto_freedom(cfg: Config | None = None) -> bool:
     if isinstance(raw, str) and raw.strip().lower() in AUTO_VALUES:
         return True
     return False
+
+
+def fabrication_freedom_min(cfg: Config | None = None) -> int:
+    cfg = cfg or load_config()
+    raw = cfg.get("pipeline.fabrication_freedom_min")
+    if raw is None and not is_auto_freedom(cfg):
+        return fabrication_freedom(cfg)
+    if raw is None:
+        return DEFAULT_MIN_AUTO
+    return clamp_level(raw)
 
 
 def fabrication_freedom_max(cfg: Config | None = None) -> int:
@@ -157,6 +168,7 @@ def choose_fabrication_freedom(
     from pipeline.search import phrase_in, preferred_skills, score_listing
     from pipeline.stack_match import stack_decision
 
+    min_level = fabrication_freedom_min(cfg)
     max_level = fabrication_freedom_max(cfg)
     listing = dict(job)
     listing["jd"] = jd_text or listing.get("jd") or ""
@@ -196,10 +208,10 @@ def choose_fabrication_freedom(
         elif fit >= 8:
             level = min(level, 2)
 
-    level = min(clamp_level(level), max_level)
+    level = max(min_level, min(clamp_level(level), max_level))
     reason = (
         f"auto stack={decision} coverage={coverage:.0%} gaps={gaps} "
-        f"fit={fit if fit is not None else '—'} max={max_level}"
+        f"fit={fit if fit is not None else '—'} min={min_level} max={max_level}"
     )
     return {
         "level": level,
@@ -209,6 +221,7 @@ def choose_fabrication_freedom(
         "coverage": round(coverage, 3),
         "stack": decision,
         "fit": fit,
+        "min": min_level,
         "max": max_level,
     }
 
@@ -383,6 +396,16 @@ def update_fabrication_freedom(cfg_path: Path, level) -> int | str:
     return level_i
 
 
+def update_fabrication_freedom_min(cfg_path: Path, min_level: int) -> int:
+    min_level = clamp_level(min_level)
+    path = Path(cfg_path)
+    text = path.read_text() if path.exists() else ""
+    text = _set_yaml_key(text, "fabrication_freedom_min", str(min_level))
+    path.write_text(text)
+    load_config(force=True)
+    return min_level
+
+
 def update_fabrication_freedom_max(cfg_path: Path, max_level: int) -> int:
     max_level = clamp_level(max_level)
     path = Path(cfg_path)
@@ -406,16 +429,18 @@ def settings_payload(cfg: Config | None = None) -> dict:
     cfg = cfg or load_config()
     threshold = int(cfg.get("pipeline.ats_threshold", 80) or 80)
     auto = is_auto_freedom(cfg)
+    min_level = fabrication_freedom_min(cfg)
     max_level = fabrication_freedom_max(cfg)
     level = fabrication_freedom(cfg)
     gen_cover = should_generate_cover_letter(cfg)
     return {
         "mode": "auto" if auto else "manual",
         "fabrication_freedom": "auto" if auto else level,
+        "fabrication_freedom_min": min_level,
         "fabrication_freedom_max": max_level,
         "generate_cover_letter": gen_cover,
         "label": (
-            f"Automatic per job (cap {max_level}/5)"
+            f"Automatic per job (L{min_level}–L{max_level})"
             if auto
             else level_label(level)
         ),

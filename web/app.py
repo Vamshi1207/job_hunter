@@ -420,6 +420,7 @@ def me() -> dict:
 
 class SettingsUpdate(BaseModel):
     fabrication_freedom: Optional[object] = None  # "auto" or 0–5
+    fabrication_freedom_min: Optional[int] = None
     fabrication_freedom_max: Optional[int] = None
     generate_cover_letter: Optional[bool] = None
 
@@ -437,6 +438,7 @@ def patch_settings(body: SettingsUpdate) -> dict:
         clamp_level,
         settings_payload,
         update_fabrication_freedom,
+        update_fabrication_freedom_min,
         update_fabrication_freedom_max,
         update_generate_cover_letter,
     )
@@ -452,6 +454,9 @@ def patch_settings(body: SettingsUpdate) -> dict:
         else:
             update_fabrication_freedom(path, clamp_level(raw))
         changed = True
+    if body.fabrication_freedom_min is not None:
+        update_fabrication_freedom_min(path, clamp_level(body.fabrication_freedom_min))
+        changed = True
     if body.fabrication_freedom_max is not None:
         update_fabrication_freedom_max(path, clamp_level(body.fabrication_freedom_max))
         changed = True
@@ -461,7 +466,7 @@ def patch_settings(body: SettingsUpdate) -> dict:
     if not changed:
         raise HTTPException(
             status_code=400,
-            detail="fabrication_freedom, fabrication_freedom_max, or generate_cover_letter is required",
+            detail="fabrication_freedom, fabrication_freedom_min, fabrication_freedom_max, or generate_cover_letter is required",
         )
     load_config(force=True)
     return settings_payload(load_config(force=True))

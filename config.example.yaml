@@ -174,7 +174,8 @@ pipeline:
   ats_threshold: 80
   # 0–5 lock, or auto = choose per job before tailor (desk default).
   fabrication_freedom: auto
-  fabrication_freedom_max: 4   # cap when mode is auto (0-5, default 4; 5 is explicit override)
+  fabrication_freedom_min: 1   # initial floor when mode is auto (0-5, default 1: keyword alignment)
+  fabrication_freedom_max: 5   # cap when mode is auto (0-5, default 5)
   generate_cover_letter: false # toggle cover letter generation (default false to save tokens and speed up runs)
   max_attempts: 3
   # nvidia = OpenAI-compatible NVIDIA NIM (NVIDIA_API_KEY). agy = Gemini CLI.
