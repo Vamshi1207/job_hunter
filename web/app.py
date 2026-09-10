@@ -421,6 +421,7 @@ def me() -> dict:
 class SettingsUpdate(BaseModel):
     fabrication_freedom: Optional[object] = None  # "auto" or 0–5
     fabrication_freedom_max: Optional[int] = None
+    generate_cover_letter: Optional[bool] = None
 
 
 @app.get("/api/settings")
@@ -437,6 +438,7 @@ def patch_settings(body: SettingsUpdate) -> dict:
         settings_payload,
         update_fabrication_freedom,
         update_fabrication_freedom_max,
+        update_generate_cover_letter,
     )
     from pipeline.config import load_config
 
@@ -453,10 +455,13 @@ def patch_settings(body: SettingsUpdate) -> dict:
     if body.fabrication_freedom_max is not None:
         update_fabrication_freedom_max(path, clamp_level(body.fabrication_freedom_max))
         changed = True
+    if body.generate_cover_letter is not None:
+        update_generate_cover_letter(path, body.generate_cover_letter)
+        changed = True
     if not changed:
         raise HTTPException(
             status_code=400,
-            detail="fabrication_freedom or fabrication_freedom_max is required",
+            detail="fabrication_freedom, fabrication_freedom_max, or generate_cover_letter is required",
         )
     load_config(force=True)
     return settings_payload(load_config(force=True))

@@ -28,10 +28,16 @@
             Fabrication freedom is chosen automatically per job from stack/skill fit before the LLM runs.
             Cap limits how far auto may go (honesty gates still apply).
           </p>
-          <label class="freedom-control">
-            Auto freedom cap
-            <select id="fabrication-freedom-max" aria-describedby="freedom-note"></select>
-          </label>
+          <div class="settings-row">
+            <label class="freedom-control">
+              Auto freedom cap
+              <select id="fabrication-freedom-max" aria-describedby="freedom-note"></select>
+            </label>
+            <label class="cover-letter-control">
+              <input type="checkbox" id="generate-cover-letter">
+              <span>Generate cover letter</span>
+            </label>
+          </div>
           <p class="hint" id="freedom-status" hidden></p>
         </div>
       </details>

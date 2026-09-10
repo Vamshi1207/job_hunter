@@ -230,6 +230,7 @@ def package_summary(cfg: Config, folder: Path) -> dict:
         "applied": applied,
         "applied_at": applied_at,
         "critique": eval_data.get("critique") or "",
+        "attempts": eval_data.get("attempts") or job_meta.get("attempts") or [],
         "evaluation": {
             "score": eval_data.get("score"),
             "honesty": eval_data.get("honesty"),
@@ -238,6 +239,7 @@ def package_summary(cfg: Config, folder: Path) -> dict:
             "gaps": eval_data.get("gaps") or [],
             "retry_history": eval_data.get("retry_history") or "",
             "fabrication_freedom": freedom,
+            "attempts": eval_data.get("attempts") or job_meta.get("attempts") or [],
         },
     }
 

@@ -36,9 +36,9 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 log = logging.getLogger("benchmark")
 
 MODELS = [
-    "google/gemma-4-31b-it",
     "nvidia/nemotron-3-ultra-550b-a55b",
     "deepseek-ai/deepseek-v4-flash-0731",
+    "google/gemma-4-31b-it",
 ]
 
 TEST_JD = """
@@ -66,12 +66,13 @@ Requirements:
 """.strip()
 
 
-def run_benchmark():
+def run_benchmark(models: list[str] | None = None):
     cfg = load_config()
-    print("=" * 80)
-    print("STARTING NVIDIA MODELS BENCHMARK FOR CV TAILORING")
-    print(f"Models to evaluate: {MODELS}")
-    print("=" * 80)
+    target_models = models or MODELS
+    print("=" * 80, flush=True)
+    print("STARTING NVIDIA MODELS BENCHMARK FOR CV TAILORING", flush=True)
+    print(f"Models to evaluate: {target_models}", flush=True)
+    print("=" * 80, flush=True)
 
     prompt = build_tailor_prompt(
         cfg,
@@ -79,14 +80,14 @@ def run_benchmark():
         role="Senior Software Engineer, Distributed Systems & Platform",
         jd_text=TEST_JD,
     )
-    print(f"Tailoring prompt constructed: {len(prompt)} characters\n")
+    print(f"Tailoring prompt constructed: {len(prompt)} characters\n", flush=True)
 
     results = []
     expected_tags = all_tags(cfg)
 
-    for idx, model in enumerate(MODELS, 1):
-        print(f"\n[{idx}/{len(MODELS)}] Testing model: {model}")
-        print("-" * 60)
+    for idx, model in enumerate(target_models, 1):
+        print(f"\n[{idx}/{len(target_models)}] Testing model: {model}", flush=True)
+        print("-" * 60, flush=True)
         t0 = time.time()
         res_entry = {
             "model": model,
@@ -110,7 +111,7 @@ def run_benchmark():
         }
 
         try:
-            raw_text = _call_nvidia(prompt, cfg, timeout=300, effort="high", model=model)
+            raw_text = _call_nvidia(prompt, cfg, timeout=600, effort="high", model=model)
             dt = time.time() - t0
             res_entry["latency_seconds"] = round(dt, 2)
             res_entry["raw_output"] = raw_text
@@ -144,18 +145,18 @@ def run_benchmark():
             res_entry["validation_passed"] = val_ok
             res_entry["validation_errors"] = val_errs
 
-            print(f"  Execution time: {dt:.1f}s")
-            print(f"  Output length: {len(raw_text)} chars ({len(raw_text.split())} words)")
-            print(f"  Tags present: {len(present_tags)}/{len(expected_tags)}")
-            print(f"  Validation passed: {val_ok}")
+            print(f"  Execution time: {dt:.1f}s", flush=True)
+            print(f"  Output length: {len(raw_text)} chars ({len(raw_text.split())} words)", flush=True)
+            print(f"  Tags present: {len(present_tags)}/{len(expected_tags)}", flush=True)
+            print(f"  Validation passed: {val_ok}", flush=True)
             if val_errs:
-                print(f"  Validation issues ({len(val_errs)}):")
+                print(f"  Validation issues ({len(val_errs)}):", flush=True)
                 for err in val_errs:
-                    print(f"    - {err}")
+                    print(f"    - {err}", flush=True)
 
-            print(f"  Bullets: {res_entry['bullet_counts']}")
-            print(f"  Cover letter: {res_entry['cover_letter_words']} words")
-            print(f"  LinkedIn DM: {res_entry['linkedin_dm_words']} words")
+            print(f"  Bullets: {res_entry['bullet_counts']}", flush=True)
+            print(f"  Cover letter: {res_entry['cover_letter_words']} words", flush=True)
+            print(f"  LinkedIn DM: {res_entry['linkedin_dm_words']} words", flush=True)
 
             # ATS evaluation
             try:
@@ -164,15 +165,15 @@ def run_benchmark():
                 res_entry["ats_score"] = ats.get("score")
                 res_entry["ats_honesty"] = ats.get("honesty")
                 res_entry["ats_critique"] = ats.get("critique", "")
-                print(f"  ATS Score: {ats.get('score')} (Honesty: {ats.get('honesty')})")
+                print(f"  ATS Score: {ats.get('score')} (Honesty: {ats.get('honesty')})", flush=True)
             except Exception as e_ats:
-                print(f"  ATS evaluation error: {e_ats}")
+                print(f"  ATS evaluation error: {e_ats}", flush=True)
 
         except Exception as exc:
             dt = time.time() - t0
             res_entry["latency_seconds"] = round(dt, 2)
             res_entry["error"] = str(exc)
-            print(f"  FAILED in {dt:.1f}s: {exc}")
+            print(f"  FAILED in {dt:.1f}s: {exc}", flush=True)
 
         results.append(res_entry)
 
@@ -183,11 +184,11 @@ def run_benchmark():
     with open(out_file, "w", encoding="utf-8") as f:
         json.dump(results, f, indent=2)
 
-    print("\n" + "=" * 80)
-    print("BENCHMARK SUMMARY")
-    print("=" * 80)
-    print(f"{'Model':<40} | {'Time':<6} | {'Valid?':<6} | {'Tags':<7} | {'ATS':<5} | {'Issues'}")
-    print("-" * 80)
+    print("\n" + "=" * 80, flush=True)
+    print("BENCHMARK SUMMARY", flush=True)
+    print("=" * 80, flush=True)
+    print(f"{'Model':<40} | {'Time':<6} | {'Valid?':<6} | {'Tags':<7} | {'ATS':<5} | {'Issues'}", flush=True)
+    print("-" * 80, flush=True)
     for r in results:
         m_short = r["model"].split("/")[-1]
         t_str = f"{r['latency_seconds']:.1f}s"
@@ -195,11 +196,12 @@ def run_benchmark():
         tag_str = f"{r['tag_count_present']}/{r['tag_count_total']}"
         ats_str = str(r["ats_score"]) if r["ats_score"] is not None else "N/A"
         issues_count = len(r["validation_errors"])
-        print(f"{m_short:<40} | {t_str:<6} | {v_str:<6} | {tag_str:<7} | {ats_str:<5} | {issues_count} issues")
+        print(f"{m_short:<40} | {t_str:<6} | {v_str:<6} | {tag_str:<7} | {ats_str:<5} | {issues_count} issues", flush=True)
 
-    print("=" * 80)
-    print(f"Detailed results saved to {out_file}")
+    print("=" * 80, flush=True)
+    print(f"Detailed results saved to {out_file}", flush=True)
 
 
 if __name__ == "__main__":
-    run_benchmark()
+    selected_models = [arg for arg in sys.argv[1:] if not arg.startswith("-")] or None
+    run_benchmark(models=selected_models)

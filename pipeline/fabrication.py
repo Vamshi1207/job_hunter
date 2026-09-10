@@ -6,13 +6,14 @@ import copy
 import re
 from pathlib import Path
 
-from pipeline.config import Config, load_config
+from pipeline.config import Config, load_config, should_generate_cover_letter
 
 LEVEL_MIN = 0
 LEVEL_MAX = 5
 DEFAULT_LEVEL = 1
-DEFAULT_MAX_AUTO = 3
+DEFAULT_MAX_AUTO = 4
 AUTO_VALUES = frozenset({"auto", "automatic"})
+UNLIMITED_VALUES = frozenset({"none", "null", "unlimited", "off", "0-5", "5"})
 
 LEVEL_LABELS = {
     0: "Strict — master CV / memory / bank only",
@@ -77,6 +78,8 @@ def fabrication_freedom_max(cfg: Config | None = None) -> int:
         return fabrication_freedom(cfg)
     if raw is None:
         return DEFAULT_MAX_AUTO
+    if isinstance(raw, str) and raw.strip().lower() in UNLIMITED_VALUES:
+        return LEVEL_MAX
     return clamp_level(raw)
 
 
@@ -177,10 +180,12 @@ def choose_fabrication_freedom(
         level = 1
     elif gaps <= 2:
         level = 2
-    elif gaps <= 4:
+    elif gaps <= 3:
         level = 3
-    else:
+    elif gaps <= 5:
         level = 4
+    else:
+        level = 5
 
     if decision == "doubt":
         level = max(level, 2)
@@ -306,7 +311,7 @@ def critic_freedom_rules(level: int) -> str:
             "- Freedom 5: honesty must stay high (gate stays elevated). Limited skill/tool/metric additions "
             "are OK only if interview-defensible; fake employers/education/seniority/large scale claims still forbidden.\n"
             "- Critique should close ATS gaps with minimal fabrication and fit the page budget.\n"
-            "- allowed_fixes: limited skills/metrics for ATS, reorder, drop overflow bullets — never extreme invent."
+            "- allowed_fixes: limited skills/metrics for ATS, reorder, drop overflow bullets — never extreme invent or fabricate."
         ),
     }
     return rules[level]
@@ -388,16 +393,27 @@ def update_fabrication_freedom_max(cfg_path: Path, max_level: int) -> int:
     return max_level
 
 
+def update_generate_cover_letter(cfg_path: Path, enabled: bool) -> bool:
+    path = Path(cfg_path)
+    text = path.read_text() if path.exists() else ""
+    text = _set_yaml_key(text, "generate_cover_letter", "true" if enabled else "false")
+    path.write_text(text)
+    load_config(force=True)
+    return bool(enabled)
+
+
 def settings_payload(cfg: Config | None = None) -> dict:
     cfg = cfg or load_config()
     threshold = int(cfg.get("pipeline.ats_threshold", 80) or 80)
     auto = is_auto_freedom(cfg)
     max_level = fabrication_freedom_max(cfg)
     level = fabrication_freedom(cfg)
+    gen_cover = should_generate_cover_letter(cfg)
     return {
         "mode": "auto" if auto else "manual",
         "fabrication_freedom": "auto" if auto else level,
         "fabrication_freedom_max": max_level,
+        "generate_cover_letter": gen_cover,
         "label": (
             f"Automatic per job (cap {max_level}/5)"
             if auto

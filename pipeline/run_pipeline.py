@@ -16,7 +16,9 @@ from pipeline.config import load_config
 from pipeline.fabrication import (
     choose_fabrication_freedom,
     config_with_freedom,
+    fabrication_freedom_max,
     honesty_gate,
+    level_label,
 )
 from pipeline.jobs import load_jobs
 from pipeline.playbook import render_playbook
@@ -48,20 +50,29 @@ def append_tracker(tracker_path: Path, row: str) -> None:
         handle.write(row + "\n")
 
 
-async def process_job(job: dict, fill_form: bool, on_progress=None) -> Path | None:
-    cfg = load_config()
+async def process_job(
+    job: dict,
+    fill_form: bool = False,
+    on_progress=None,
+    cfg=None,
+) -> Path | None:
+    cfg = cfg or load_config()
+
     from pipeline.search import find_existing_package
 
     def note(msg: str) -> None:
         if on_progress:
-            on_progress(msg)
+            try:
+                on_progress(msg)
+            except Exception as exc:
+                log.debug("on_progress callback exception: %s", exc)
 
+    note("Checking existing")
     existing = find_existing_package(cfg, job)
     if existing is not None:
         log.info(
-            "Already processed %s — %s (%s). Skipping.",
+            "Found existing package for %s — skipping tailor. Directory: %s",
             job.get("company"),
-            job.get("role"),
             existing.name,
         )
         return existing
@@ -71,6 +82,7 @@ async def process_job(job: dict, fill_form: bool, on_progress=None) -> Path | No
     threshold = int(cfg.get("pipeline.ats_threshold", 80))
     choice = choose_fabrication_freedom(cfg, jd_text, job)
     freedom = int(choice["level"])
+    max_freedom = fabrication_freedom_max(cfg)
     min_honesty = honesty_gate(freedom, threshold)
     job_cfg = config_with_freedom(cfg, freedom)
     job["fabrication_freedom"] = freedom
@@ -79,11 +91,12 @@ async def process_job(job: dict, fill_form: bool, on_progress=None) -> Path | No
     source = source_of_truth_text(job_cfg)
 
     log.info(
-        "Processing %s — %s (freedom=%s %s, ats>=%s, honesty>=%s) — %s",
+        "Processing %s — %s (freedom=%s %s, max=%s, ats>=%s, honesty>=%s) — %s",
         company,
         role,
         freedom,
         choice.get("mode"),
+        max_freedom,
         threshold,
         min_honesty,
         choice.get("reason"),
@@ -91,17 +104,20 @@ async def process_job(job: dict, fill_form: bool, on_progress=None) -> Path | No
     note(f"Freedom {freedom} ({choice.get('mode') or 'auto'})")
 
     feedback_history = ""
-    best_output = ""
-    best_score = -1
-    best_eval: dict = {}
+    winning_output = ""
+    winning_eval: dict = {}
+    winning_cfg = job_cfg
+    winning_freedom = freedom
+    has_passed = False
+    attempts_history: list[dict] = []
 
     from unittest.mock import patch
 
     for attempt in range(1, max_attempts + 1):
-        log.info("Tailor attempt %s/%s", attempt, max_attempts)
+        log.info("Tailor attempt %s/%s (freedom=%s)", attempt, max_attempts, freedom)
         writing = "Writing CV" if attempt == 1 else "Rewriting CV"
         if max_attempts > 1:
-            writing = f"{writing} ({attempt}/{max_attempts})"
+            writing = f"{writing} ({attempt}/{max_attempts}, L{freedom})"
         note(writing)
         with patch("pipeline.tailor.load_config", return_value=job_cfg):
             llm_output = await asyncio.to_thread(
@@ -123,7 +139,7 @@ async def process_job(job: dict, fill_form: bool, on_progress=None) -> Path | No
                 f"\nAttempt {attempt} REJECTED - INCOMPLETE MATERIALS:\n"
                 f"Issues: {'; '.join(validation_errors)}\n"
                 "You MUST output all employer titles, at least 2 bullets per employer, all Key Skills categories, "
-                "and complete Cover Letter, LinkedIn DM, and Why I Fit sections without truncation.\n"
+                "and complete LinkedIn DM and Why I Fit sections without truncation.\n"
             )
             continue
         scoring = "Scoring ATS"
@@ -140,15 +156,35 @@ async def process_job(job: dict, fill_form: bool, on_progress=None) -> Path | No
         eval_result["fabrication_freedom_mode"] = choice.get("mode")
         eval_result["fabrication_freedom_reason"] = choice.get("reason")
 
-        log.info("Score %s/100 (honesty %s/100, freedom %s)", score, honesty, freedom)
+        passed = bool(score >= threshold and honesty >= min_honesty)
+        attempt_record = {
+            "attempt": attempt,
+            "freedom": freedom,
+            "score": score,
+            "honesty": honesty,
+            "min_honesty": min_honesty,
+            "threshold": threshold,
+            "keyword_coverage": int(eval_result.get("keyword_coverage") or score),
+            "critique": critique,
+            "gaps": list(eval_result.get("gaps") or []),
+            "passed": passed,
+            "action": "accepted" if passed else "",
+        }
+        attempts_history.append(attempt_record)
+
+        log.info("Score %s/100 (honesty %s/100, freedom %s, passed=%s)", score, honesty, freedom, passed)
         log.info("Critique: %s", critique)
 
-        if score > best_score:
-            best_score = score
-            best_output = llm_output
-            best_eval = eval_result
-
-        if score >= threshold and honesty >= min_honesty:
+        # Winning attempt selection:
+        # A passed attempt ALWAYS takes precedence over failing attempts.
+        # If no attempt passes, retain the best composite quality attempt (min of score and honesty).
+        if passed:
+            if not has_passed or score > winning_eval.get("score", -1):
+                has_passed = True
+                winning_output = llm_output
+                winning_eval = dict(eval_result)
+                winning_cfg = job_cfg
+                winning_freedom = freedom
             log.info(
                 "Threshold reached: score %s>=%s, honesty %s>=%s (freedom %s).",
                 score,
@@ -158,6 +194,69 @@ async def process_job(job: dict, fill_form: bool, on_progress=None) -> Path | No
                 freedom,
             )
             break
+        else:
+            if not has_passed:
+                current_quality = min(score, honesty)
+                best_quality = min(winning_eval.get("score", -1), winning_eval.get("honesty", -1))
+                if not winning_output or current_quality > best_quality or (current_quality == best_quality and score > winning_eval.get("score", -1)):
+                    winning_output = llm_output
+                    winning_eval = dict(eval_result)
+                    winning_cfg = job_cfg
+                    winning_freedom = freedom
+
+        # Dynamic bidirectional freedom adaptation for next attempt
+        adaptation_reason = ""
+        if attempt < max_attempts:
+            old_freedom = freedom
+            if honesty < min_honesty:
+                # Model over-hallucinated or exceeded allowed boundaries -> decrement
+                freedom = max(0, freedom - 1)
+                adaptation_reason = f"Honesty low ({honesty} < {min_honesty}) → L{freedom}"
+                attempt_record["action"] = f"deescalate_honesty (L{old_freedom} -> L{freedom})"
+                note(f"Honesty low → L{freedom}")
+                log.warning(
+                    "Attempt %s failed honesty gate (%s < %s). Lowering freedom: %s",
+                    attempt,
+                    honesty,
+                    min_honesty,
+                    adaptation_reason,
+                )
+            elif score < threshold:
+                # Model was truthful but missed keyword requirements -> increment
+                if freedom < max_freedom:
+                    freedom = min(max_freedom, freedom + 1)
+                    adaptation_reason = f"ATS low ({score} < {threshold}) → L{freedom}"
+                    attempt_record["action"] = f"escalate_keyword_gap (L{old_freedom} -> L{freedom})"
+                    note(f"ATS low → L{freedom}")
+                    log.info(
+                        "Attempt %s honest (%s >= %s) but ATS below threshold (%s < %s). Raising freedom: %s",
+                        attempt,
+                        honesty,
+                        min_honesty,
+                        score,
+                        threshold,
+                        adaptation_reason,
+                    )
+                else:
+                    adaptation_reason = f"ATS low ({score} < {threshold}) but already at cap L{max_freedom} → maintain L{freedom}"
+                    attempt_record["action"] = f"maintain_cap (L{freedom})"
+                    note(f"At cap L{freedom} · refining")
+                    log.info(
+                        "Attempt %s honest (%s >= %s) but ATS below threshold (%s < %s), already at cap L%s.",
+                        attempt,
+                        honesty,
+                        min_honesty,
+                        score,
+                        threshold,
+                        max_freedom,
+                    )
+            else:
+                adaptation_reason = f"Gates met but not passed → maintain L{freedom}"
+                attempt_record["action"] = f"maintain (L{freedom})"
+
+            min_honesty = honesty_gate(freedom, threshold)
+            job_cfg = config_with_freedom(cfg, freedom)
+            source = source_of_truth_text(job_cfg)
 
         log.warning(
             "Below gates (need score>=%s honesty>=%s at freedom %s). Refining.",
@@ -166,33 +265,48 @@ async def process_job(job: dict, fill_form: bool, on_progress=None) -> Path | No
             freedom,
         )
         feedback_history += (
-            f"\nAttempt {attempt} score={score} honesty={honesty} freedom={freedom} "
-            f"(need score>={threshold}, honesty>={min_honesty})\n"
+            f"\nAttempt {attempt} score={score} honesty={honesty} freedom={attempt_record['freedom']} "
+            f"(need score>={threshold}, honesty>={attempt_record['min_honesty']})\n"
+            f"Adaptation: {adaptation_reason or 'Refining attempt'}.\n"
+            f"Freedom for next attempt: L{freedom} ({level_label(freedom)}).\n"
             f"Critique: {critique}\n"
             f"Gaps: {eval_result.get('gaps')}\n"
             f"Also protect the {job_cfg.cv_pages}-page budget — drop lower-value bullets if needed.\n"
         )
 
-    if not best_output:
+    if not winning_output:
         log.error("No usable output for %s — skipping save.", company)
         return None
 
+    winning_eval["attempts"] = attempts_history
+    winning_eval["fabrication_freedom"] = winning_freedom
+    job["fabrication_freedom"] = winning_freedom
+    job["attempts"] = attempts_history
+
+    log.info(
+        "Saved package for %s at winning freedom L%s (passed=%s, %s attempt(s))",
+        company,
+        winning_freedom,
+        has_passed,
+        len(attempts_history),
+    )
+
     note("Saving package")
-    with patch("pipeline.tailor.load_config", return_value=job_cfg):
+    with patch("pipeline.tailor.load_config", return_value=winning_cfg):
         output_dir = await save_materials(
             company,
             role,
-            best_output,
-            eval_result=best_eval,
+            winning_output,
+            eval_result=winning_eval,
             feedback_history=feedback_history,
             job=job,
             on_progress=on_progress,
         )
 
-    pdf_path = output_dir / f"{cfg.cv_stem}.pdf"
+    pdf_path = output_dir / f"{winning_cfg.cv_stem}.pdf"
     cl_path = output_dir / "cover_letter.md"
     why_path = output_dir / "why_i_fit.txt"
-    playbook = render_playbook(cfg, job, output_dir, pdf_path, cl_path, why_path)
+    playbook = render_playbook(winning_cfg, job, output_dir, pdf_path, cl_path, why_path)
     (output_dir / "playbook.md").write_text(playbook)
 
     channel = job.get("channel") or "jobs.yaml"
@@ -235,9 +349,24 @@ async def async_main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Best-effort Greenhouse/Lever fill + screenshot. Still does not click Submit.",
     )
+    parser.add_argument(
+        "--cover-letter",
+        dest="cover_letter",
+        action="store_true",
+        default=None,
+        help="Generate cover letters for tailored packages.",
+    )
+    parser.add_argument(
+        "--no-cover-letter",
+        dest="cover_letter",
+        action="store_false",
+        help="Skip cover letter generation to save tokens and speed up runs.",
+    )
     args = parser.parse_args(argv)
 
     cfg = load_config()
+    if args.cover_letter is not None:
+        cfg.data.setdefault("pipeline", {})["generate_cover_letter"] = args.cover_letter
     if args.hunt:
         from pipeline.hunt import hunt_and_tailor
 

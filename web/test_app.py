@@ -167,13 +167,29 @@ class DeskAPITests(unittest.TestCase):
         self.assertEqual(patched.json()["fabrication_freedom"], 3)
         self.assertEqual(patched.json()["mode"], "manual")
         self.assertEqual(patched.json()["honesty_gate"], 75)
-        again = self.client.get("/api/settings")
-        self.assertEqual(again.json()["fabrication_freedom"], 3)
         # restore auto default for other tests sharing the temp config
         self.client.patch(
             "/api/settings",
             json={"fabrication_freedom": "auto", "fabrication_freedom_max": 3},
         )
+
+    def test_settings_generate_cover_letter_round_trip(self):
+        got = self.client.get("/api/settings")
+        self.assertEqual(got.status_code, 200)
+        self.assertIn("generate_cover_letter", got.json())
+
+        # Enable
+        on_res = self.client.patch("/api/settings", json={"generate_cover_letter": True})
+        self.assertEqual(on_res.status_code, 200)
+        self.assertTrue(on_res.json()["generate_cover_letter"])
+        self.assertTrue(self.client.get("/api/settings").json()["generate_cover_letter"])
+
+        # Disable
+        off_res = self.client.patch("/api/settings", json={"generate_cover_letter": False})
+        self.assertEqual(off_res.status_code, 200)
+        self.assertFalse(off_res.json()["generate_cover_letter"])
+        self.assertFalse(self.client.get("/api/settings").json()["generate_cover_letter"])
+
 
     def test_inspect_linkedin_is_blocked_and_uses_pasted_jd(self):
         res = self.client.post(

@@ -129,27 +129,39 @@ async function loadMe() {
 
 function applyFreedomSettings(pipeline) {
   const select = $("fabrication-freedom-max");
+  const coverCheck = $("generate-cover-letter");
   const note = $("freedom-note");
   const status = $("freedom-status");
-  if (!select) return;
-  const maxLevel = pipeline && pipeline.fabrication_freedom_max != null
-    ? Number(pipeline.fabrication_freedom_max)
-    : 3;
-  select.innerHTML = [0, 1, 2, 3, 4, 5]
-    .map((value) => `<option value="${value}">L${value} max</option>`)
-    .join("");
-  select.value = String(Number.isFinite(maxLevel) ? maxLevel : 3);
+  if (select) {
+    const maxLevel = pipeline && pipeline.fabrication_freedom_max != null
+      ? Number(pipeline.fabrication_freedom_max)
+      : 5;
+    select.innerHTML = [
+      `<option value="0">L0 max (Strict)</option>`,
+      `<option value="1">L1 max (Keywords only)</option>`,
+      `<option value="2">L2 max (Related skills)</option>`,
+      `<option value="3">L3 max (Adjacent reframe)</option>`,
+      `<option value="4">L4 max (Measured stretch)</option>`,
+      `<option value="5">L5 max (Uncapped 0–5)</option>`,
+    ].join("");
+    select.value = String(Number.isFinite(maxLevel) ? maxLevel : 5);
+  }
+  if (coverCheck && pipeline) {
+    coverCheck.checked = Boolean(pipeline.generate_cover_letter);
+  }
   if (note && pipeline) {
     const mode = pipeline.mode || "auto";
     const gates = pipeline.honesty_gates || {};
-    const gateHint = gates[String(select.value)] != null
+    const gateHint = (select && gates[String(select.value)] != null)
       ? ` · at L${select.value} honesty ≥ ${gates[String(select.value)]}`
       : "";
+    const coverHint = pipeline.generate_cover_letter ? " · Cover letters ON" : " · Cover letters OFF";
     note.textContent =
       (mode === "auto"
-        ? "Freedom is chosen automatically per job before the LLM runs. "
+        ? "Freedom is chosen automatically per job (0–5) before the LLM runs. "
         : "Freedom is locked in config. ") +
       `ATS target ${pipeline.ats_threshold || 80}+ · ${pipeline.pages || 2}-page CV` +
+      coverHint +
       gateHint +
       ".";
   }
@@ -161,10 +173,13 @@ function applyFreedomSettings(pipeline) {
 
 async function saveFreedomSetting() {
   const select = $("fabrication-freedom-max");
+  const coverCheck = $("generate-cover-letter");
   const status = $("freedom-status");
   if (!select) return;
   const value = Number(select.value);
+  const coverVal = coverCheck ? Boolean(coverCheck.checked) : false;
   select.disabled = true;
+  if (coverCheck) coverCheck.disabled = true;
   try {
     const updated = await api("/api/settings", {
       method: "PATCH",
@@ -172,14 +187,15 @@ async function saveFreedomSetting() {
       body: JSON.stringify({
         fabrication_freedom: "auto",
         fabrication_freedom_max: value,
+        generate_cover_letter: coverVal,
       }),
     });
     applyFreedomSettings(updated);
     if (status) {
       status.hidden = false;
-      status.textContent = `Saved: auto freedom (cap L${updated.fabrication_freedom_max}).`;
+      status.textContent = `Saved: auto freedom (cap L${updated.fabrication_freedom_max}), cover letters ${updated.generate_cover_letter ? "on" : "off"}.`;
     }
-    setStrip(`Auto fabrication freedom capped at L${updated.fabrication_freedom_max}/5`, true);
+    setStrip(`Saved settings: auto freedom cap L${updated.fabrication_freedom_max}/5, cover letters ${updated.generate_cover_letter ? "on" : "off"}`, true);
   } catch (err) {
     if (status) {
       status.hidden = false;
@@ -187,6 +203,7 @@ async function saveFreedomSetting() {
     }
   } finally {
     select.disabled = false;
+    if (coverCheck) coverCheck.disabled = false;
   }
 }
 
@@ -378,7 +395,7 @@ function atsLabel(row, pkg) {
   return String(score);
 }
 
-function freedomLabel(row, pkg) {
+function freedomLabel(row, pkg, attempts) {
   const raw =
     row && row.fabrication_freedom != null
       ? row.fabrication_freedom
@@ -386,17 +403,49 @@ function freedomLabel(row, pkg) {
         ? pkg.fabrication_freedom
         : null;
   if (raw == null || raw === "") return "—";
+
+  if (Array.isArray(attempts) && attempts.length > 1) {
+    const first = attempts[0];
+    const winning = attempts.find((a) => a.passed) || attempts[attempts.length - 1];
+    const firstL = first && first.freedom != null ? `L${first.freedom}` : `L${raw}`;
+    const winL = `L${raw}`;
+    const path = firstL !== winL ? `${firstL}→${winL}` : winL;
+    const scoreText =
+      winning && winning.score != null && winning.honesty != null
+        ? ` · ${winning.score}/${winning.honesty}`
+        : "";
+    return `${path}${scoreText}`;
+  }
   return `L${raw}`;
 }
 
-function boardCells(role, company, location, mode, ats, freedom, statusHtml, resume, edit, link, apply, del) {
+function freedomDetailTitle(row, pkg, attempts) {
+  const raw =
+    row && row.fabrication_freedom != null
+      ? row.fabrication_freedom
+      : pkg && pkg.fabrication_freedom != null
+        ? pkg.fabrication_freedom
+        : null;
+  if (!Array.isArray(attempts) || !attempts.length) {
+    return raw != null ? `Fabrication freedom level L${raw}` : "";
+  }
+  const lines = [`Fabrication freedom: L${raw != null ? raw : "—"}`];
+  lines.push(`${attempts.length} attempt(s) recorded:`);
+  attempts.forEach((att, i) => {
+    const actionPart = att.action ? ` [${att.action}]` : "";
+    lines.push(`  Attempt ${att.attempt || i + 1}: L${att.freedom} (ATS: ${att.score}, Honesty: ${att.honesty}${att.passed ? " — Passed" : ""})${actionPart}`);
+  });
+  return lines.join("\n");
+}
+
+function boardCells(roleHtml, company, location, mode, ats, freedom, statusHtml, resume, edit, link, apply, del, freedomTitle) {
   return `
-      <td class="col-role" title="${escapeAttr(role || "Role")}">${escapeHtml(role || "Role")}</td>
+      <td class="col-role">${roleHtml}</td>
       <td class="col-company" title="${escapeAttr(company || "")}">${escapeHtml(company || "")}</td>
       <td class="col-location" title="${escapeAttr(location)}">${escapeHtml(location)}</td>
       <td class="col-mode">${escapeHtml(mode)}</td>
       <td class="col-ats ats-cell">${escapeHtml(ats)}</td>
-      <td class="col-freedom" title="${escapeAttr(freedom === "—" ? "" : "Fabrication freedom used")}">${escapeHtml(freedom)}</td>
+      <td class="col-freedom" title="${escapeAttr(freedomTitle || (freedom === "—" ? "" : "Fabrication freedom used"))}">${escapeHtml(freedom)}</td>
       <td class="col-status">${statusHtml}</td>
       <td class="col-resume">${resume}</td>
       <td class="col-edit">${edit}</td>
@@ -994,7 +1043,8 @@ function boardItem(row, pkg) {
     mode: workModeLabel((row && row.work_mode) || (pkg && pkg.work_mode)),
     ats: atsLabel(row, pkg),
     atsNum: Number.isFinite(atsNum) ? atsNum : -1,
-    freedom: freedomLabel(row, pkg),
+    freedom: freedomLabel(row, pkg, (pkg && pkg.attempts) || (row && row.attempts) || []),
+    freedomTitle: freedomDetailTitle(row, pkg, (pkg && pkg.attempts) || (row && row.attempts) || []),
     freedomNum: Number.isFinite(freedomNum) ? freedomNum : -1,
     status,
     statusLabel: applied && !inProgress ? "Applied" : statusLabel(row || status),
@@ -1006,6 +1056,7 @@ function boardItem(row, pkg) {
     modified: (pkg && pkg.modified) || 0,
     packageId,
     heldTab: heldTab || "",
+    attempts: (pkg && pkg.attempts) || (row && row.attempts) || [],
   };
 }
 
@@ -1085,6 +1136,27 @@ function appendBoardRow(body, item, active) {
   if (item.applied) tr.classList.add("is-applied-row");
   if (pkg && pkg.id) tr.dataset.id = pkg.id;
 
+  const attempts = Array.isArray(item.attempts) ? item.attempts : [];
+  const hasRetries = attempts.length > 1;
+  if (!state.expandedTrees) state.expandedTrees = new Set();
+  const isExpanded = Boolean(hasRetries && item.packageId && state.expandedTrees.has(item.packageId));
+
+  // Build role cell (with tree toggle if retries exist)
+  let roleHtml;
+  if (hasRetries) {
+    roleHtml = `
+      <div class="tree-role-wrap">
+        <button type="button" class="tree-toggle ghost" data-tree-id="${escapeAttr(item.packageId)}" aria-expanded="${isExpanded ? "true" : "false"}" title="Toggle ${attempts.length} retry attempts">
+          <span class="tree-toggle-icon">${isExpanded ? "▼" : "▶"}</span>
+        </button>
+        <span class="tree-role-title" title="${escapeAttr(item.role || "Role")}">${escapeHtml(item.role || "Role")}</span>
+        <span class="attempt-badge" title="${attempts.length} tailor attempts recorded">${attempts.length} att</span>
+      </div>
+    `;
+  } else {
+    roleHtml = `<span title="${escapeAttr(item.role || "Role")}">${escapeHtml(item.role || "Role")}</span>`;
+  }
+
   // Build status cell — for failed live rows add a tooltip + retry button
   let statusHtml;
   if (item.live && item.status === "failed" && row) {
@@ -1100,7 +1172,7 @@ function appendBoardRow(body, item, active) {
   }
 
   tr.innerHTML = boardCells(
-    item.role,
+    roleHtml,
     item.company,
     item.location,
     item.mode,
@@ -1111,8 +1183,26 @@ function appendBoardRow(body, item, active) {
     item.live ? liveEditCell(row) : editCell(pkg),
     item.live ? liveJobLink(row) : jobLinkCell(pkg),
     applyCell(row, pkg),
-    deleteCell(item.packageId, item.company, item.role)
+    deleteCell(item.packageId, item.company, item.role),
+    item.freedomTitle
   );
+
+  const treeBtn = tr.querySelector(".tree-toggle");
+  if (treeBtn) {
+    treeBtn.addEventListener("click", (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      const id = treeBtn.dataset.treeId;
+      if (!id) return;
+      if (state.expandedTrees.has(id)) {
+        state.expandedTrees.delete(id);
+      } else {
+        state.expandedTrees.add(id);
+      }
+      renderBoard(state.activeId);
+    });
+  }
+
   bindDelete(tr, item.packageId, row);
   bindRebuild(tr);
   bindApply(tr);
@@ -1133,6 +1223,63 @@ function appendBoardRow(body, item, active) {
     });
   }
   body.appendChild(tr);
+
+  // If tree is expanded, render the retry child rows right beneath this row
+  if (isExpanded) {
+    attempts.forEach((att, idx) => {
+      const childTr = document.createElement("tr");
+      childTr.className = "attempt-child-row" + (att.passed ? " attempt-passed" : " attempt-failed");
+      const isSelected = (att.attempt === attempts.length) || (att.passed && idx === attempts.length - 1);
+      const attLabel = `↳ Attempt ${att.attempt || (idx + 1)}${isSelected ? " (Final)" : ""}`;
+      const attAts = att.score != null ? String(att.score) : "—";
+      const attFreedom = att.freedom != null ? `L${att.freedom}` : "—";
+      const attHonesty = att.honesty != null ? `H:${att.honesty}` : "";
+
+      let attStatus;
+      if (att.passed) {
+        attStatus = `<span class="job-status job-status-ready">Passed</span>`;
+      } else if (att.honesty != null && att.min_honesty != null && att.honesty < att.min_honesty) {
+        attStatus = `<span class="job-status job-status-failed" title="Honesty gate failed (${att.honesty} < ${att.min_honesty})">Honesty low</span>`;
+      } else if (att.score != null && att.threshold != null && att.score < att.threshold) {
+        attStatus = `<span class="job-status job-status-failed" title="ATS threshold failed (${att.score} < ${att.threshold})">ATS low</span>`;
+      } else {
+        attStatus = `<span class="job-status job-status-failed">Failed</span>`;
+      }
+
+      const critiqueText = att.critique || att.action || "";
+      const critiqueTooltip = escapeAttr(
+        `Attempt ${att.attempt || idx + 1}: Score=${att.score}, Honesty=${att.honesty}, Freedom=L${att.freedom}\n${att.action ? "Action: " + att.action + "\n" : ""}${critiqueText ? "Critique: " + critiqueText : ""}`
+      );
+
+      const critiqueBtn = critiqueText
+        ? `<button type="button" class="critique-badge ghost" title="${critiqueTooltip}">Critique</button>`
+        : "—";
+
+      childTr.innerHTML = `
+        <td class="col-role"><span class="child-indent" title="${critiqueTooltip}">${escapeHtml(attLabel)}</span></td>
+        <td class="col-company child-muted">${escapeHtml(item.company || "")}</td>
+        <td class="col-location child-muted">—</td>
+        <td class="col-mode child-muted">${escapeHtml(attHonesty)}</td>
+        <td class="col-ats ats-cell">${escapeHtml(attAts)}</td>
+        <td class="col-freedom" title="Freedom level used">${escapeHtml(attFreedom)}</td>
+        <td class="col-status">${attStatus}</td>
+        <td class="col-resume child-muted">${critiqueBtn}</td>
+        <td class="col-edit child-muted">—</td>
+        <td class="col-link child-muted">—</td>
+        <td class="col-apply child-muted">—</td>
+        <td class="col-delete child-muted">—</td>
+      `;
+      if (item.packageId) {
+        childTr.tabIndex = 0;
+        childTr.style.cursor = "pointer";
+        childTr.addEventListener("click", (ev) => {
+          if (ev.target.closest("a, button, label, input")) return;
+          openPackage(item.packageId);
+        });
+      }
+      body.appendChild(childTr);
+    });
+  }
 }
 
 function bindRetry(tr) {
@@ -1470,6 +1617,12 @@ $("refresh").addEventListener("click", () => {
 const freedomSelect = $("fabrication-freedom-max");
 if (freedomSelect) {
   freedomSelect.addEventListener("change", () => {
+    saveFreedomSetting().catch((err) => setStrip(err.message, true));
+  });
+}
+const coverLetterToggle = $("generate-cover-letter");
+if (coverLetterToggle) {
+  coverLetterToggle.addEventListener("change", () => {
     saveFreedomSetting().catch((err) => setStrip(err.message, true));
   });
 }

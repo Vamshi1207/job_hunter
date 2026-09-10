@@ -2968,6 +2968,252 @@ class FabricationFreedomMatrixTests(unittest.TestCase):
         self.assertIsNotNone(once)
         self.assertIsNone(_trim_one_overflow_bullet(once))
 
+    def test_uncapped_auto_freedom_reaches_level_5(self):
+        from pipeline.fabrication import choose_fabrication_freedom, fabrication_freedom_max
+        from pipeline.config import Config
+
+        from unittest.mock import patch
+
+        cfg = Config(
+            {
+                "workspace": {"root": "/tmp"},
+                "pipeline": {"fabrication_freedom": "auto", "fabrication_freedom_max": 5},
+                "hunt": {"preferred_skills": ["python", "fastapi"]},
+            },
+            Path("/tmp"),
+        )
+        self.assertEqual(fabrication_freedom_max(cfg), 5)
+        severe_jd = (
+            "Staff Distributed Systems Engineer. "
+            "Required: TypeScript, GraphQL, Terraform, Snowflake, Databricks, Rust, Golang, Kotlin. "
+            "Extensive experience in multiple foreign tech stacks."
+        )
+        with patch("pipeline.tailor.source_of_truth_text", return_value="Python FastAPI AWS"):
+            choice = choose_fabrication_freedom(cfg, severe_jd, {"role": "Staff Engineer", "jd": severe_jd})
+        self.assertEqual(choice["mode"], "auto")
+        self.assertEqual(choice["level"], 5)
+        self.assertGreater(choice["gaps"], 5)
+
+    def test_cover_letter_toggle_and_validation(self):
+        from pipeline.tailor import should_generate_cover_letter, validate_tailored_output
+        from pipeline.config import Config
+
+        cfg_off = Config({"pipeline": {"generate_cover_letter": False}}, Path("/tmp"))
+        cfg_on = Config({"pipeline": {"generate_cover_letter": True}}, Path("/tmp"))
+        self.assertFalse(should_generate_cover_letter(cfg_off))
+        self.assertTrue(should_generate_cover_letter(cfg_on))
+
+        sample_parsed = {
+            "TITLE": "Software Engineer",
+            "SUMMARY": "Experienced engineer with a strong background in distributed systems.",
+            "JOB1_TITLE": "Software Engineer",
+            "JOB1_B1": "Built high-throughput distributed systems in Python.",
+            "JOB1_B2": "Engineered REST APIs with FastAPI.",
+            "JOB2_TITLE": "Software Engineer",
+            "JOB2_B1": "Managed data pipelines with Kafka.",
+            "JOB2_B2": "Deployed cloud infrastructure on AWS.",
+            "JOB3_TITLE": "Software Engineer",
+            "JOB3_B1": "Optimized database performance in PostgreSQL.",
+            "JOB3_B2": "Automated deployment processes with Docker.",
+            "SKILL_LANG": "Python, SQL",
+            "SKILL_ML": "LLMs, Agents",
+            "SKILL_DATA": "Kafka, Spark",
+            "SKILL_BACKEND": "FastAPI, Flask",
+            "SKILL_CLOUD": "AWS, Docker",
+            "LINKEDIN_DM": "Saw your post about the role and wanted to connect.",
+            "WHY_I_FIT": "1. Strong Python experience.\n2. Distributed systems background.\n3. Fast learner.",
+            "COVER_LETTER": "",  # Empty cover letter
+        }
+        # When disabled, empty cover letter is valid
+        valid_off, errors_off = validate_tailored_output(sample_parsed, cfg_off)
+        self.assertTrue(valid_off, f"Should be valid with cover letter disabled, got: {errors_off}")
+
+        # When enabled, empty cover letter triggers error
+        valid_on, errors_on = validate_tailored_output(sample_parsed, cfg_on)
+        self.assertFalse(valid_on)
+        self.assertTrue(any("COVER_LETTER" in err for err in errors_on))
+
+    def test_package_summary_includes_attempts_history(self):
+        from pipeline.reports import package_summary
+        from pipeline.config import Config
+
+        tmp = tempfile.TemporaryDirectory()
+        root = Path(tmp.name)
+        pkg_dir = root / "Acme-Engineer-2026-09-09"
+        pkg_dir.mkdir(parents=True)
+        eval_payload = {
+            "score": 85,
+            "honesty": 90,
+            "attempts": [
+                {"attempt": 1, "freedom": 1, "score": 75, "honesty": 92, "passed": False},
+                {"attempt": 2, "freedom": 2, "score": 85, "honesty": 90, "passed": True},
+            ],
+        }
+        (pkg_dir / "evaluation.json").write_text(json.dumps(eval_payload))
+        (pkg_dir / "job.json").write_text(json.dumps({"company": "Acme", "role": "Engineer"}))
+
+        cfg = Config({"workspace": {"root": str(root)}}, root)
+        summary = package_summary(cfg, pkg_dir)
+        self.assertEqual(len(summary.get("attempts", [])), 2)
+        self.assertEqual(summary["attempts"][0]["freedom"], 1)
+        self.assertEqual(summary["attempts"][1]["freedom"], 2)
+        tmp.cleanup()
+
+
+    def test_default_fabrication_freedom_max_is_4(self):
+        from pipeline.fabrication import fabrication_freedom_max
+        from pipeline.config import Config
+
+        cfg = Config(
+            {
+                "workspace": {"root": "/tmp"},
+                "pipeline": {"fabrication_freedom": "auto"},
+            },
+            Path("/tmp"),
+        )
+        self.assertEqual(fabrication_freedom_max(cfg), 4)
+
+    def test_cover_letter_schema_and_prompt_omitted_when_disabled(self):
+        from pipeline.tailor import all_tags, build_tailor_prompt, _tag_schema
+        from pipeline.config import Config
+
+        cfg_off = Config(
+            {"workspace": {"root": "/tmp"}, "pipeline": {"generate_cover_letter": False}},
+            Path("/tmp"),
+        )
+        self.assertNotIn("COVER_LETTER", all_tags(cfg_off))
+        schema_off = _tag_schema(cfg_off)
+        self.assertNotIn("<COVER_LETTER>", schema_off)
+        self.assertNotIn("<R_COVER_LETTER>", schema_off)
+        prompt_off = build_tailor_prompt(cfg_off, "Acme", "Engineer", "Python Developer")
+        self.assertNotIn("<COVER_LETTER>", prompt_off)
+        self.assertNotIn("Cover letter template:", prompt_off)
+
+        cfg_on = Config(
+            {"workspace": {"root": "/tmp"}, "pipeline": {"generate_cover_letter": True}},
+            Path("/tmp"),
+        )
+        self.assertIn("COVER_LETTER", all_tags(cfg_on))
+        schema_on = _tag_schema(cfg_on)
+        self.assertIn("<COVER_LETTER>", schema_on)
+        self.assertIn("<R_COVER_LETTER>", schema_on)
+        prompt_on = build_tailor_prompt(cfg_on, "Acme", "Engineer", "Python Developer")
+        self.assertIn("<COVER_LETTER>", prompt_on)
+
+    def test_process_job_winning_attempt_selection_prioritizes_passed(self):
+        import asyncio
+        from unittest.mock import patch, AsyncMock
+        from pipeline.run_pipeline import process_job
+        from pipeline.config import Config
+
+        tmp = tempfile.TemporaryDirectory()
+        root = Path(tmp.name)
+        cfg = Config(
+            {
+                "workspace": {"root": str(root), "tracker": str(root / "tracker.md"), "applications": str(root / "apps")},
+                "pipeline": {
+                    "ats_threshold": 80,
+                    "max_attempts": 2,
+                    "fabrication_freedom": "auto",
+                    "fabrication_freedom_max": 4,
+                },
+                "user": {"full_name": "Test User"},
+            },
+            root,
+        )
+
+        job = {
+            "company": "SelectCo",
+            "role": "Python Engineer",
+            "jd": "Python distributed systems engineer with FastAPI and Kafka.",
+        }
+
+        # Attempt 1 has score 95 but honesty 40 (fails honesty gate -> failing)
+        # Attempt 2 has score 82 and honesty 90 (passes both gates -> passed)
+        llm_out_1 = (
+            "<TITLE>Python Engineer</TITLE>\n"
+            "<SUMMARY>Senior Python engineer with distributed systems experience across large scale systems.</SUMMARY>\n"
+            "<JOB1_TITLE>Software Engineer</JOB1_TITLE>\n"
+            "<JOB1_B1>Architected Python backend services handling millions of events daily.</JOB1_B1>\n"
+            "<JOB1_B2>Optimized FastAPI endpoints reducing latency by 40%.</JOB1_B2>\n"
+            "<JOB2_TITLE>Software Engineer</JOB2_TITLE>\n"
+            "<JOB2_B1>Built distributed pipelines with Kafka.</JOB2_B1>\n"
+            "<JOB2_B2>Deployed services on AWS with Docker.</JOB2_B2>\n"
+            "<JOB3_TITLE>Software Engineer</JOB3_TITLE>\n"
+            "<JOB3_B1>Managed PostgreSQL databases and schema migrations.</JOB3_B1>\n"
+            "<JOB3_B2>Configured CI/CD automation pipelines.</JOB3_B2>\n"
+            "<SKILL_LANG>Python, SQL</SKILL_LANG>\n"
+            "<SKILL_ML>LLMs, NLP</SKILL_ML>\n"
+            "<SKILL_DATA>Kafka, Redis</SKILL_DATA>\n"
+            "<SKILL_BACKEND>FastAPI, Django</SKILL_BACKEND>\n"
+            "<SKILL_CLOUD>AWS, Docker</SKILL_CLOUD>\n"
+            "<LINKEDIN_DM>Hi there, saw your posting for Python Engineer and would love to connect about distributed systems work.</LINKEDIN_DM>\n"
+            "<WHY_I_FIT>1. Python depth.\n2. Distributed systems.\n3. Fast execution.</WHY_I_FIT>\n"
+        )
+        llm_out_2 = (
+            "<TITLE>Python Engineer</TITLE>\n"
+            "<SUMMARY>Grounded Python engineer with verified production experience across distributed systems.</SUMMARY>\n"
+            "<JOB1_TITLE>Software Engineer</JOB1_TITLE>\n"
+            "<JOB1_B1>Architected Python backend services handling millions of events daily.</JOB1_B1>\n"
+            "<JOB1_B2>Optimized FastAPI endpoints reducing latency by 40%.</JOB1_B2>\n"
+            "<JOB2_TITLE>Software Engineer</JOB2_TITLE>\n"
+            "<JOB2_B1>Built distributed pipelines with Kafka.</JOB2_B1>\n"
+            "<JOB2_B2>Deployed services on AWS with Docker.</JOB2_B2>\n"
+            "<JOB3_TITLE>Software Engineer</JOB3_TITLE>\n"
+            "<JOB3_B1>Managed PostgreSQL databases and schema migrations.</JOB3_B1>\n"
+            "<JOB3_B2>Configured CI/CD automation pipelines.</JOB3_B2>\n"
+            "<SKILL_LANG>Python, SQL</SKILL_LANG>\n"
+            "<SKILL_ML>LLMs, NLP</SKILL_ML>\n"
+            "<SKILL_DATA>Kafka, Redis</SKILL_DATA>\n"
+            "<SKILL_BACKEND>FastAPI, Django</SKILL_BACKEND>\n"
+            "<SKILL_CLOUD>AWS, Docker</SKILL_CLOUD>\n"
+            "<LINKEDIN_DM>Hi there, saw your posting for Python Engineer and would love to connect about distributed systems work.</LINKEDIN_DM>\n"
+            "<WHY_I_FIT>1. Python depth.\n2. Distributed systems.\n3. Fast execution.</WHY_I_FIT>\n"
+        )
+
+        outputs = [llm_out_1, llm_out_2]
+        evals = [
+            {"score": 95, "honesty": 40, "critique": "Over-invented claims.", "gaps": []},
+            {"score": 82, "honesty": 90, "critique": "Solid and truthful match.", "gaps": []},
+        ]
+
+        def fake_llm(*args, **kwargs):
+            return outputs.pop(0) if outputs else ""
+
+        def fake_eval(*args, **kwargs):
+            return dict(evals.pop(0)) if evals else {"score": 0, "honesty": 0}
+
+        async def run_test():
+            out_path = root / "apps" / "SelectCo-Python-Engineer-2026-09-09"
+            out_path.mkdir(parents=True, exist_ok=True)
+            mock_save = AsyncMock(return_value=out_path)
+            with patch("pipeline.run_pipeline.generate_tailored_materials", side_effect=fake_llm), \
+                 patch("pipeline.run_pipeline.evaluate_ats_score", side_effect=fake_eval), \
+                 patch("pipeline.run_pipeline.save_materials", new=mock_save), \
+                 patch("pipeline.run_pipeline.render_playbook", return_value="Playbook"):
+                progress_messages = []
+                out_dir = await process_job(
+                    job,
+                    fill_form=False,
+                    on_progress=lambda m: progress_messages.append(m),
+                    cfg=cfg,
+                )
+                self.assertIsNotNone(out_dir)
+                self.assertEqual(mock_save.call_count, 1)
+                saved_call_args = mock_save.call_args
+                saved_llm_output = saved_call_args.args[2] if len(saved_call_args.args) > 2 else saved_call_args.kwargs.get("llm_output")
+                saved_eval = saved_call_args.kwargs.get("eval_result") or (saved_call_args.args[3] if len(saved_call_args.args) > 3 else {})
+                # Attempt 2 (which passed) must win, even though Attempt 1 had score 95 > 82
+                self.assertEqual(saved_llm_output, llm_out_2)
+                self.assertEqual(saved_eval["score"], 82)
+                self.assertEqual(saved_eval["honesty"], 90)
+                # Freedom of winning attempt must be saved
+                self.assertEqual(job["fabrication_freedom"], saved_eval["fabrication_freedom"])
+                self.assertTrue(any("Honesty low" in m for m in progress_messages))
+
+        asyncio.run(run_test())
+        tmp.cleanup()
+
 
 if __name__ == "__main__":
     unittest.main()

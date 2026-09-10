@@ -10,7 +10,7 @@ import re
 from pathlib import Path
 
 from pipeline.bank import load_experience_bank, load_optional
-from pipeline.config import Config, load_config
+from pipeline.config import Config, load_config, should_generate_cover_letter
 from pipeline.cv_format import (
     apply_cv_format,
     bullet_count_max,
@@ -54,9 +54,14 @@ DEFAULT_JOB_BLOCKS = [
 
 def _positive_int(value, default: int) -> int:
     try:
-        return max(1, int(value))
+        val = int(value)
+        return val if val > 0 else default
     except (TypeError, ValueError):
         return default
+
+
+# Re-exported from pipeline.config for backwards compatibility
+__all_cover_letter = should_generate_cover_letter
 
 
 def job_blocks(cfg: Config | None = None) -> list[dict]:
@@ -205,10 +210,14 @@ def resume_tags(cfg: Config | None = None) -> list[str]:
 
 
 def all_tags(cfg: Config | None = None) -> list[str]:
-    return resume_tags(cfg) + EXTRA_TAGS
+    cfg = cfg or load_config()
+    extras = [t for t in EXTRA_TAGS if t != "COVER_LETTER" or should_generate_cover_letter(cfg)]
+    return resume_tags(cfg) + extras
 
 
 def _tag_schema(cfg: Config | None = None) -> str:
+    cfg = cfg or load_config()
+    gen_cover = should_generate_cover_letter(cfg)
     lines = [
         "<R_TITLE>why this tagline</R_TITLE>",
         "<TITLE>one-line tagline matching the role (no name, no location, no inflated seniority)</TITLE>",
@@ -227,11 +236,14 @@ def _tag_schema(cfg: Config | None = None) -> str:
     for name, label in SKILL_BLOCKS:
         lines.append(f"<R_{name}>why this order</R_{name}>")
         lines.append(f"<{name}>comma-separated list only — do not repeat '{label}:'</{name}>")
-    lines.extend(
-        [
-            "",
+    lines.append("")
+    if gen_cover:
+        lines.extend([
             "<R_COVER_LETTER>cover letter angle</R_COVER_LETTER>",
             "<COVER_LETTER>250-400 word cover letter</COVER_LETTER>",
+        ])
+    lines.extend(
+        [
             "<R_LINKEDIN_DM>why this hook</R_LINKEDIN_DM>",
             "<LINKEDIN_DM>≤60 word cold DM</LINKEDIN_DM>",
             "<R_WHY_I_FIT>which JD requirements these map to</R_WHY_I_FIT>",
@@ -253,7 +265,10 @@ def _retry_section(feedback_history: str, cfg: Config | None = None) -> str:
 {feedback_history}
 
 {retry_freedom_rules(level)}
-If a JD requirement cannot be met within the current fabrication freedom level, leave it as a gap or drop a lower-value bullet to protect the page budget.
+RETRY DIRECTIVE:
+- If previous attempt failed honesty: remove or soften the flagged unearned claims, restoring verified facts from the master CV / bank.
+- If previous attempt failed ATS score / keyword coverage: integrate the identified missing keywords from 'Gaps' directly into Key Skills and the relevant bullet contexts permitted under freedom level {level}.
+- If a JD requirement cannot be met within the current fabrication freedom level, leave it as a gap or drop a lower-value bullet to protect the page budget.
 """
 
 
@@ -262,7 +277,8 @@ def build_tailor_prompt(cfg: Config, company: str, role: str, jd_text: str, feed
     project_mem = load_optional(cfg.root / "memory" / "project.md")
     feedback_mem = load_optional(cfg.root / "memory" / "feedback.md")
     bank = load_experience_bank(cfg.experience_bank_dir)
-    cover_tpl = load_optional(cfg.templates_dir / "cover_letter.template.md")
+    gen_cover = should_generate_cover_letter(cfg)
+    cover_tpl = load_optional(cfg.templates_dir / "cover_letter.template.md") if gen_cover else ""
     dm_tpl = load_optional(cfg.templates_dir / "linkedin_dm.template.md")
     why_tpl = load_optional(cfg.templates_dir / "why_i_fit.template.md")
     visa = cfg.get("visa.description") or cfg.get("visa.status") or ""
@@ -270,6 +286,13 @@ def build_tailor_prompt(cfg: Config, company: str, role: str, jd_text: str, feed
     dm_words = cfg.get("outreach.linkedin_dm_max_words", 60)
     level = fabrication_freedom(cfg)
     ats_threshold = int(cfg.get("pipeline.ats_threshold", 80) or 80)
+
+    cover_tpl_block = f"Cover letter template:\n{cover_tpl}\n\n" if gen_cover and cover_tpl else ""
+    cover_instruction = (
+        f"- Cover letter: 250-400 words, cite something specific about {company} if the JD contains it; otherwise stay concrete about the role. Include the visa line if relevant.\n"
+        if gen_cover
+        else ""
+    )
 
     return f"""
 You are tailoring application materials for {cfg.full_name} applying to '{role}' at {company}.
@@ -290,11 +313,8 @@ Visa: {visa}
 ### Writing rules (must follow; fabrication limits come from FABRICATION FREEDOM below, not from inventing freely)
 {feedback_mem}
 
-### Cover letter / DM / why-I-fit templates
-Cover letter template:
-{cover_tpl}
-
-LinkedIn DM template:
+### Templates & Outreach
+{cover_tpl_block}LinkedIn DM template:
 {dm_tpl}
 
 Why I fit template:
@@ -313,19 +333,22 @@ LinkedIn DM max words: {dm_words}
 - If the bank has fewer bullets than needed, fill the rest from the master CV within the freedom level above.
 - Text changes only. Do not add/remove jobs, projects, education, or employers from the template.
 - Rewrite the tagline and summary for this role within the freedom level. Prefer interview-defensible claims at levels 0–3.
+- EXACT KEYWORD MATCHING: Where the candidate has verified experience with a concept required by the JD, use the JD's exact technical terminology (e.g. 'FastAPI microservices' instead of 'Python web services', 'Kafka consumer lag' instead of 'messaging delays') to ensure ATS exact-match detection.
+- BULLET ARCHITECTURE: Write every experience bullet with high density: [Strong Action Verb] + [Specific Framework/Tool/Context] + [Measurable Impact, Latency, Scale, or Architectural Outcome]. Avoid weak passive descriptions like 'responsible for' or 'worked on'.
 - Key skills: Reorder each skills list so JD-relevant items come first. What you may add is governed by FABRICATION FREEDOM above.
 - Job title lines: use the actual employer titles unless freedom level explicitly allows otherwise. Do not use Staff / Senior Staff / Principal unless those are the actual titles in the master CV.
 - Do not include dates in TITLE tags (dates are already in the HTML template).
-- Cover letter: 250-400 words, cite something specific about {company} if the JD contains it; otherwise stay concrete about the role. Include the visa line if relevant.
-- LinkedIn DM: ≤{dm_words} words, no emoji, no "hope this finds you well".
+{cover_instruction}- LinkedIn DM: ≤{dm_words} words, no emoji, no "hope this finds you well".
 - Why I fit: exactly 3 bullets, each ≤25 words, each tied to one JD requirement using evidence allowed at the current freedom level.
 - Hard page budget: the rendered PDF MUST fit `cv_format.pages` ({cfg.cv_pages}). Prefer fewer / shorter bullets over overflow.
+- Keep reasoning tags (<R_...>) ultra-concise (1 brief sentence or clause max) to conserve tokens and preserve output fidelity.
 
 ### OUTPUT FORMAT
 Return ONLY these tagged blocks. For every content tag except ROLE_TYPE and ANALYSIS, put <R_TAG> immediately before it.
 
 {_tag_schema(cfg)}
 """.strip()
+
 
 
 def generate_tailored_materials(company: str, role: str, jd_text: str, feedback_history: str = "") -> str:
@@ -404,9 +427,10 @@ def validate_tailored_output(parsed: dict, cfg: Config | None = None) -> tuple[b
             errors.append(f"Key skill block {name} ({label}) missing or empty")
 
     # 4. Cover letter & supporting materials
-    cover = (parsed.get("COVER_LETTER") or "").strip()
-    if not cover or len(cover.split()) < 80:
-        errors.append("COVER_LETTER missing or too short (< 80 words)")
+    if should_generate_cover_letter(cfg):
+        cover = (parsed.get("COVER_LETTER") or "").strip()
+        if not cover or len(cover.split()) < 80:
+            errors.append("COVER_LETTER missing or too short (< 80 words)")
 
     dm = (parsed.get("LINKEDIN_DM") or "").strip()
     if not dm or len(dm.split()) < 10:
@@ -465,7 +489,7 @@ def build_critic_prompt(
         else "overall score MUST be <= honesty."
     )
     return f"""
-You are a resume auditor. Score keyword coverage and honesty for fabrication freedom level {level}/5.
+You are a rigorous ATS auditor and truthfulness verifier. Score keyword coverage and honesty for fabrication freedom level {level}/5.
 
 ### Job description
 {jd_text}
@@ -478,12 +502,16 @@ You are a resume auditor. Score keyword coverage and honesty for fabrication fre
 
 Rules:
 - Target ATS score threshold: {ats_threshold}. Critique should help the writer reach it within freedom level {level}.
-- keyword_coverage (0-100): how well the tailored resume surfaces JD-relevant keywords allowed at this freedom level.
+- keyword_coverage (0-100): evaluate exact match of required hard skills, tools, frameworks, and architectural domain concepts from the JD.
 - honesty (0-100): score relative to freedom level {level} (see below), not absolute literalism when higher freedom is set.
 - {score_cap}
 - Hard page budget reminder: critique may require dropping bullets to fit {cfg.cv_pages} page(s).
 {critic_freedom_rules(level)}
-- If the JD requires something absent and freedom does not allow filling it, list it under gaps.
+- gaps: list specific missing hard skills, libraries, frameworks, or domain keywords from the JD that are not yet covered.
+- critique: provide 2-3 specific, actionable recommendations:
+  1. Exact missing JD keywords from 'gaps' to weave into Key Skills or bullets within freedom {level}.
+  2. Any honesty violations (unearned technologies or metrics) that must be removed/softened.
+  3. Guidance on protecting the {cfg.cv_pages}-page budget.
 
 Return exactly this JSON:
 {{
@@ -491,7 +519,7 @@ Return exactly this JSON:
   "keyword_coverage": <int 0-100>,
   "honesty": <int 0-100>,
   "gaps": ["<gap>"],
-  "critique": "<what to change using only allowed_fixes for freedom {level}>"
+  "critique": "<actionable remediation instructions for freedom {level}>"
 }}
 """.strip()
 

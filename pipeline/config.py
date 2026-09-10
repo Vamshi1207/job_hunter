@@ -49,6 +49,14 @@ def load_config(force: bool = False):
     if _CACHE is not None and not force:
         return _CACHE
     root = detect_root()
+    env_file = root / ".env"
+    if env_file.exists():
+        try:
+            import dotenv
+
+            dotenv.load_dotenv(env_file)
+        except ImportError:
+            pass
     example = _read_yaml(root / "config.example.yaml")
     overlay = _read_yaml(root / "config.yaml")
     merged = _deep_merge(example, overlay)
@@ -64,6 +72,17 @@ def _deep_merge(base: dict, overlay: dict) -> dict:
         else:
             out[key] = value
     return out
+
+
+def should_generate_cover_letter(cfg: Config | None = None) -> bool:
+    """Return True if cover letter generation is enabled in config/runtime."""
+    cfg = cfg or load_config()
+    raw = cfg.get("pipeline.generate_cover_letter")
+    if raw is None:
+        raw = cfg.get("pipeline.cover_letter", False)
+    if isinstance(raw, str):
+        return raw.strip().lower() in ("true", "1", "yes", "on")
+    return bool(raw)
 
 
 class Config:
@@ -115,6 +134,10 @@ class Config:
     @property
     def cv_stem(self) -> str:
         return f"{self.full_name.replace(' ', '_')}_CV"
+
+    @property
+    def should_generate_cover_letter(self) -> bool:
+        return should_generate_cover_letter(self)
 
     @property
     def applications_dir(self) -> Path:

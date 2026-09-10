@@ -216,8 +216,6 @@ def _call_nvidia(prompt: str, cfg, *, timeout: int, effort: str, model: str | No
     _limiter_for(cfg).acquire()
     model = (model or str(cfg.get("pipeline.model") or NVIDIA_DEFAULT_MODEL)).strip()
     is_deepseek = "deepseek" in model.lower()
-    is_gemma = "gemma" in model.lower()
-    is_lightning = "lightning" in model.lower()
     base_url = str(cfg.get("pipeline.nvidia.base_url") or NVIDIA_DEFAULT_URL).rstrip("/")
     temperature = float(cfg.get("pipeline.nvidia.temperature", 1.0 if effort == "high" else 0.3))
     top_p = float(cfg.get("pipeline.nvidia.top_p", 0.95))
@@ -226,18 +224,8 @@ def _call_nvidia(prompt: str, cfg, *, timeout: int, effort: str, model: str | No
     if is_deepseek:
         stream = False
         extra_body = {"chat_template_kwargs": {"thinking": True, "reasoning_effort": "high"}}
-    elif is_gemma:
-        # NVIDIA catalog: google/gemma-4-31b-it uses enable_thinking (same as sample payload).
-        stream = True
-        extra_body = {"chat_template_kwargs": {"enable_thinking": True}}
-    elif is_lightning:
-        stream = True
-        reasoning_budget = int(cfg.get("pipeline.nvidia.reasoning_budget", min(4096, max(1024, max_tokens // 4))))
-        extra_body = {
-            "chat_template_kwargs": {"enable_thinking": True},
-            "reasoning_budget": reasoning_budget,
-        }
     else:
+        # Nemotron 3 Ultra (default) and Gemma 4 both use stream=True and enable_thinking=True
         stream = True
         extra_body = {"chat_template_kwargs": {"enable_thinking": True}}
 
