@@ -3057,8 +3057,47 @@ class FabricationFreedomMatrixTests(unittest.TestCase):
         self.assertEqual(len(summary.get("attempts", [])), 2)
         self.assertEqual(summary["attempts"][0]["freedom"], 1)
         self.assertEqual(summary["attempts"][1]["freedom"], 2)
+        self.assertTrue(summary.get("passed"))
+        self.assertEqual(summary.get("apply_signal"), "APPLY")
+
+        # Now test failed gates
+        fail_payload = {
+            "score": 50,
+            "honesty": 60,
+            "passed": False,
+            "attempts": [
+                {"attempt": 1, "freedom": 0, "score": 50, "honesty": 60, "passed": False},
+            ],
+        }
+        (pkg_dir / "evaluation.json").write_text(json.dumps(fail_payload))
+        fail_summary = package_summary(cfg, pkg_dir)
+        self.assertFalse(fail_summary.get("passed"))
+        self.assertEqual(fail_summary.get("apply_signal"), "REJECT")
+
         tmp.cleanup()
 
+    def test_job_progress_treats_gate_pass_as_apply_signal(self):
+        from pipeline.hunt import JobProgress
+
+        events = []
+        board = JobProgress(events.append)
+        listing = {"company": "DualEntry", "role": "Backend Lead", "url": "https://example.com/dual"}
+        board.found(listing)
+        board.queue([listing])
+        board.working(listing)
+
+        # Finished package, but failed gates (e.g. ATS 55 < 80)
+        board.ready(listing, "dualentry-backend-2026-09-09", ats_score=55, passed=False)
+
+        package_event = next(e for e in events if e["type"] == "package")
+        self.assertEqual(package_event["status"], "failed_gates")
+        self.assertFalse(package_event["passed"])
+        self.assertIn("Below gates", package_event["line"])
+
+        progress_event = events[-1]
+        self.assertEqual(progress_event["ready"], 0)
+        self.assertEqual(progress_event["failed_gates"], 1)
+        self.assertIn("1 below gates", progress_event["line"])
 
     def test_default_fabrication_freedom_max_is_4(self):
         from pipeline.fabrication import fabrication_freedom_max

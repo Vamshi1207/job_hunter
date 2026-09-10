@@ -198,6 +198,17 @@ def package_summary(cfg: Config, folder: Path) -> dict:
         freedom = int(freedom) if freedom is not None and freedom != "" else None
     except (TypeError, ValueError):
         freedom = None
+    passed = eval_data.get("passed")
+    if passed is None:
+        passed = job_meta.get("passed")
+    if passed is None and eval_data.get("score") is not None and eval_data.get("honesty") is not None:
+        threshold = int(cfg.data.get("pipeline", {}).get("ats_threshold", 80))
+        from pipeline.fabrication import honesty_gate
+
+        min_honesty = honesty_gate(freedom if freedom is not None else 0, threshold)
+        passed = bool(int(eval_data["score"]) >= threshold and int(eval_data["honesty"]) >= min_honesty)
+    apply_signal = "APPLY" if passed else "REJECT" if passed is not None else "UNKNOWN"
+
     return {
         "id": folder.name,
         "company": company,
@@ -220,6 +231,8 @@ def package_summary(cfg: Config, folder: Path) -> dict:
         "score": eval_data.get("score"),
         "ats_score": eval_data.get("score"),
         "honesty": eval_data.get("honesty"),
+        "passed": passed,
+        "apply_signal": apply_signal,
         "fabrication_freedom": freedom,
         "fabrication_freedom_mode": job_meta.get("fabrication_freedom_mode")
         or eval_data.get("fabrication_freedom_mode")
@@ -234,6 +247,8 @@ def package_summary(cfg: Config, folder: Path) -> dict:
         "evaluation": {
             "score": eval_data.get("score"),
             "honesty": eval_data.get("honesty"),
+            "passed": passed,
+            "apply_signal": apply_signal,
             "keyword_coverage": eval_data.get("keyword_coverage"),
             "critique": eval_data.get("critique") or "",
             "gaps": eval_data.get("gaps") or [],

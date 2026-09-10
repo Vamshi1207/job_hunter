@@ -24,6 +24,7 @@ _ROW_FIELDS = frozenset(
         "apply_url",
         "apply_kind",
         "fabrication_freedom",
+        "passed",
     }
 )
 
@@ -85,12 +86,14 @@ def job_row_event(listing: dict, *, status: str, event_type: str, **extra: Any) 
 
 
 def progress_snapshot(rows: list[dict]) -> dict:
-    ready = working = waiting = skipped = failed = stopped = 0
+    ready = working = waiting = skipped = failed = stopped = failed_gates = 0
     working_details: list[str] = []
     for row in rows:
         status = row.get("status") or ""
         if status == "ready":
             ready += 1
+        elif status in {"failed_gates", "below_gates"}:
+            failed_gates += 1
         elif status == "working":
             working += 1
             detail = (row.get("detail") or "").strip()
@@ -104,7 +107,7 @@ def progress_snapshot(rows: list[dict]) -> dict:
             failed += 1
         elif status == "stopped":
             stopped += 1
-    processed = ready + skipped + failed + stopped
+    processed = ready + skipped + failed + stopped + failed_gates
     total = len(rows)
     parts = [f"Found {total}", f"{processed} processed"]
     if working_details:
@@ -113,6 +116,8 @@ def progress_snapshot(rows: list[dict]) -> dict:
         parts.append(f"{working} tailoring")
     if waiting:
         parts.append(f"{waiting} waiting")
+    if failed_gates:
+        parts.append(f"{failed_gates} below gates")
     if skipped:
         parts.append(f"{skipped} skipped")
     if failed:
@@ -123,6 +128,7 @@ def progress_snapshot(rows: list[dict]) -> dict:
         "type": "progress",
         "found": total,
         "ready": ready,
+        "failed_gates": failed_gates,
         "working": working,
         "waiting": waiting,
         "skipped": skipped,
@@ -265,15 +271,29 @@ class JobProgress:
             **extra,
         )
 
-    def ready(self, listing: dict, package_id: str, *, skipped: bool = False, ats_score=None, fabrication_freedom=None) -> None:
+    def ready(
+        self,
+        listing: dict,
+        package_id: str,
+        *,
+        skipped: bool = False,
+        ats_score=None,
+        fabrication_freedom=None,
+        passed: bool | None = None,
+    ) -> None:
         company, role, _url = row_key(listing)
-        status = "skipped" if skipped else "ready"
-        line = (
-            f"Already processed {company} — {role}. Skipping."
-            if skipped
-            else f"Ready: {company} — {role}"
-        )
-        extra = {"package_id": package_id, "line": line}
+        if skipped:
+            status = "skipped"
+            line = f"Already processed {company} — {role}. Skipping."
+        elif passed is False:
+            status = "failed_gates"
+            line = (
+                f"Below gates ({ats_score if ats_score is not None else '—'} ATS): {company} — {role}"
+            )
+        else:
+            status = "ready"
+            line = f"Ready: {company} — {role}"
+        extra = {"package_id": package_id, "line": line, "passed": passed}
         if ats_score is not None:
             extra["ats_score"] = ats_score
         freedom = fabrication_freedom if fabrication_freedom is not None else listing.get("fabrication_freedom")
@@ -420,6 +440,16 @@ async def hunt_and_tailor(
                     remember_apply_target(cfg, job)
                 except Exception as exc:
                     log.warning("Could not append jobs.yaml: %s", exc)
+
+                has_passed = job.get("passed")
+                if has_passed is None:
+                    try:
+                        eval_path = output_dir / "evaluation.json"
+                        if eval_path.exists():
+                            has_passed = json.loads(eval_path.read_text()).get("passed")
+                    except (TypeError, AttributeError, OSError, json.JSONDecodeError):
+                        pass
+
                 board.ready(
                     job,
                     output_dir.name,
@@ -427,6 +457,7 @@ async def hunt_and_tailor(
                     fabrication_freedom=job.get("fabrication_freedom")
                     if job.get("fabrication_freedom") is not None
                     else _package_freedom(output_dir),
+                    passed=has_passed,
                 )
             else:
                 board.failed(job, f"No package for {job['company']} — {job['role']}")
@@ -465,10 +496,18 @@ async def hunt_and_tailor(
         prior = find_existing_package(cfg, job)
         if prior:
             log.info("Already processed %s — %s. Skipping.", job["company"], job["role"])
+            prior_passed = None
+            try:
+                eval_path = prior / "evaluation.json"
+                if eval_path.exists():
+                    prior_passed = json.loads(eval_path.read_text()).get("passed")
+            except (TypeError, AttributeError, OSError, json.JSONDecodeError):
+                pass
             board.ready(
                 job,
                 prior.name,
                 skipped=True,
+                passed=prior_passed,
                 ats_score=_ats_score(prior),
                 fabrication_freedom=_package_freedom(prior),
             )

@@ -239,6 +239,8 @@ h2 { font-size: 1.15rem; }
 }
 .job-status-ready { color: #1f6b3a; }
 .job-status-applied { color: var(--forest); }
+.job-status-failed-gates,
+.job-status-below-gates { color: #b45309; }
 .job-status-skipped,
 .job-status-stopped { color: #5a6a7a; }
 .job-status-failed { color: #8a2b2b; }
@@ -665,6 +667,17 @@ h2 { font-size: 1.15rem; }
   font-size: 0.78rem;
   padding: 0.28rem 0.7rem;
   letter-spacing: 0.02em;
+}
+
+.apply-btn.apply-btn-warning {
+  background: #fef3c7;
+  color: #92400e;
+  border-color: #f59e0b;
+}
+
+.apply-btn.apply-btn-warning:hover {
+  background: #fde68a;
+  color: #78350f;
 }
 
 .apply-form-url {

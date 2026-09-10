@@ -369,6 +369,7 @@ function statusLabel(row) {
   if (status === "queued") return "Waiting";
   if (status === "working") return detail || "Tailoring";
   if (status === "ready") return "Ready";
+  if (status === "failed_gates" || status === "below_gates") return "Below Gates";
   if (status === "applied") return "Applied";
   if (status === "skipped") return "Skipped";
   if (status === "stopped") return "Stopped";
@@ -672,8 +673,21 @@ function applyCell(row, pkg) {
         <span class="applied-timer" aria-live="polite"></span>
       </label>`
     : "";
+  const passed =
+    row && row.passed !== undefined
+      ? row.passed
+      : pkg && pkg.passed !== undefined
+        ? pkg.passed
+        : null;
+  const isFailedGates = passed === false;
+  const btnClass = isFailedGates ? "apply-btn apply-btn-warning" : "apply-btn";
+  const btnTitle = isFailedGates
+    ? "Gates not cleared (below ATS or honesty threshold). Review carefully before applying."
+    : "";
+  const btnText = isFailedGates ? "Review & Apply" : applyKindLabel(kind);
+
   return `<div class="apply-cell">
-    <button type="button" class="apply-btn" data-id="${escapeAttr(id)}" data-url="${escapeAttr(posting)}" data-apply-url="${escapeAttr(applyUrl)}" data-kind="${escapeAttr(kind)}" data-company="${escapeAttr((row && row.company) || (pkg && pkg.company) || "")}" data-role="${escapeAttr((row && row.role) || (pkg && pkg.role) || "")}">${escapeHtml(applyKindLabel(kind))}</button>
+    <button type="button" class="${btnClass}" data-id="${escapeAttr(id)}" data-url="${escapeAttr(posting)}" data-apply-url="${escapeAttr(applyUrl)}" data-kind="${escapeAttr(kind)}" data-company="${escapeAttr((row && row.company) || (pkg && pkg.company) || "")}" data-role="${escapeAttr((row && row.role) || (pkg && pkg.role) || "")}" title="${escapeAttr(btnTitle)}">${escapeHtml(btnText)}</button>
     ${caption}
     ${mark}
   </div>`;
@@ -1015,8 +1029,16 @@ function boardItem(row, pkg) {
   const packageId = (row && row.package_id) || (pkg && pkg.id) || "";
   const heldTab = packageId ? state.heldUntilRefresh.get(packageId) : "";
   const applied = Boolean((pkg && pkg.applied) || (row && row.applied));
-  const status = live ? row.status || "found" : applied ? "applied" : "ready";
+  const passed =
+    row && row.passed !== undefined
+      ? row.passed
+      : pkg && pkg.passed !== undefined
+        ? pkg.passed
+        : null;
+  const defaultStatus = applied ? "applied" : passed === false ? "failed_gates" : "ready";
+  const status = live ? row.status || "found" : defaultStatus;
   const inProgress = ["found", "queued", "working"].includes(status);
+  const isBelowGates = !inProgress && (status === "failed_gates" || status === "below_gates" || (!applied && passed === false));
   const resumeText = pkg && pkg.pdf_name ? "PDF" : "—";
   const hasHtml = Boolean(pkg && (pkg.html_name || pkg.docx_name || pkg.pages_name));
   const posting = (row && row.url) || (pkg && pkg.url) || "";
@@ -1036,7 +1058,9 @@ function boardItem(row, pkg) {
     pkg,
     live,
     applied,
-    group: inProgress ? "progress" : committedApplied ? "applied" : "ready",
+    passed,
+    applySignal: passed === true ? "APPLY" : passed === false ? "REJECT" : "UNKNOWN",
+    group: inProgress ? "progress" : committedApplied ? "applied" : isBelowGates ? "failed_gates" : "ready",
     role: (row && row.role) || (pkg && pkg.role) || "",
     company: (row && row.company) || (pkg && pkg.company) || "",
     location: locationLabel(row, pkg),
@@ -1080,6 +1104,7 @@ function displayTab(item) {
 
 function statusTone(item) {
   if (item.applied && item.group !== "progress") return "applied";
+  if (item.status === "failed_gates" || item.status === "below_gates") return "failed-gates";
   return item.status || "found";
 }
 
@@ -1360,6 +1385,7 @@ function renderBoard(active) {
   const matched = sortItems(all.filter(itemMatchesSearch).filter((item) => displayTab(item) === tab));
   const progress = matched.filter((item) => item.group === "progress");
   const ready = matched.filter((item) => item.group === "ready");
+  const belowGates = matched.filter((item) => item.group === "failed_gates");
   if (!matched.length) {
     const empty =
       tab === "applied" && !(state.board.query || "").trim()
@@ -1384,6 +1410,7 @@ function renderBoard(active) {
   } else {
     appendGroup(body, "In progress", progress, active);
     appendGroup(body, "Ready to apply", ready, active);
+    appendGroup(body, "Below gates (Review)", belowGates, active);
   }
   setBoardHeading({
     ready: ready.length,

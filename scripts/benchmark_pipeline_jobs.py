@@ -237,9 +237,19 @@ async def run_benchmark(job_ids: list[str] | None = None, clean: bool = False):
         plain_text = (package_dir / "llm_output_raw.txt").read_text() if (package_dir / "llm_output_raw.txt").exists() else ""
         l0_violations = check_l0_unverified_markers(plain_text) if winning_freedom == 0 else []
 
-        print(f"  ✅ SUCCESS in {elapsed}s:")
+        has_passed = eval_data.get("passed")
+        if has_passed is None:
+            threshold = int(cfg.data.get("pipeline", {}).get("ats_threshold", 80))
+            from pipeline.fabrication import honesty_gate
+
+            min_honesty = honesty_gate(winning_freedom, threshold)
+            has_passed = bool((score or 0) >= threshold and (honesty or 0) >= min_honesty)
+
+        apply_signal = "APPLY" if has_passed else "REJECT"
+        print(f"  {'✅' if has_passed else '⚠️'} PACKAGE WRITTEN in {elapsed}s (Gates Passed: {has_passed} → {apply_signal}):")
         print(f"     Freedom: L{initial_choice['level']} initial → L{winning_freedom} winning ({level_label(winning_freedom)})")
         print(f"     ATS: {score}/100 | Honesty: {honesty}/100 | Attempts: {len(attempts)}")
+        print(f"     Gate Pass: {has_passed} ({'Cleared' if has_passed else 'Gates Failed'}) | Apply Signal: {apply_signal}")
         print(f"     Cover letter: {cl_status} | PDF: {pdf_ok} | Changes: {changes_ok}")
         if l0_violations:
             print(f"     ⚠️ L0 Stretch markers detected: {', '.join(l0_violations)}")
@@ -252,6 +262,8 @@ async def run_benchmark(job_ids: list[str] | None = None, clean: bool = False):
             "role": role,
             "type": job_type,
             "success": True,
+            "passed": has_passed,
+            "apply_signal": apply_signal,
             "elapsed_seconds": elapsed,
             "initial_freedom": initial_choice["level"],
             "initial_reason": initial_choice["reason"],
@@ -279,23 +291,24 @@ async def run_benchmark(job_ids: list[str] | None = None, clean: bool = False):
     out_file = ROOT / "benchmarks" / f"pipeline_benchmark_{timestamp}.json"
     out_file.write_text(json.dumps(out_records, indent=2))
 
-    print("\n" + "=" * 115)
+    print("\n" + "=" * 125)
     print(f"BENCHMARK FINISHED IN {total_time}s — Saved to: {out_file.name}")
-    print("-" * 115)
-    print(f"{'Company':<12} {'Type':<14} {'Init L':<7} {'Win L':<7} {'ATS':>4} {'Hon':>4} {'Att':>4} {'Time':>7} {'L0 Violations':<15} {'Status'}")
-    print("-" * 115)
+    print("-" * 125)
+    print(f"{'Company':<12} {'Type':<14} {'Init L':<7} {'Win L':<7} {'ATS':>4} {'Hon':>4} {'Att':>4} {'Time':>7} {'L0 Violations':<15} {'Apply Signal'}")
+    print("-" * 125)
     for r in out_records:
         if not r.get("success"):
-            print(f"{r['company']:<12} {r['type']:<14} {r.get('initial_freedom','-'):<7} {'-':<7} {'-':>4} {'-':>4} {'-':>4} {r['elapsed_seconds']:>6.1f}s {'-':<15} ❌ FAIL")
+            print(f"{r['company']:<12} {r['type']:<14} {r.get('initial_freedom','-'):<7} {'-':<7} {'-':>4} {'-':>4} {'-':>4} {r['elapsed_seconds']:>6.1f}s {'-':<15} ❌ PIPELINE FAIL")
         else:
             v_str = ", ".join(r["l0_violations"]) if r["l0_violations"] else "none (OK)"
+            signal_str = "✅ APPLY (Passed)" if r.get("passed") else "⚠️ REJECT (Gates failed)"
             print(
                 f"{r['company']:<12} {r['type']:<14} "
                 f"L{r['initial_freedom']:<6} L{r['winning_freedom']:<6} "
                 f"{r['ats_score']:>4} {r['honesty_score']:>4} {r['attempts_count']:>4} "
-                f"{r['elapsed_seconds']:>6.1f}s {v_str:<15} ✅ OK"
+                f"{r['elapsed_seconds']:>6.1f}s {v_str:<15} {signal_str}"
             )
-    print("=" * 115 + "\n")
+    print("=" * 125 + "\n")
 
 
 if __name__ == "__main__":

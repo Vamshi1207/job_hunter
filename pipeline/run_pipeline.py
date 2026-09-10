@@ -280,8 +280,10 @@ async def process_job(
 
     winning_eval["attempts"] = attempts_history
     winning_eval["fabrication_freedom"] = winning_freedom
+    winning_eval["passed"] = has_passed
     job["fabrication_freedom"] = winning_freedom
     job["attempts"] = attempts_history
+    job["passed"] = has_passed
 
     log.info(
         "Saved package for %s at winning freedom L%s (passed=%s, %s attempt(s))",
@@ -310,9 +312,10 @@ async def process_job(
     (output_dir / "playbook.md").write_text(playbook)
 
     channel = job.get("channel") or "jobs.yaml"
+    status_label = "✏️ draft" if has_passed else "⚠️ failed gates"
     append_tracker(
         cfg.tracker_path,
-        f"| {date.today().isoformat()} | {company} | {role} | {channel} | ✏️ draft | {output_dir} | |",
+        f"| {date.today().isoformat()} | {company} | {role} | {channel} | {status_label} | {output_dir} | |",
     )
 
     log.info("[REVIEW] Materials ready for %s", company)
@@ -321,10 +324,17 @@ async def process_job(
     log.info("  Playbook: %s", output_dir / "playbook.md")
     log.info("  Open the PDF, edit if needed, then paste from playbook.md. You click Submit.")
 
-    if fill_form:
+    if fill_form and has_passed:
         from pipeline.apply_bot import apply_to_job
 
         await apply_to_job(job.get("url") or "", str(pdf_path), str(cl_path))
+    elif fill_form and not has_passed:
+        log.warning(
+            "Skipping form auto-fill for %s: gates not passed (score %s, honesty %s).",
+            company,
+            winning_eval.get("score"),
+            winning_eval.get("honesty"),
+        )
     return output_dir
 
 
