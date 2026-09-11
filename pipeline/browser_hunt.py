@@ -252,6 +252,10 @@ def canonicalize_job_url(url: str) -> str:
         match = re.search(r"/jobs/view/(?:[^/]*?-)?(\d{6,})", path) or re.search(r"/jobs/view/(\d+)", path)
         if match:
             return f"https://www.linkedin.com/jobs/view/{match.group(1)}"
+        qs = parse_qs(parsed.query)
+        jid = (qs.get("currentJobId") or [None])[0]
+        if jid:
+            return f"https://www.linkedin.com/jobs/view/{jid}"
     if "indeed." in host:
         qs = parse_qs(parsed.query)
         jk = (qs.get("jk") or [None])[0]
@@ -301,6 +305,8 @@ def collect_job_links(html: str, base_url: str, contains: list[str] | None = Non
             if jk:
                 _add(f"{origin}/viewjob?jk={jk}")
     for match in re.finditer(r"/jobs/view/(?:[^/\"'?\s]*?-)?(\d{6,})", html or ""):
+        _add(f"https://www.linkedin.com/jobs/view/{match.group(1)}")
+    for match in re.finditer(r"[?&]currentJobId=(\d{6,})", html or ""):
         _add(f"https://www.linkedin.com/jobs/view/{match.group(1)}")
     return found
 
@@ -365,7 +371,10 @@ def saved_job_urls(cfg: Config) -> list[str]:
     configured = _as_list(cfg.get("hunt.saved_jobs.urls"))
     if configured:
         return configured
-    urls = ["https://www.linkedin.com/my-items/saved-jobs/"]
+    urls = [
+        "https://www.linkedin.com/jobs-tracker/?stage=saved",
+        "https://www.linkedin.com/my-items/saved-jobs/"
+    ]
     country = (cfg.get("user.country") or "").strip().lower()
     if country in {"canada", "ca"}:
         urls.extend(
@@ -934,7 +943,7 @@ async def _collect_saved_jobs(page, cfg: Config, delay_ms: int, login_wait: int,
     source = {
         "id": "saved jobs",
         "saved": True,
-        "link_contains": ["/jobs/view/", "/viewjob", "jk="],
+        "link_contains": ["/jobs/view/", "/viewjob", "jk=", "currentjobid="],
     }
     listings: list[dict] = []
     seen: set[str] = set()
@@ -1863,7 +1872,7 @@ async def _extract_posting(page, cfg: Config, source: dict, url: str, delay_ms: 
         post_jid = extract_linkedin_job_id(final_url)
         post_clean = final_url.split("?")[0].split("#")[0].lower()
         post_has_applied = bool(
-            re.search(r"\b(applied|you applied)\b", html, re.I)
+            re.search(r"\b(you applied)\b", html, re.I)
             or re.search(r"\bapplied\s+\d+\s*(?:day|week|month|hour|m|d|w)s?\s+ago\b", html, re.I)
         )
         post_has_closed = bool(
