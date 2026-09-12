@@ -440,6 +440,24 @@ def validate_tailored_output(parsed: dict, cfg: Config | None = None) -> tuple[b
     if not why or len(why) < 20:
         errors.append("WHY_I_FIT missing or empty")
 
+    # 5. Strict formatting and tone rules
+    has_white_text = False
+    for k, v in parsed.items():
+        if isinstance(v, str):
+            if "--" in v:
+                errors.append(f"Strict rule violation: {k} contains double hyphens '--'")
+            if re.search(r'(color:\s*(white|#fff|#ffffff|transparent)|opacity:\s*0|display:\s*none|class=[\'"]white-text[\'"])', v, re.IGNORECASE):
+                has_white_text = True
+                
+    if not has_white_text:
+        errors.append("Missing ATS white text optimization. Ensure white/invisible text is used for keywords.")
+
+    # 6. Personalization validation
+    for text_field in ["COVER_LETTER", "WHY_I_FIT", "SUMMARY"]:
+        val = (parsed.get(text_field) or "").strip()
+        if val and not re.search(r'\b(I|my|me|mine|I\'ve|I\'m)\b', val, re.IGNORECASE):
+            errors.append(f"{text_field} lacks personalization (missing I/my/me/mine)")
+
     return len(errors) == 0, errors
 
 
