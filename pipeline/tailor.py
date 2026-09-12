@@ -220,7 +220,7 @@ def _tag_schema(cfg: Config | None = None) -> str:
     gen_cover = should_generate_cover_letter(cfg)
     lines = [
         "<R_TITLE>why this tagline</R_TITLE>",
-        "<TITLE>one-line tagline matching the role (no name, no location, no inflated seniority)</TITLE>",
+        "<TITLE>one-line tagline matching the role. Keep it simple, realistic, and close to the master CV title. Avoid aggressive buzzword-stuffing or long compound titles (no name, no location, no inflated seniority).</TITLE>",
         "<R_SUMMARY>why this summary / which about-variant</R_SUMMARY>",
         "<SUMMARY>2-3 sentence summary grounded in the master CV</SUMMARY>",
         "",
@@ -334,7 +334,7 @@ LinkedIn DM max words: {dm_words}
 - Classify the JD into a role type. Do NOT just copy/paste bullets from the experience bank. Instead, SYNTHESIZE highly customized, personalized bullet points based *strictly* on the detailed stories in the Experience bank. Focus purely on what the candidate individually owned, coded, and delivered. {_bullet_count_instruction(cfg)}
 - If the bank has fewer bullets than needed, fill the rest from the master CV within the freedom level above.
 - Text changes only. Do not add/remove jobs, projects, education, or employers from the template.
-- Rewrite the tagline and summary for this role within the freedom level. Prefer interview-defensible claims at levels 0–3.
+- Rewrite the tagline and summary for this role. Keep the tagline simple and grounded in the master CV title; do not invent lengthy, highly-specific compound titles just to match the JD. Prefer interview-defensible claims at levels 0–3.
 - EXACT KEYWORD MATCHING: Where the candidate has verified experience with a concept required by the JD, use the JD's exact technical terminology (e.g. 'FastAPI microservices' instead of 'Python web services', 'Kafka consumer lag' instead of 'messaging delays') to ensure ATS exact-match detection.
 - BULLET ARCHITECTURE: Write every experience bullet with high density: [Strong Action Verb] + [Specific Framework/Tool/Context] + [Measurable Impact, Latency, Scale, or Architectural Outcome]. Avoid weak passive descriptions like 'responsible for' or 'worked on'.
 - Key skills: Reorder each skills list so JD-relevant items come first. What you may add is governed by FABRICATION FREEDOM above.
@@ -642,7 +642,7 @@ def apply_changes_to_html(parsed: dict, output_path: Path, cfg: Config | None = 
     if gaps:
         # Inject missing keywords as invisible white text for ATS optimization
         white_text_keywords = " ".join(gaps)
-        white_text_html = f'<div style="color: transparent; opacity: 0; font-size: 0px; width: 0px; height: 0px; position: absolute; z-index: -100;">{escape_html(white_text_keywords)}</div>'
+        white_text_html = f'<div style="color: white; font-size: 1px; line-height: 1px;">{escape_html(white_text_keywords)}</div>'
         if "</body>" in html_content:
             html_content = html_content.replace("</body>", f"{white_text_html}\n</body>")
         else:
