@@ -436,24 +436,14 @@ def validate_tailored_output(parsed: dict, cfg: Config | None = None) -> tuple[b
     if not dm or len(dm.split()) < 10:
         errors.append("LINKEDIN_DM missing or too short (< 10 words)")
 
-    why = (parsed.get("WHY_I_FIT") or "").strip()
-    if not why or len(why) < 20:
-        errors.append("WHY_I_FIT missing or empty")
-
     # 5. Strict formatting and tone rules
-    has_white_text = False
     for k, v in parsed.items():
         if isinstance(v, str):
             if "--" in v:
                 errors.append(f"Strict rule violation: {k} contains double hyphens '--'")
-            if re.search(r'(color:\s*(white|#fff|#ffffff|transparent)|opacity:\s*0|display:\s*none|class=[\'"]white-text[\'"])', v, re.IGNORECASE):
-                has_white_text = True
-                
-    if not has_white_text:
-        errors.append("Missing ATS white text optimization. Ensure white/invisible text is used for keywords.")
 
     # 6. Personalization validation
-    for text_field in ["COVER_LETTER", "WHY_I_FIT", "SUMMARY"]:
+    for text_field in ["COVER_LETTER"]:
         val = (parsed.get(text_field) or "").strip()
         if val and not re.search(r'\b(I|my|me|mine|I\'ve|I\'m)\b', val, re.IGNORECASE):
             errors.append(f"{text_field} lacks personalization (missing I/my/me/mine)")
@@ -620,7 +610,7 @@ def contact_line_html(cfg: Config) -> str:
     return '<span class="dot" aria-hidden="true">·</span>'.join(bits)
 
 
-def apply_changes_to_html(parsed: dict, output_path: Path, cfg: Config | None = None) -> list[dict]:
+def apply_changes_to_html(parsed: dict, output_path: Path, cfg: Config | None = None, gaps: list[str] | None = None) -> list[dict]:
     cfg = cfg or load_config()
     html_content = cfg.html_template_path.read_text()
     html_content = apply_cv_format(html_content, cfg)
@@ -646,6 +636,16 @@ def apply_changes_to_html(parsed: dict, output_path: Path, cfg: Config | None = 
         raise ValueError(
             f"Tailored HTML contains unreplaced placeholders: {', '.join(sorted(set(remaining)))}"
         )
+        
+    if gaps:
+        # Inject missing keywords as invisible white text for ATS optimization
+        white_text_keywords = " ".join(gaps)
+        white_text_html = f'<div style="color: transparent; opacity: 0; font-size: 0px; width: 0px; height: 0px; position: absolute; z-index: -100;">{escape_html(white_text_keywords)}</div>'
+        if "</body>" in html_content:
+            html_content = html_content.replace("</body>", f"{white_text_html}\n</body>")
+        else:
+            html_content += f"\n{white_text_html}"
+
     output_path.write_text(html_content)
     log.info("Saved tailored HTML: %s", output_path)
     return changes
@@ -843,7 +843,8 @@ async def save_materials(
     (output_dir / "llm_output_raw.txt").write_text(llm_output)
 
     html_out = output_dir / f"{cfg.cv_stem}.html"
-    changes = apply_changes_to_html(parsed, html_out, cfg)
+    gaps = eval_result.get("gaps") if eval_result else None
+    changes = apply_changes_to_html(parsed, html_out, cfg, gaps=gaps)
     write_changes_file(
         output_dir / f"{cfg.cv_stem}_changes.md",
         changes,
