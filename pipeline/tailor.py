@@ -303,7 +303,7 @@ You are tailoring application materials for {cfg.full_name} applying to '{role}'
 ### Master CV (source of truth — do not contradict employers/dates/education)
 {master}
 
-### Experience bank (pick matching role-type variants; fill remaining bullets from the master CV)
+### Experience bank (Source Material — do NOT copy directly; synthesize highly targeted bullets)
 {bank or "(empty — use the master CV only)"}
 
 ### Profile / visa
@@ -329,7 +329,7 @@ LinkedIn DM max words: {dm_words}
 
 ### INSTRUCTIONS
 {tailor_layout_instructions(cfg)}
-- Classify the JD into a role type, then SELECT bullets from the experience bank whose target matches. {_bullet_count_instruction(cfg)}
+- Classify the JD into a role type. Do NOT just copy/paste bullets from the experience bank. Instead, SYNTHESIZE highly customized, personalized bullet points based *strictly* on the detailed stories in the Experience bank. Focus purely on what the candidate individually owned, coded, and delivered. {_bullet_count_instruction(cfg)}
 - If the bank has fewer bullets than needed, fill the rest from the master CV within the freedom level above.
 - Text changes only. Do not add/remove jobs, projects, education, or employers from the template.
 - Rewrite the tagline and summary for this role within the freedom level. Prefer interview-defensible claims at levels 0–3.
