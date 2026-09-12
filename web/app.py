@@ -131,8 +131,8 @@ def _enqueue_linkedin_action(cfg, job_url: str, package_id: str = "", action: st
 
 
 def _enqueue_linkedin_unsave(cfg, job_url: str, package_id: str = "") -> None:
-    """Queue a LinkedIn job to be confirmed applied via Camoufox in the background."""
-    _enqueue_linkedin_action(cfg, job_url, package_id=package_id, action="apply")
+    """Queue a LinkedIn job to be unsaved via Camoufox in the background."""
+    _enqueue_linkedin_action(cfg, job_url, package_id=package_id, action="unsave")
 
 
 def _unsave_worker_loop() -> None:
@@ -597,8 +597,8 @@ def delete_package(package_id: str, keep: bool = False) -> dict:
             log.warning("Could not remove deleted job from jobs.yaml: %s", exc)
 
     unsave_triggered = False
-    if keep and not was_applied and is_saved and "linkedin.com" in url.lower():
-        log.info("Triggered background Camoufox unsave on delete (keep=True, not applied) for %s: %s", package_id, url)
+    if not was_applied and is_saved and "linkedin.com" in url.lower():
+        log.info("Triggered background Camoufox unsave on delete (not applied) for %s: %s", package_id, url)
         _enqueue_linkedin_action(cfg, url, package_id="", action="unsave")
         unsave_triggered = True
 
@@ -628,7 +628,15 @@ def delete_job(body: DeleteJobRequest) -> dict:
     }
     record_deleted_job(cfg, job_data)
     forget_job(cfg, job_data)
-    return {"ok": True}
+    
+    unsave_triggered = False
+    url = (body.url or "").strip()
+    if "linkedin.com" in url.lower():
+        log.info("Triggered background Camoufox unsave on delete_job: %s", url)
+        _enqueue_linkedin_action(cfg, url, package_id="", action="unsave")
+        unsave_triggered = True
+        
+    return {"ok": True, "unsave_triggered": unsave_triggered}
 
 
 @app.post("/api/jobs/remember")
