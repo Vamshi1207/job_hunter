@@ -276,6 +276,8 @@ def build_tailor_prompt(cfg: Config, company: str, role: str, jd_text: str, feed
     master = load_optional(cfg.master_cv_path)
     project_mem = load_optional(cfg.root / "memory" / "project.md")
     feedback_mem = load_optional(cfg.root / "memory" / "feedback.md")
+    writing_rules = load_optional(cfg.templates_dir / "writing_rules.md")
+    feedback_mem = (writing_rules + "\n\n" + feedback_mem).strip()
     bank = load_experience_bank(cfg.experience_bank_dir)
     gen_cover = should_generate_cover_letter(cfg)
     cover_tpl = load_optional(cfg.templates_dir / "cover_letter.template.md") if gen_cover else ""

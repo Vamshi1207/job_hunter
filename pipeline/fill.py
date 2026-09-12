@@ -268,7 +268,7 @@ def _package_answer_context(cfg: Config, package_id: str) -> dict:
         "why_i_fit": _text(folder / "why_i_fit.txt") if folder is not None else "",
         "analysis": _text(folder / "analysis.md") if folder is not None else "",
         "memory": _text(cfg.root / "memory" / "project.md"),
-        "feedback": _text(cfg.root / "memory" / "feedback.md"),
+        "feedback": (_text(cfg.templates_dir / "writing_rules.md") + "\n\n" + _text(cfg.root / "memory" / "feedback.md")).strip(),
         "visa": (cfg.get("visa.description") or cfg.get("visa.status") or "").strip(),
     }
 
