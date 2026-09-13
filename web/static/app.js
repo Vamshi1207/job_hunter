@@ -1193,7 +1193,15 @@ function appendBoardRow(body, item, active) {
       <button type="button" class="retry-btn" data-company="${escapeAttr(row.company || "")}" data-role="${escapeAttr(row.role || "")}" data-url="${escapeAttr(row.url || "")}" data-jd="${escapeAttr(row.jd || "")}" title="Retry tailoring">↺ Retry</button>
     </span>`;
   } else {
-    statusHtml = `<span class="job-status job-status-${escapeAttr(statusTone(item))}">${escapeHtml(item.statusLabel)}</span>`;
+    const rCompany = escapeAttr((row && row.company) || (pkg && pkg.company) || item.company || "");
+    const rRole = escapeAttr((row && row.role) || (pkg && pkg.role) || item.role || "");
+    const rUrl = escapeAttr((row && row.url) || (pkg && pkg.url) || "");
+    const rJd = escapeAttr((row && row.jd) || (pkg && pkg.jd) || "");
+    const isDisabled = (item.status === "queued" || item.status === "working") ? " disabled" : "";
+    statusHtml = `<span class="job-status job-status-${escapeAttr(statusTone(item))} status-with-retry">
+      <span class="status-label">${escapeHtml(item.statusLabel)}</span>
+      <button type="button" class="retry-btn" data-company="${rCompany}" data-role="${rRole}" data-url="${rUrl}" data-jd="${rJd}" title="Retailor the job again"${isDisabled}>↺ Retry</button>
+    </span>`;
   }
 
   tr.innerHTML = boardCells(
@@ -1838,4 +1846,29 @@ loadPackages().catch((err) => {
     if (active.browser) applyCamoufoxStage(true, "Sign in or extra verification happens here");
     if (active.status === "stopping") setStrip("Hunt is stopping…", true);
   } catch (_) {}
+})();
+(function bindRetryAll() {
+  const retryAllBtn = $("retry-all-btn");
+  if (!retryAllBtn) return;
+  retryAllBtn.addEventListener("click", async () => {
+    const buttons = Array.from(document.querySelectorAll(".retry-btn:not(#retry-all-btn):not(:disabled)"));
+    if (!buttons.length) return;
+    retryAllBtn.disabled = true;
+    
+    for (let i = 0; i < buttons.length; i++) {
+      retryAllBtn.textContent = `Queuing... (${i + 1}/${buttons.length})`;
+      buttons[i].click();
+      
+      // Wait for a run to actually start (state.runId becomes set)
+      await new Promise(r => setTimeout(r, 500));
+      
+      // Now wait until the run finishes (state.runId becomes null)
+      while (state.runId) {
+        await new Promise(r => setTimeout(r, 1000));
+      }
+    }
+    
+    retryAllBtn.disabled = false;
+    retryAllBtn.textContent = "↺ Retry All";
+  });
 })();

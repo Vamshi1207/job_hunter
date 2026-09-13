@@ -215,6 +215,7 @@ def package_summary(cfg: Config, folder: Path) -> dict:
         "role": role,
         "url": url,
         "apply_url": apply_url,
+        "jd": job_meta.get("jd") or "",
         "apply_kind": apply_kind,
         "location": display_location(location, work_mode) or location,
         "work_mode": work_mode,

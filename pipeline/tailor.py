@@ -334,7 +334,7 @@ LinkedIn DM max words: {dm_words}
 - Classify the JD into a role type. Do NOT just copy/paste bullets from the experience bank. Instead, SYNTHESIZE highly customized, personalized bullet points based *strictly* on the detailed stories in the Experience bank. Focus purely on what the candidate individually owned, coded, and delivered. {_bullet_count_instruction(cfg)}
 - If the bank has fewer bullets than needed, fill the rest from the master CV within the freedom level above.
 - Text changes only. Do not add/remove jobs, projects, education, or employers from the template.
-- Rewrite the tagline and summary for this role. Keep the tagline simple and grounded in the master CV title; do not invent lengthy, highly-specific compound titles just to match the JD. Prefer interview-defensible claims at levels 0–3.
+- Rewrite the tagline and summary for this role. The tagline MUST be extremely realistic, simple, and strictly grounded in the master CV title (e.g., 'Software Engineer', 'Senior Backend Engineer'). DO NOT generate buzzword-heavy, lengthy, or highly-specific compound titles (e.g., NO 'Software Engineer — AI Agent Platforms'). Prefer interview-defensible claims at levels 0–3.
 - EXACT KEYWORD MATCHING: Where the candidate has verified experience with a concept required by the JD, use the JD's exact technical terminology (e.g. 'FastAPI microservices' instead of 'Python web services', 'Kafka consumer lag' instead of 'messaging delays') to ensure ATS exact-match detection.
 - BULLET ARCHITECTURE: Write every experience bullet with high density: [Strong Action Verb] + [Specific Framework/Tool/Context] + [Measurable Impact, Latency, Scale, or Architectural Outcome]. Avoid weak passive descriptions like 'responsible for' or 'worked on'.
 - Key skills: Reorder each skills list so JD-relevant items come first. What you may add is governed by FABRICATION FREEDOM above.
@@ -874,6 +874,7 @@ async def save_materials(
         "source": (job or {}).get("source") or (job or {}).get("channel") or "",
         "apply_url": (job or {}).get("apply_url") or "",
         "apply_kind": (job or {}).get("apply_kind") or "",
+        "jd": (job or {}).get("jd") or jd_text,
     }
     if (job or {}).get("fabrication_freedom") is not None:
         meta["fabrication_freedom"] = job.get("fabrication_freedom")

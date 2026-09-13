@@ -292,29 +292,45 @@ h2 { font-size: 1.15rem; }
 .failed-with-retry:hover .failed-reason {
   display: block;
 }
+.status-with-retry {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
 .retry-btn {
   font-size: 0.68rem;
   font-family: var(--mono);
   font-weight: 600;
   letter-spacing: 0.05em;
   text-transform: uppercase;
-  color: #8a2b2b;
-  background: rgba(138,43,43,.12);
-  border: 1px solid rgba(138,43,43,.35);
+  color: var(--text-muted);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.15);
   border-radius: 4px;
   padding: 0.1rem 0.35rem;
   cursor: pointer;
   white-space: nowrap;
-  transition: background 0.15s, color 0.15s;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
   line-height: 1.4;
 }
 .retry-btn:hover:not(:disabled) {
-  background: rgba(138,43,43,.25);
-  color: #c04040;
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text);
+  border-color: rgba(255, 255, 255, 0.3);
 }
 .retry-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+.failed-with-retry .retry-btn {
+  color: #8a2b2b;
+  background: rgba(138,43,43,.12);
+  border: 1px solid rgba(138,43,43,.35);
+}
+.failed-with-retry .retry-btn:hover:not(:disabled) {
+  background: rgba(138,43,43,.25);
+  color: #c04040;
 }
 
 
