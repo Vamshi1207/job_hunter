@@ -98,7 +98,17 @@ Write to `applications/<company>-<role>-<date>/analysis.md`:
 **If tailoring in-chat instead:**
 1. Copy `resumes/template.html` → `applications/<company>-<role>-<date>/<Name>_CV.html`.
 2. **Edit ONLY placeholder content** (do not restructure):
-   - **Tagline**: adjust to match the role.
+   - **Tagline**: You MUST pick exactly ONE title from this pre-approved list that best matches the JD:
+     - Software Engineer — Forward Deployed Engineering & AI Systems
+     - Software Engineer — Real-Time Data & Distributed Systems
+     - Software Engineer — Backend Infrastructure & Data Pipelines
+     - Forward Deployed Engineer — Customer-Facing Delivery & AI Solutions
+     - Solutions Engineer — Technical Prototyping & Customer Integrations
+     - Data Engineer — ML Pipelines, NLP & Analytics Automation
+     - Software Engineer — Distributed Systems & Platform Engineering
+     - Backend Engineer — Microservices, APIs & Data Streaming
+     Do NOT invent your own title or try to match a hyper-specific JD title.
+   - **Job Titles**: Always use the exact employer titles from the master CV. Do NOT alter past job titles to match the JD.
    - **About / summary**: rewrite using `experience-bank/about-variants.md` matching the role type. Tweak the final sentence to name the role / company.
    - **Job bullets**: for each employer, synthesize highly targeted bullets from `experience-bank/<employer>.md` based on the JD. When `cv_format.bullets.dynamic` is true, give more bullets to the best-matching employer (within `min`–`max`) and leave unused slots empty. When it is false, keep the configured `bullets` count. Fill leftover slots from `cv_master.md`. Never invent facts, but do write fresh text based on the source material.
    - **Skills section**: reorder so technologies most relevant to the JD appear first. You may also add more skills, libraries, tools, and frameworks to the Key Skills section to support claims and boost ATS score, provided they are closely related to the candidate's actual work and stack (never completely out of the blue).

@@ -220,7 +220,7 @@ def _tag_schema(cfg: Config | None = None) -> str:
     gen_cover = should_generate_cover_letter(cfg)
     lines = [
         "<R_TITLE>why this tagline</R_TITLE>",
-        "<TITLE>one-line tagline matching the role. Keep it simple, realistic, and close to the master CV title. Avoid aggressive buzzword-stuffing or long compound titles (no name, no location, no inflated seniority).</TITLE>",
+        "<TITLE>one-line tagline. YOU MUST PICK EXACTLY ONE OF THE PRE-APPROVED TITLES LISTED IN THE INSTRUCTIONS. DO NOT invent your own title.</TITLE>",
         "<R_SUMMARY>why this summary / which about-variant</R_SUMMARY>",
         "<SUMMARY>2-3 sentence summary grounded in the master CV</SUMMARY>",
         "",
@@ -334,11 +334,20 @@ LinkedIn DM max words: {dm_words}
 - Classify the JD into a role type. Do NOT just copy/paste bullets from the experience bank. Instead, SYNTHESIZE highly customized, personalized bullet points based *strictly* on the detailed stories in the Experience bank. Focus purely on what the candidate individually owned, coded, and delivered. {_bullet_count_instruction(cfg)}
 - If the bank has fewer bullets than needed, fill the rest from the master CV within the freedom level above.
 - Text changes only. Do not add/remove jobs, projects, education, or employers from the template.
-- Rewrite the tagline and summary for this role. The tagline MUST be extremely realistic, simple, and strictly grounded in the master CV title (e.g., 'Software Engineer', 'Senior Backend Engineer'). DO NOT generate buzzword-heavy, lengthy, or highly-specific compound titles (e.g., NO 'Software Engineer — AI Agent Platforms'). Prefer interview-defensible claims at levels 0–3.
+- Rewrite the tagline and summary for this role. The tagline MUST be picked EXACTLY from this pre-approved list (pick the one that best matches the JD):
+  1. Software Engineer — Forward Deployed Engineering & AI Systems
+  2. Software Engineer — Real-Time Data & Distributed Systems
+  3. Software Engineer — Backend Infrastructure & Data Pipelines
+  4. Forward Deployed Engineer — Customer-Facing Delivery & AI Solutions
+  5. Solutions Engineer — Technical Prototyping & Customer Integrations
+  6. Data Engineer — ML Pipelines, NLP & Analytics Automation
+  7. Software Engineer — Distributed Systems & Platform Engineering
+  8. Backend Engineer — Microservices, APIs & Data Streaming
+  DO NOT invent your own title. NEVER append buzzwords or domain specifics outside of this list.
 - EXACT KEYWORD MATCHING: Where the candidate has verified experience with a concept required by the JD, use the JD's exact technical terminology (e.g. 'FastAPI microservices' instead of 'Python web services', 'Kafka consumer lag' instead of 'messaging delays') to ensure ATS exact-match detection.
 - BULLET ARCHITECTURE: Write every experience bullet with high density: [Strong Action Verb] + [Specific Framework/Tool/Context] + [Measurable Impact, Latency, Scale, or Architectural Outcome]. Avoid weak passive descriptions like 'responsible for' or 'worked on'.
 - Key skills: Reorder each skills list so JD-relevant items come first. What you may add is governed by FABRICATION FREEDOM above.
-- Job title lines: use the actual employer titles unless freedom level explicitly allows otherwise. Do not use Staff / Senior Staff / Principal unless those are the actual titles in the master CV.
+- Job title lines: YOU MUST USE THE EXACT EMPLOYER TITLES FROM THE MASTER CV. Do not alter past job titles to match the JD (e.g., if you were a 'Backend Developer', do not change it to 'Data Engineer' even if the JD asks for it).
 - Do not include dates in TITLE tags (dates are already in the HTML template).
 {cover_instruction}- LinkedIn DM: ≤{dm_words} words, no emoji, no "hope this finds you well".
 - Why I fit: exactly 3 bullets, each ≤25 words, each tied to one JD requirement using evidence allowed at the current freedom level.
