@@ -471,9 +471,9 @@ function packageHiddenByLive(pkg) {
 
 function resumeCell(pkg) {
   if (!pkg.pdf_name) return "—";
-  const href = `/api/packages/${encodeURIComponent(pkg.id)}/file/${encodeURIComponent(pkg.pdf_name)}`;
+  const baseHref = `/api/packages/${encodeURIComponent(pkg.id)}/file/${encodeURIComponent(pkg.pdf_name)}`;
   const title = pkg.pdf_path ? escapeAttr(pkg.pdf_path) : "Open PDF";
-  return `<a class="file-link" href="${href}" target="_blank" rel="noopener" title="${title}">PDF</a>`;
+  return `<a class="file-link" href="${baseHref}" onclick="this.href='${baseHref}?t='+Date.now()" target="_blank" rel="noopener" title="${title}">PDF</a>`;
 }
 
 function liveResumeCell(row) {
@@ -484,9 +484,9 @@ function liveResumeCell(row) {
 
 function editLink(pkg, name, label, title) {
   if (!name) return "";
-  const href = `/api/packages/${encodeURIComponent(pkg.id)}/file/${encodeURIComponent(name)}`;
+  const baseHref = `/api/packages/${encodeURIComponent(pkg.id)}/file/${encodeURIComponent(name)}`;
   const tip = title ? ` title="${escapeAttr(title)}"` : "";
-  return `<a class="file-link" href="${href}" rel="noopener"${tip}>${escapeHtml(label)}</a>`;
+  return `<a class="file-link" href="${baseHref}" onclick="this.href='${baseHref}?t='+Date.now()" rel="noopener"${tip}>${escapeHtml(label)}</a>`;
 }
 
 function editCell(pkg) {
@@ -501,7 +501,8 @@ function editCell(pkg) {
   ].filter(Boolean);
   const files = links.length ? `<span class="edit-files">${links.join("")}</span>` : "";
   const rebuild = pkg.html_name
-    ? `<button type="button" class="rebuild-pdf ghost" data-id="${escapeAttr(pkg.id)}" title="Rebuild PDF from the HTML on disk">Rebuild PDF</button>`
+    ? `<button type="button" class="rebuild-pdf ghost" data-id="${escapeAttr(pkg.id)}" title="Rebuild PDF from the HTML on disk">Rebuild PDF</button>
+       <button type="button" class="edit-html ghost" data-id="${escapeAttr(pkg.id)}" title="Edit HTML in browser">Edit HTML</button>`
     : "";
   if (!files && !rebuild) return "—";
   return `<span class="edit-links">${files}${rebuild}</span>`;
@@ -605,27 +606,39 @@ function askDelete(who) {
 
 function bindRebuild(tr) {
   const btn = tr.querySelector(".rebuild-pdf");
-  if (!btn) return;
-  btn.addEventListener("click", async (ev) => {
-    ev.preventDefault();
-    ev.stopPropagation();
-    const id = btn.dataset.id;
-    if (!id) return;
-    const label = btn.textContent;
-    btn.disabled = true;
-    btn.textContent = "Rebuilding…";
-    try {
-      await api("/api/packages/" + encodeURIComponent(id) + "/rebuild-pdf", { method: "POST" });
-      await loadPackages(state.activeId);
-      if (state.activeId === id) {
-        await openPackage(id);
+  if (btn) {
+    btn.addEventListener("click", async (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      const id = btn.dataset.id;
+      if (!id) return;
+      const label = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = "Rebuilding…";
+      try {
+        await api("/api/packages/" + encodeURIComponent(id) + "/rebuild-pdf", { method: "POST" });
+        await loadPackages(state.activeId);
+        if (state.activeId === id) {
+          await openPackage(id);
+        }
+      } catch (err) {
+        setStrip(err.message);
+        btn.disabled = false;
+        btn.textContent = label;
       }
-    } catch (err) {
-      setStrip(err.message);
-      btn.disabled = false;
-      btn.textContent = label;
-    }
-  });
+    });
+  }
+
+  const editHtmlBtn = tr.querySelector(".edit-html");
+  if (editHtmlBtn) {
+    editHtmlBtn.addEventListener("click", (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      const id = editHtmlBtn.dataset.id;
+      if (!id) return;
+      window.open("/editor/" + encodeURIComponent(id), "_blank");
+    });
+  }
 }
 
 function jobLinkCell(pkg) {
@@ -1331,7 +1344,7 @@ function bindRetry(tr) {
       const run = await api("/api/runs", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ urls: url, jd, company, role }),
+        body: JSON.stringify({ urls: url, jd, company, role, force: true }),
       });
       // Optimistically flip the row to queued
       upsertJob({ company, role, url, status: "queued", error_msg: "" });

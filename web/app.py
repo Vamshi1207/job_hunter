@@ -318,7 +318,7 @@ class RunRequest(BaseModel):
     role: str = ""
     location: str = ""
     jd: str = Field(default="", min_length=0)
-
+    force: bool = False
 
 class LaunchApplyRequest(BaseModel):
     package_id: str = ""
@@ -372,6 +372,10 @@ class QueueLogHandler(logging.Handler):
 @app.get("/", response_class=HTMLResponse)
 def index() -> HTMLResponse:
     return HTMLResponse((STATIC / "index.html").read_text())
+
+@app.get("/editor/{package_id}", response_class=HTMLResponse)
+def editor(package_id: str) -> HTMLResponse:
+    return HTMLResponse((STATIC / "editor.html").read_text())
 
 
 @app.get("/api/me")
@@ -534,8 +538,10 @@ def package_download(package_id: str, filename: str):
     suffix = path.suffix.lower()
     media = "text/plain; charset=utf-8"
     disposition = "inline"
+    headers = None
     if suffix == ".pdf":
         media = "application/pdf"
+        headers = {"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"}
     elif suffix == ".html":
         media = "text/html; charset=utf-8"
         disposition = "attachment"
@@ -545,7 +551,7 @@ def package_download(package_id: str, filename: str):
     elif suffix == ".pages":
         media = "application/vnd.apple.pages"
         disposition = "attachment"
-    return FileResponse(path, media_type=media, content_disposition_type=disposition, filename=path.name)
+    return FileResponse(path, media_type=media, content_disposition_type=disposition, filename=path.name, headers=headers)
 
 
 @app.post("/api/packages/{package_id}/rebuild-pdf")
@@ -564,6 +570,32 @@ async def rebuild_pdf(package_id: str) -> dict:
         log.exception("PDF rebuild failed for %s", package_id)
         raise HTTPException(status_code=500, detail=f"PDF rebuild failed: {exc}") from exc
     return {"ok": True, "id": package_id, "pdf_name": pdf.name}
+
+class HtmlSaveRequest(BaseModel):
+    html: str
+
+@app.get("/api/packages/{package_id}/html")
+def get_package_html(package_id: str) -> dict:
+    cfg = _load_cfg()
+    folder = package_dir(cfg, package_id)
+    if folder is None:
+        raise HTTPException(status_code=404, detail="Package not found")
+    html_out = next(iter(sorted(folder.glob("*_CV.html"))), None)
+    if not html_out:
+        raise HTTPException(status_code=404, detail="HTML not found")
+    return {"html": html_out.read_text()}
+
+@app.put("/api/packages/{package_id}/html")
+def save_package_html(package_id: str, body: HtmlSaveRequest) -> dict:
+    cfg = _load_cfg()
+    folder = package_dir(cfg, package_id)
+    if folder is None:
+        raise HTTPException(status_code=404, detail="Package not found")
+    html_out = next(iter(sorted(folder.glob("*_CV.html"))), None)
+    if not html_out:
+        raise HTTPException(status_code=404, detail="HTML not found")
+    html_out.write_text(body.html)
+    return {"ok": True}
 
 
 @app.delete("/api/packages/{package_id}")
@@ -1354,7 +1386,7 @@ def _execute_run(run_id: str, urls: list[str], body: RunRequest, sink: queue.Que
                         return
                     company = job["company"]
                     role = job["role"]
-                    prior = find_existing_package(cfg, job)
+                    prior = find_existing_package(cfg, job) if not body.force else None
                     if prior:
                         board.ready(job, prior.name, skipped=True, ats_score=_ats_score(prior))
                         packages.append(prior.name)
@@ -1372,6 +1404,7 @@ def _execute_run(run_id: str, urls: list[str], body: RunRequest, sink: queue.Que
                             job,
                             fill_form=False,
                             on_progress=lambda msg, current=job: board.working(current, msg),
+                            force=body.force,
                         )
                     except aio.CancelledError:
                         board.stopped(job)

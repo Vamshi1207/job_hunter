@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Edit CV HTML</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Newsreader:opsz,wght@6..72,500;6..72,600&family=Figtree:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    body { margin: 0; padding: 0; display: flex; flex-direction: column; height: 100vh; font-family: 'Figtree', sans-serif; background: #fff; }
+    header { padding: 12px 24px; background: #f9fafb; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #e5e7eb; }
+    header h2 { margin: 0; font-size: 16px; color: #111827; font-weight: 600; }
+    textarea { flex: 1; margin: 0; border: none; padding: 24px; font-family: 'IBM Plex Mono', monospace; font-size: 13px; resize: none; outline: none; white-space: pre; overflow-wrap: normal; overflow-x: auto; color: #1f2937; background: #fdfdfd; line-height: 1.5; }
+    button { padding: 8px 16px; cursor: pointer; background: #2563eb; color: white; border: none; border-radius: 6px; font-weight: 500; font-size: 14px; transition: background 0.2s; }
+    button:hover { background: #1d4ed8; }
+    button:disabled { background: #9ca3af; cursor: not-allowed; }
+  </style>
+</head>
+<body>
+  <header>
+    <h2 id="title">Editing CV HTML</h2>
+    <button id="save-btn">Save & Rebuild PDF</button>
+  </header>
+  <textarea id="editor" spellcheck="false" placeholder="Loading..."></textarea>
+  <script>
+    const packageId = window.location.pathname.split('/').pop();
+    document.getElementById('title').textContent = "Editing: " + decodeURIComponent(packageId);
+    const ta = document.getElementById('editor');
+    const btn = document.getElementById('save-btn');
+
+    async function load() {
+      try {
+        const res = await fetch(`/api/packages/${encodeURIComponent(packageId)}/html`);
+        if (!res.ok) throw new Error("Failed to load HTML");
+        const data = await res.json();
+        ta.value = data.html;
+      } catch (err) {
+        alert(err.message);
+        ta.value = "Error loading HTML.";
+      }
+    }
+
+    btn.addEventListener('click', async () => {
+      btn.disabled = true;
+      btn.textContent = 'Saving...';
+      try {
+        const res = await fetch(`/api/packages/${encodeURIComponent(packageId)}/html`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ html: ta.value })
+        });
+        if (!res.ok) throw new Error("Failed to save HTML");
+        btn.textContent = 'Rebuilding...';
+        const rb = await fetch(`/api/packages/${encodeURIComponent(packageId)}/rebuild-pdf`, {
+          method: 'POST'
+        });
+        if (!rb.ok) throw new Error("Failed to rebuild PDF");
+        
+        const originalBg = btn.style.background;
+        btn.style.background = "#10b981"; // success green
+        btn.textContent = 'Saved!';
+        setTimeout(() => {
+          btn.style.background = originalBg;
+          btn.textContent = 'Save & Rebuild PDF';
+          btn.disabled = false;
+        }, 2000);
+      } catch (err) {
+        alert(err.message);
+        btn.disabled = false;
+        btn.textContent = 'Save & Rebuild PDF';
+      }
+    });
+
+    load();
+  </script>
+</body>
+</html>

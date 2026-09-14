@@ -55,6 +55,7 @@ async def process_job(
     fill_form: bool = False,
     on_progress=None,
     cfg=None,
+    force: bool = False,
 ) -> Path | None:
     cfg = cfg or load_config()
 
@@ -68,14 +69,15 @@ async def process_job(
                 log.debug("on_progress callback exception: %s", exc)
 
     note("Checking existing")
-    existing = find_existing_package(cfg, job)
-    if existing is not None:
-        log.info(
-            "Found existing package for %s — skipping tailor. Directory: %s",
-            job.get("company"),
-            existing.name,
-        )
-        return existing
+    if not force:
+        existing = find_existing_package(cfg, job)
+        if existing is not None:
+            log.info(
+                "Found existing package for %s — skipping tailor. Directory: %s",
+                job.get("company"),
+                existing.name,
+            )
+            return existing
 
     company, role, jd_text = job["company"], job["role"], job["jd"]
     max_attempts = int(cfg.get("pipeline.max_attempts", 3))
@@ -355,6 +357,11 @@ async def async_main(argv: list[str] | None = None) -> int:
         help="Safety ceiling for --hunt (default hunt.max_jobs; 0 = every match).",
     )
     parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Force overwrite of existing packages for the same company and role.",
+    )
+    parser.add_argument(
         "--fill-form",
         action="store_true",
         help="Best-effort Greenhouse/Lever fill + screenshot. Still does not click Submit.",
@@ -402,7 +409,7 @@ async def async_main(argv: list[str] | None = None) -> int:
 
     async def _one(job: dict) -> None:
         async with sem:
-            await process_job(job, fill_form=args.fill_form)
+            await process_job(job, fill_form=args.fill_form, force=args.force)
 
     await asyncio.gather(*(_one(job) for job in jobs))
     return 0
