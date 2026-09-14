@@ -338,9 +338,9 @@ LinkedIn DM max words: {dm_words}
   1. Software Engineer — Forward Deployed Engineering & AI Systems
   2. Software Engineer — Real-Time Data & Distributed Systems
   3. Software Engineer — Backend Infrastructure & Data Pipelines
-  4. Forward Deployed Engineer — Customer-Facing Delivery & AI Solutions
-  5. Solutions Engineer — Technical Prototyping & Customer Integrations
-  6. Data Engineer — ML Pipelines, NLP & Analytics Automation
+  4. Software Engineer — Customer-Facing Delivery & AI Solutions
+  5. Software Engineer — Technical Prototyping & Customer Integrations
+  6. Software Engineer — ML Pipelines, NLP & Analytics Automation
   7. Software Engineer — Distributed Systems & Platform Engineering
   8. Backend Engineer — Microservices, APIs & Data Streaming
   DO NOT invent your own title. NEVER append buzzwords or domain specifics outside of this list.

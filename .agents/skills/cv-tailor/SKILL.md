@@ -102,9 +102,9 @@ Write to `applications/<company>-<role>-<date>/analysis.md`:
      - Software Engineer — Forward Deployed Engineering & AI Systems
      - Software Engineer — Real-Time Data & Distributed Systems
      - Software Engineer — Backend Infrastructure & Data Pipelines
-     - Forward Deployed Engineer — Customer-Facing Delivery & AI Solutions
-     - Solutions Engineer — Technical Prototyping & Customer Integrations
-     - Data Engineer — ML Pipelines, NLP & Analytics Automation
+     - Software Engineer — Customer-Facing Delivery & AI Solutions
+     - Software Engineer — Technical Prototyping & Customer Integrations
+     - Software Engineer — ML Pipelines, NLP & Analytics Automation
      - Software Engineer — Distributed Systems & Platform Engineering
      - Backend Engineer — Microservices, APIs & Data Streaming
      Do NOT invent your own title or try to match a hyper-specific JD title.
