@@ -77,6 +77,7 @@ def job_row_event(listing: dict, *, status: str, event_type: str, **extra: Any) 
         ),
         "apply_url": extra.get("apply_url") or listing.get("apply_url") or "",
         "apply_kind": extra.get("apply_kind") or listing.get("apply_kind") or "",
+        "jd": listing.get("jd") or "",
     }
     payload.update(extra)
     if "line" not in payload:

@@ -514,6 +514,34 @@ def inspect(body: InspectRequest) -> dict:
     }
 
 
+@app.get("/api/jobs")
+def get_jobs() -> dict:
+    cfg = _load_cfg()
+    try:
+        from pipeline.jobs import load_jobs
+        jobs = load_jobs(cfg)
+    except Exception:
+        jobs = []
+
+    from pipeline.search import find_existing_package
+    return {
+        "jobs": [
+            {
+                "company": j.get("company", ""),
+                "role": j.get("role", ""),
+                "location": j.get("location", ""),
+                "url": j.get("url", ""),
+                "jd": j.get("jd", ""),
+                "work_mode": j.get("work_mode", ""),
+                "status": "ready" if find_existing_package(cfg, j) else "failed",
+                "package_id": (find_existing_package(cfg, j).name if find_existing_package(cfg, j) else ""),
+                "error_msg": j.get("error_msg", ""),
+            }
+            for j in jobs
+        ]
+    }
+
+
 @app.get("/api/packages")
 def packages() -> dict:
     cfg = _load_cfg()

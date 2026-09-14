@@ -94,7 +94,13 @@ function hideCamoufox() {
 }
 
 async function loadMe() {
-  const me = await api("/api/me");
+  const [me, jobsData] = await Promise.all([
+    api("/api/me"),
+    api("/api/jobs").catch(() => ({ jobs: [] }))
+  ]);
+  if (jobsData.jobs && jobsData.jobs.length > 0) {
+    jobsData.jobs.forEach(upsertJob);
+  }
   $("who").textContent = me.name || "Job desk";
   state.hunt = me.hunt || state.hunt;
   const roles = (state.hunt.roles || []).join(", ") || "your target roles";

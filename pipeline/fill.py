@@ -19,8 +19,6 @@ def _text(path: Path) -> str:
 def fill_fields(cfg: Config, job: dict | None = None) -> dict:
     visa = visa_answers(cfg)
     city = (cfg.get("user.city") or "").strip()
-    if job and "toronto" in (job.get("location") or "").lower():
-        city = "Toronto"
     country = (cfg.get("user.country") or "").strip()
     location = ", ".join(part for part in (city, country) if part)
     company = ((job or {}).get("company") or "").strip()

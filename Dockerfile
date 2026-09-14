@@ -8,6 +8,7 @@ ENV IN_DOCKER=1
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     gnupg \
+    tini \
     xvfb \
     x11-utils \
     dbus-x11 \
@@ -57,5 +58,5 @@ RUN playwright install --with-deps chromium \
 COPY scripts/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
-ENTRYPOINT ["docker-entrypoint.sh"]
+ENTRYPOINT ["/usr/bin/tini", "--", "docker-entrypoint.sh"]
 CMD ["python3", "-m", "uvicorn", "web.app:app", "--host", "0.0.0.0", "--port", "8000"]

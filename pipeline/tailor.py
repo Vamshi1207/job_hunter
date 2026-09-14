@@ -590,10 +590,8 @@ def format_phone(raw: str, dashed: bool = True) -> str:
     return str(raw or "").strip()
 
 
-def contact_line_html(cfg: Config, job: dict | None = None) -> str:
+def contact_line_html(cfg: Config) -> str:
     city = cfg.get("user.city") or ""
-    if job and "toronto" in (job.get("location") or "").lower():
-        city = "Toronto"
     country = cfg.get("user.country") or ""
     location = ", ".join(p for p in (city, country) if p)
     raw_phone = str(cfg.get("user.phone") or "")
@@ -623,13 +621,13 @@ def contact_line_html(cfg: Config, job: dict | None = None) -> str:
     return '<span class="dot" aria-hidden="true">·</span>'.join(bits)
 
 
-def apply_changes_to_html(parsed: dict, output_path: Path, cfg: Config | None = None, gaps: list[str] | None = None, job: dict | None = None) -> list[dict]:
+def apply_changes_to_html(parsed: dict, output_path: Path, cfg: Config | None = None, gaps: list[str] | None = None) -> list[dict]:
     cfg = cfg or load_config()
     html_content = cfg.html_template_path.read_text()
     html_content = apply_cv_format(html_content, cfg)
     html_content = ensure_bullet_slots(html_content, job_blocks(cfg))
     html_content = html_content.replace("{{FULL_NAME}}", escape_html(cfg.full_name))
-    html_content = html_content.replace("{{CONTACT_LINE}}", contact_line_html(cfg, job=job))
+    html_content = html_content.replace("{{CONTACT_LINE}}", contact_line_html(cfg))
 
     changes = []
     parsed = normalize_parsed(parsed, cfg)
@@ -857,7 +855,7 @@ async def save_materials(
 
     html_out = output_dir / f"{cfg.cv_stem}.html"
     gaps = eval_result.get("gaps") if eval_result else None
-    changes = apply_changes_to_html(parsed, html_out, cfg, gaps=gaps, job=job)
+    changes = apply_changes_to_html(parsed, html_out, cfg, gaps=gaps)
     write_changes_file(
         output_dir / f"{cfg.cv_stem}_changes.md",
         changes,
