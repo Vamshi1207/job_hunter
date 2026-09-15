@@ -222,7 +222,7 @@ def _tag_schema(cfg: Config | None = None) -> str:
         "<R_TITLE>why this tagline</R_TITLE>",
         "<TITLE>one-line tagline. YOU MUST PICK EXACTLY ONE OF THE PRE-APPROVED TITLES LISTED IN THE INSTRUCTIONS. DO NOT invent your own title.</TITLE>",
         "<R_SUMMARY>why this summary / which about-variant</R_SUMMARY>",
-        "<SUMMARY>2-3 sentence summary grounded in the master CV</SUMMARY>",
+        "<SUMMARY>2-3 sentence summary grounded in the master CV. DO NOT start the summary with '[Role]-shaped' or 'Forward Deployed-shaped'; you may use such phrasing later in the summary if appropriate, but it must not be the opening words.</SUMMARY>",
         "",
     ]
     for job in job_blocks(cfg):
