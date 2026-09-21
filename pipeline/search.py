@@ -242,6 +242,89 @@ _CANADA_ELIGIBLE = re.compile(
     re.I,
 )
 
+# Built-in region tokens per home/extra market (world knowledge, not personal
+# data). Users cover anything missing via hunt.home_aliases in their config.
+_US_STATE_NAMES = {
+    "alabama": "al", "alaska": "ak", "arizona": "az", "arkansas": "ar",
+    "california": "ca", "colorado": "co", "connecticut": "ct", "delaware": "de",
+    "florida": "fl", "georgia": "ga", "hawaii": "hi", "idaho": "id",
+    "illinois": "il", "indiana": "in", "iowa": "ia", "kansas": "ks",
+    "kentucky": "ky", "louisiana": "la", "maine": "me", "maryland": "md",
+    "massachusetts": "ma", "michigan": "mi", "minnesota": "mn",
+    "mississippi": "ms", "missouri": "mo", "montana": "mt", "nebraska": "ne",
+    "nevada": "nv", "new hampshire": "nh", "new jersey": "nj",
+    "new mexico": "nm", "new york": "ny", "north carolina": "nc",
+    "north dakota": "nd", "ohio": "oh", "oklahoma": "ok", "oregon": "or",
+    "pennsylvania": "pa", "rhode island": "ri", "south carolina": "sc",
+    "south dakota": "sd", "tennessee": "tn", "texas": "tx", "utah": "ut",
+    "vermont": "vt", "virginia": "va", "washington": "wa",
+    "west virginia": "wv", "wisconsin": "wi", "wyoming": "wy",
+    "district of columbia": "dc",
+}
+
+_REGION_TOKENS: dict[str, set[str]] = {
+    "canada": set(_CANADA_PLACES) | {"canada", "canadian", "canadians"},
+    "united states": (
+        set(_US_PLACES)
+        | set(_US_STATE_NAMES)
+        | {"united states", "usa", "u.s.", "u.s.a.", "america"}
+    ),
+    "united kingdom": {
+        "united kingdom", "uk", "u.k.", "great britain", "england",
+        "scotland", "wales", "northern ireland", "london", "manchester",
+        "birmingham", "leeds", "edinburgh", "glasgow", "bristol",
+        "liverpool", "sheffield", "leicester", "coventry",
+    },
+    "ireland": {"ireland", "dublin", "cork", "galway", "limerick"},
+    "germany": {
+        "germany", "deutschland", "berlin", "munich", "hamburg",
+        "frankfurt", "cologne", "stuttgart", "dusseldorf", "leipzig",
+        "dresden", "nuremberg",
+    },
+    "france": {
+        "france", "paris", "lyon", "marseille", "toulouse", "bordeaux",
+        "nantes", "lille",
+    },
+    "netherlands": {
+        "netherlands", "holland", "dutch", "amsterdam", "rotterdam",
+        "utrecht", "eindhoven", "the hague",
+    },
+    "spain": {"spain", "madrid", "barcelona", "valencia", "seville"},
+    "australia": {
+        "australia", "sydney", "melbourne", "brisbane", "perth",
+        "adelaide", "canberra",
+    },
+    "india": {
+        "india", "indian", "mumbai", "delhi", "new delhi", "bengaluru",
+        "bangalore", "hyderabad", "chennai", "pune", "kolkata", "ahmedabad",
+    },
+    "singapore": {"singapore"},
+    "japan": {"japan", "tokyo", "osaka", "kyoto", "yokohama"},
+    "brazil": {"brazil", "sao paulo", "rio de janeiro"},
+    "mexico": {"mexico", "mexico city", "guadalajara", "monterrey"},
+}
+
+
+def _normalize_place(name: str) -> str:
+    """Canonical key for a country/market name ('USA' -> 'united states')."""
+    key = re.sub(r"[.\s]+", " ", (name or "").lower()).strip()
+    key = re.sub(r"\s+", " ", key)
+    aliases = {
+        "usa": "united states", "us": "united states",
+        "u s": "united states", "u s a": "united states",
+        "america": "united states",
+        "uk": "united kingdom", "u k": "united kingdom",
+        "great britain": "united kingdom", "england": "united kingdom",
+        "scotland": "united kingdom", "wales": "united kingdom",
+        "ca": "canada", "can": "canada", "canadian": "canada",
+        "de": "germany", "deutschland": "germany",
+        "fr": "france", "nl": "netherlands", "holland": "netherlands",
+        "es": "spain", "au": "australia", "ind": "india",
+        "in": "india", "sg": "singapore", "jp": "japan",
+        "br": "brazil", "mx": "mexico", "ie": "ireland",
+    }
+    return aliases.get(key, key)
+
 
 def _blob_has_canada(text: str) -> bool:
     low = (text or "").lower()
@@ -261,22 +344,198 @@ def _blob_has_us(text: str) -> bool:
     return any(place in low for place in _US_PLACES)
 
 
+def _match_markers(text: str, markers) -> bool:
+    """True if any marker appears in text (word-boundary safe for short tokens)."""
+    return any(phrase_in(text or "", marker) for marker in markers if marker)
+
+
+def home_markers(cfg: Config) -> list[str]:
+    """Everyday names for the user's home market: country, aliases, cities."""
+    home = (home_country(cfg) or "").strip()
+    markers: list[str] = []
+    if home:
+        markers.append(home)
+    markers.extend(_as_list(cfg.get("hunt.home_aliases")))
+    city = (cfg.get("user.city") or "").strip()
+    if city:
+        markers.append(city)
+    markers.extend(preferred_cities(cfg))
+    norm = _normalize_place(home)
+    markers.extend(sorted(_REGION_TOKENS.get(norm, ())))
+    if norm == "united states":
+        markers.append("north america")
+    seen: set[str] = set()
+    out: list[str] = []
+    for marker in markers:
+        text = str(marker or "").strip()
+        key = text.lower()
+        if text and key not in seen:
+            seen.add(key)
+            out.append(text)
+    return out
+
+
+def _extra_markers(cfg: Config) -> list[str]:
+    """Names for configured extra markets (search targets beyond home)."""
+    out: list[str] = []
+    for market in extra_search_markets(cfg):
+        out.append(market)
+        out.extend(sorted(_REGION_TOKENS.get(_normalize_place(market), ())))
+    return out
+
+
 def _blob_has_home(text: str, cfg: Config | None = None) -> bool:
     """True if text mentions the user's home market (config, not code).
 
-    When home is Canada (or unset) this is exactly the legacy Canada test, so
-    existing behaviour is preserved. For another home country it matches the
-    configured home country name or preferred cities.
+    When home is Canada (or unset) the legacy Canada test still applies as a
+    fallback, so existing behaviour is preserved exactly.
     """
     if cfg is None:
         return _blob_has_canada(text)
-    home = home_country(cfg).lower()
-    if not home or home in {"canada", "ca", "can", "canadian"}:
-        return _blob_has_canada(text)
-    low = (text or "").lower()
-    if home in low:
+    if _match_markers(text, home_markers(cfg)):
         return True
-    return any(city and city in low for city in (c.lower() for c in preferred_cities(cfg)))
+    home = _normalize_place(home_country(cfg))
+    if not home or home == "canada":
+        return _blob_has_canada(text)
+    return False
+
+
+def _mentions_place(text: str) -> bool:
+    """True if text names any known geographic place (world knowledge)."""
+    return (
+        _blob_has_us(text) or _blob_has_canada(text) or bool(_OTHER_COUNTRY.search(text or ""))
+    )
+
+
+def _place_alt(names) -> str:
+    """Regex alternation for place names with letter/digit boundaries."""
+    parts = []
+    for name in names or []:
+        text = str(name or "").strip()
+        if text:
+            parts.append(re.escape(text))
+    parts.sort(key=len, reverse=True)
+    return r"(?:%s)" % "|".join(parts) if parts else r"(?!)"
+
+
+def _open_to_home(blob: str, cfg: Config) -> bool:
+    """True if the posting reads as open to home-market applicants."""
+    custom = _as_list(cfg.get("hunt.eligible_phrases"))
+    if custom:
+        return any(re.search(pattern, blob or "", re.I) for pattern in custom)
+    home = (home_country(cfg) or "").strip()
+    if not _normalize_place(home) or _normalize_place(home) == "canada":
+        return bool(_CANADA_ELIGIBLE.search(blob or ""))
+    names = [home] + _as_list(cfg.get("hunt.home_aliases"))
+    norm = _normalize_place(home)
+    if norm == "united states":
+        names.extend(["USA", "U.S.", "US"])
+    elif norm == "united kingdom":
+        names.extend(["UK", "U.K."])
+    home_alt = _place_alt(names)
+    patterns = [
+        rf"open to {home_alt}",
+        rf"eligible (?:to work |for work )?in {home_alt}",
+        rf"{home_alt} applicants?",
+        rf"work from {home_alt}",
+        rf"authori[sz]ed to work in {home_alt}",
+        rf"remote (?:in|from) {home_alt}",
+    ]
+    extras = extra_search_markets(cfg)
+    if extras:
+        extra_alt = _place_alt(extras)
+        patterns.append(rf"{extra_alt} or {home_alt}")
+        patterns.append(rf"{home_alt} or {extra_alt}")
+    if norm == "united states":
+        patterns.append(r"north america(?:n)?")
+    bound = r"(?<![A-Za-z0-9])%s(?![A-Za-z0-9])"
+    return any(re.search(bound % pattern, blob or "", re.I) for pattern in patterns)
+
+
+_AUTH_PLACE_RES = [
+    re.compile(r"\b(?P<place>[A-Za-z][\w .&'()/-]{0,40}?)\s+citizenship(?:\s+required)?\b", re.I),
+    re.compile(
+        r"\b(?P<place>[A-Za-z][\w .&'()/-]{0,40}?)\s+work\s+authori[sz]ation\s+(?:required|needed)\b",
+        re.I,
+    ),
+    re.compile(r"\bfor\s+(?P<place>[A-Za-z][\w .&'()/-]{0,40}?)\s+candidates\b", re.I),
+    re.compile(r"\b(?P<place>[A-Za-z][\w .&'()/-]{0,40}?)\s+(?:only|based)\b", re.I),
+    re.compile(
+        r"\b(?:must be|candidates must|hire only).{0,48}?\b(?P<place>[A-Za-z][\w .&'()/-]{2,40}?)\b",
+        re.I,
+    ),
+]
+
+# Bare abbreviations are only safe inside restrictive auth phrasing
+# (a bare "us" anywhere else would match "contact us").
+_KNOWN_ABBRS = ["usa", "u.s.", "u.s.a.", "us", "uk", "u.k.", "uae"]
+
+# Bare abbreviations that unambiguously mean home inside auth phrasing.
+_HOME_ABBRS = {
+    "united states": ["us"],
+    "united kingdom": ["uk"],
+}
+
+
+def _restricted_to_foreign(blob: str, cfg: Config) -> bool:
+    """True if the posting ties eligibility to a non-home place.
+
+    Citizenship / work-authorisation / "only" / "based" / "no {home}"
+    phrasing attached to any known place that is not home is a veto, mirroring
+    the legacy _US_ONLY rule. Authorisation tied to home itself is fine.
+    """
+    markers = list(home_markers(cfg))
+    norm = _normalize_place(home_country(cfg))
+    markers.extend(_HOME_ABBRS.get(norm, []))
+    for rx in _AUTH_PLACE_RES:
+        for match in rx.finditer(blob or ""):
+            place = re.sub(r"^[\W_]+|[\W_]+$", "", match.group("place") or "")
+            if not place:
+                continue
+            if _match_markers(place, markers):
+                continue
+            if _mentions_place(place) or _match_markers(place, _KNOWN_ABBRS):
+                return True
+            if _match_markers(place, _extra_markers(cfg)):
+                return True
+    home_alt = _place_alt([home_country(cfg)] + _as_list(cfg.get("hunt.home_aliases")))
+    if re.search(
+        rf"(?<![A-Za-z0-9])no\s+(?:remote\s+)?{home_alt}(?![A-Za-z0-9])",
+        blob or "",
+        re.I,
+    ):
+        return True
+    return False
+
+
+def _generic_scope(listing: dict, cfg: Config) -> bool:
+    """Scope gate for non-Canada home markets.
+
+    Same shape as the legacy rule — home anywhere, other markets only when
+    open to home — but every home reference comes from config instead of
+    hardcoded Canada checks.
+    """
+    loc = (listing.get("location") or "").strip()
+    title = (listing.get("role") or "").strip()
+    jd = (listing.get("jd") or "").strip()
+    blob = f"{loc}\n{title}\n{jd}"
+    jd_top = "\n".join(jd.splitlines()[:5])
+
+    if _restricted_to_foreign(blob, cfg):
+        return False
+    for text in (loc, title, jd_top):
+        if _mentions_place(text) and not _blob_has_home(text, cfg):
+            if not _blob_has_home(blob, cfg) and not _open_to_home(blob, cfg):
+                return False
+    if re.search(r"\bremote\b|\banywhere\b", loc.lower()):
+        if (
+            _mentions_place(jd)
+            and not _blob_has_home(jd, cfg)
+            and not _blob_has_home(blob, cfg)
+            and not _open_to_home(blob, cfg)
+        ):
+            return False
+    return True
 
 
 def listing_in_scope(listing: dict, cfg: Config | None = None) -> bool:
@@ -300,6 +559,13 @@ def listing_in_scope(listing: dict, cfg: Config | None = None) -> bool:
                 return False
         if (_blob_has_us(jd_top) or _OTHER_COUNTRY.search(jd_top)) and not _blob_has_home(jd_top, cfg):
             return False
+
+    # Non-Canada homes use the generic, config-driven gate below. The legacy
+    # Canada/US block after it is unchanged so Canada behaviour is preserved.
+    if cfg is not None:
+        norm_home = _normalize_place(home_country(cfg))
+        if norm_home and norm_home != "canada":
+            return _generic_scope(listing, cfg)
 
     # Explicit US-only or US-candidate requirements are always out of scope
     if _US_ONLY.search(blob):

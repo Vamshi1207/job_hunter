@@ -220,12 +220,24 @@ hunt:
   # Search the country, not the city. user.city only boosts ranking.
   search_locations:
     - Canada
+  # Home market for scope gates. Defaults to user.country — set it only when
+  # they differ. Any home country works, not just Canada.
+  home_country: ""
+  # Extra names that count as "home" (alternate country names, states,
+  # provinces, cities). Matched with word boundaries. The built-in tables
+  # already cover Canada/US states and major UK/EU/AU/IN cities — add anything
+  # missing for your market here instead of editing pipeline code.
+  home_aliases: []
   # Extra markets searched in addition to the home market (user.country +
   # career.target_markets). Postings there are kept only when they read as
   # open to home-market applicants. A second user replaces this list instead
   # of editing pipeline code.
   extra_search_markets:
     - United States
+  # Extra phrases (regex) meaning "this posting is open to home applicants".
+  # Empty = built-in generic set derived from your home/extra market names
+  # (plus the legacy Canada set when home is Canada).
+  eligible_phrases: []
   greenhouse_boards: []
   # Example: the Greenhouse board token from boards.greenhouse.io/<token>
   ats_boards: []

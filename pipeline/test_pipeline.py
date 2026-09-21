@@ -1027,18 +1027,180 @@ class HuntTests(unittest.TestCase):
                 },
                 cfg,
             )
-            montreal = score_listing(
+            home_city = score_listing(
                 {
                     "role": "Software Engineer",
                     "url": "https://boards.greenhouse.io/acme/jobs/7",
-                    "location": "Calgary, QC, Canada",
+                    "location": "Calgary, AB, Canada",
                     "jd": "Python Kafka distributed systems.",
                 },
                 cfg,
             )
             self.assertEqual(nyc, 0)
             self.assertGreater(toronto, 0)
-            self.assertGreater(montreal, toronto)
+            self.assertGreater(home_city, toronto)
+        finally:
+            os.environ.pop("JOB_SEARCH_ROOT", None)
+            tmp.cleanup()
+            load_config(force=True)
+
+    def _cfg_country(self, root: Path, *, country: str, city: str, extra: str = ""):
+        (root / "config.yaml").write_text(
+            "user:\n"
+            "  full_name: Test User\n"
+            f"  city: {city}\n"
+            f"  country: {country}\n"
+            "career:\n"
+            "  stage: senior\n"
+            "  years_experience: 6\n"
+            "  target_markets:\n"
+            f"    - {country}\n"
+            "  target_roles:\n"
+            "    - Software Engineer\n"
+            "hunt:\n"
+            "  max_jobs: 0\n"
+            + extra
+        )
+        os.environ["JOB_SEARCH_ROOT"] = str(root)
+        return load_config(force=True)
+
+    def test_scope_us_home_market(self):
+        from pipeline.search import listing_in_scope
+
+        tmp = tempfile.TemporaryDirectory()
+        try:
+            cfg = self._cfg_country(
+                Path(tmp.name), country="United States", city="Austin"
+            )
+            cases = [
+                (
+                    {
+                        "location": "Austin, TX",
+                        "role": "Software Engineer",
+                        "jd": "Python backend. Onsite in Austin.",
+                    },
+                    True,
+                ),
+                (
+                    {
+                        "location": "Remote",
+                        "role": "Software Engineer",
+                        "jd": "US citizenship required. Python role.",
+                    },
+                    True,
+                ),
+                (
+                    {
+                        "location": "London, England",
+                        "role": "Software Engineer",
+                        "jd": "Onsite in London.",
+                    },
+                    False,
+                ),
+                (
+                    {
+                        "location": "Toronto, Canada",
+                        "role": "Software Engineer",
+                        "jd": "Python role in Toronto.",
+                    },
+                    False,
+                ),
+                (
+                    {
+                        "location": "Berlin, Germany",
+                        "role": "Software Engineer",
+                        "jd": "Open to United States applicants. Python.",
+                    },
+                    True,
+                ),
+                (
+                    {
+                        "location": "Remote",
+                        "role": "Software Engineer",
+                        "jd": "No United States. Europe only.",
+                    },
+                    False,
+                ),
+            ]
+            for listing, expected in cases:
+                self.assertEqual(
+                    listing_in_scope(listing, cfg),
+                    expected,
+                    f"US home: {listing['location']}",
+                )
+        finally:
+            os.environ.pop("JOB_SEARCH_ROOT", None)
+            tmp.cleanup()
+            load_config(force=True)
+
+    def test_scope_uk_home_with_aliases(self):
+        from pipeline.search import listing_in_scope
+
+        tmp = tempfile.TemporaryDirectory()
+        extra = "  home_aliases:\n    - UK\n    - England\n"
+        try:
+            cfg = self._cfg_country(
+                Path(tmp.name),
+                country="United Kingdom",
+                city="London",
+                extra=extra,
+            )
+            cases = [
+                (
+                    {
+                        "location": "London, England",
+                        "role": "Software Engineer",
+                        "jd": "Onsite in London.",
+                    },
+                    True,
+                ),
+                (
+                    {
+                        "location": "Manchester",
+                        "role": "Software Engineer",
+                        "jd": "Hybrid in Manchester.",
+                    },
+                    True,
+                ),
+                (
+                    {
+                        "location": "Mumbai, India",
+                        "role": "Software Engineer",
+                        "jd": "Onsite in Mumbai.",
+                    },
+                    False,
+                ),
+                (
+                    {
+                        "location": "Remote",
+                        "role": "Software Engineer",
+                        "jd": "Requires UK work authorization. Python.",
+                    },
+                    True,
+                ),
+                (
+                    {
+                        "location": "Dublin, Ireland",
+                        "role": "Software Engineer",
+                        "jd": "Python role in Dublin.",
+                    },
+                    False,
+                ),
+                (
+                    {
+                        "location": "Dublin, Ireland",
+                        "role": "Software Engineer",
+                        "jd": "Open to UK applicants. Python.",
+                    },
+                    True,
+                ),
+            ]
+            for listing, expected in cases:
+                self.assertEqual(
+                    listing_in_scope(listing, cfg),
+                    expected,
+                    f"UK home: {listing['location']}",
+                )
         finally:
             os.environ.pop("JOB_SEARCH_ROOT", None)
             tmp.cleanup()
