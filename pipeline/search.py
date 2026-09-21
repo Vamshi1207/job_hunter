@@ -87,6 +87,31 @@ def _place_is_canada(name: str) -> bool:
     return name.lower() in {"ca", "can", "canada"}
 
 
+def home_country(cfg: Config) -> str:
+    """The user's home market. Drives scope gates — never hardcoded in code."""
+    return (cfg.get("hunt.home_country") or cfg.get("user.country") or "").strip()
+
+
+def extra_search_markets(cfg: Config) -> list[str]:
+    """Extra markets searched beyond the home market (kept only when open to it)."""
+    raw = cfg.get("hunt.extra_search_markets")
+    if raw is not None:
+        return _as_list(raw)
+    # Legacy fallback: the old Canada-specific flag.
+    allow_us = cfg.get("hunt.search_us_if_canada_eligible")
+    if allow_us is None:
+        allow_us = True
+    places = list(target_markets(cfg))
+    country = (cfg.get("user.country") or "").strip()
+    if country:
+        places.append(country)
+    if allow_us and any(_place_is_canada(item) for item in places) and not any(
+        _place_is_us(item) for item in places
+    ):
+        return ["United States"]
+    return []
+
+
 def hunt_locations(cfg: Config) -> list[str]:
     """Board search places. Country/market, not city — preferred city is a ranking boost only."""
     raw = cfg.get("hunt.search_locations")
@@ -98,19 +123,14 @@ def hunt_locations(cfg: Config) -> list[str]:
     country = (cfg.get("user.country") or "").strip()
     if country:
         places.append(country)
-    allow_us = cfg.get("hunt.search_us_if_canada_eligible")
-    if allow_us is None:
-        allow_us = True
-    if allow_us and any(_place_is_canada(item) for item in places) and not any(
-        _place_is_us(item) for item in places
-    ):
-        places.append("United States")
-    return _unique_places(places) or ["Canada"]
+    places.extend(extra_search_markets(cfg))
+    unique = _unique_places(places)
+    return unique or ([country] if country else [])
 
 
 def hunt_location(cfg: Config) -> str:
     locs = hunt_locations(cfg)
-    return locs[0] if locs else (cfg.get("user.country") or "Canada")
+    return locs[0] if locs else home_country(cfg)
 
 
 _CANADA_PLACES = {
@@ -241,8 +261,26 @@ def _blob_has_us(text: str) -> bool:
     return any(place in low for place in _US_PLACES)
 
 
+def _blob_has_home(text: str, cfg: Config | None = None) -> bool:
+    """True if text mentions the user's home market (config, not code).
+
+    When home is Canada (or unset) this is exactly the legacy Canada test, so
+    existing behaviour is preserved. For another home country it matches the
+    configured home country name or preferred cities.
+    """
+    if cfg is None:
+        return _blob_has_canada(text)
+    home = home_country(cfg).lower()
+    if not home or home in {"canada", "ca", "can", "canadian"}:
+        return _blob_has_canada(text)
+    low = (text or "").lower()
+    if home in low:
+        return True
+    return any(city and city in low for city in (c.lower() for c in preferred_cities(cfg)))
+
+
 def listing_in_scope(listing: dict, cfg: Config | None = None) -> bool:
-    """Canada anywhere, or US only when the posting is open to Canada applicants."""
+    """Home market anywhere, or extra markets only when open to home applicants."""
     loc = (listing.get("location") or "").strip()
     title = (listing.get("role") or "").strip()
     jd = (listing.get("jd") or "").strip()
@@ -253,13 +291,14 @@ def listing_in_scope(listing: dict, cfg: Config | None = None) -> bool:
     work_mode = (listing.get("work_mode") or "").strip().lower() or infer_work_mode(loc, jd)
     jd_top = "\n".join(jd.splitlines()[:5])
 
-    # If work mode is onsite or hybrid, it MUST be located in Canada.
-    # An onsite/hybrid role in the US, Europe, or other foreign market is physically impossible for a candidate in Canada.
+    # If work mode is onsite or hybrid, it MUST be located in the home market
+    # (user.country). An onsite/hybrid role in a foreign market is physically
+    # impossible for the candidate.
     if work_mode in ("onsite", "hybrid"):
-        if not _blob_has_canada(loc) and not _blob_has_canada(title):
+        if not _blob_has_home(loc, cfg) and not _blob_has_home(title, cfg):
             if _blob_has_us(loc) or _OTHER_COUNTRY.search(loc) or _blob_has_us(jd_top) or _OTHER_COUNTRY.search(jd_top):
                 return False
-        if (_blob_has_us(jd_top) or _OTHER_COUNTRY.search(jd_top)) and not _blob_has_canada(jd_top):
+        if (_blob_has_us(jd_top) or _OTHER_COUNTRY.search(jd_top)) and not _blob_has_home(jd_top, cfg):
             return False
 
     # Explicit US-only or US-candidate requirements are always out of scope
@@ -278,7 +317,7 @@ def listing_in_scope(listing: dict, cfg: Config | None = None) -> bool:
     if _OTHER_COUNTRY.search(jd_top) and not _blob_has_canada(jd_top) and not _CANADA_ELIGIBLE.search(blob):
         return False
 
-    if _blob_has_canada(blob):
+    if _blob_has_home(blob, cfg):
         return True
 
     if jd and _blob_has_us(jd) and not _CANADA_ELIGIBLE.search(blob) and not _blob_has_canada(blob):

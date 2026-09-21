@@ -140,8 +140,10 @@ def _tech_gap_count(cfg: Config, jd_text: str, role: str = "") -> int:
             gaps += 1
     # bare "go" only when clearly required (stack_match handles this)
     listing = {"jd": jd_text or "", "role": role or ""}
-    foreign = required_languages(listing) - user_language_families(cfg)
-    gaps += len(foreign)
+    mine = user_language_families(cfg)
+    if mine:
+        foreign = required_languages(listing) - mine
+        gaps += len(foreign)
     return gaps
 
 

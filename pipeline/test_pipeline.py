@@ -82,7 +82,7 @@ class SlugTests(unittest.TestCase):
         listings = apply_pasted_job_text(
             [{"company": "linkedin.com", "role": "Role", "url": "https://www.linkedin.com/jobs/view/1", "jd": "scraped stub"}],
             ["https://www.linkedin.com/jobs/view/1"],
-            "Software Engineer at Northstar\n\nBuild Python Kafka services in Montreal.",
+            "Software Engineer at Northstar\n\nBuild Python Kafka services in Calgary.",
         )
         self.assertEqual(len(listings), 1)
         self.assertEqual(listings[0]["company"], "Northstar")
@@ -575,7 +575,7 @@ class HuntTests(unittest.TestCase):
         (root / "config.yaml").write_text(
             "user:\n"
             "  full_name: Test User\n"
-            "  city: Montreal\n"
+            "  city: Calgary\n"
             "  country: Canada\n"
             "career:\n"
             "  stage: senior\n"
@@ -603,7 +603,7 @@ class HuntTests(unittest.TestCase):
                     {
                         "role": "Software Engineer",
                         "url": "https://www.linkedin.com/jobs/view/1",
-                        "location": "Montreal, Canada",
+                        "location": "Calgary, Canada",
                     },
                     cfg,
                 ),
@@ -614,7 +614,7 @@ class HuntTests(unittest.TestCase):
                     {
                         "role": "Software Engineer Intern",
                         "url": "https://boards.greenhouse.io/acme/jobs/1",
-                        "location": "Montreal, Canada",
+                        "location": "Calgary, Canada",
                     },
                     cfg,
                 ),
@@ -625,7 +625,7 @@ class HuntTests(unittest.TestCase):
                     {
                         "role": "Senior Software Engineer",
                         "url": "https://boards.greenhouse.io/acme/jobs/1",
-                        "location": "Montreal, Canada",
+                        "location": "Calgary, Canada",
                     },
                     cfg,
                 ),
@@ -647,7 +647,7 @@ class HuntTests(unittest.TestCase):
                     {
                         "role": "Software Engineer",
                         "url": "https://www.linkedin.com/jobs/view/12345678",
-                        "location": "Montreal, Canada",
+                        "location": "Calgary, Canada",
                         "jd": "Python Kafka distributed systems. 5 years of experience.",
                     },
                     cfg,
@@ -678,8 +678,8 @@ class HuntTests(unittest.TestCase):
             "    - python\n"
             "  years_buffer: 2\n"
             "  exclude_companies:\n"
-            "    - Uber\n"
-            "    - Jeppesen ForeFlight\n"
+            "    - Hooli\n"
+            "    - Aviato Systems\n"
         )
         try:
             cfg = self._cfg(Path(tmp.name), extra)
@@ -688,7 +688,7 @@ class HuntTests(unittest.TestCase):
                     {
                         "role": "Principal Software Engineer",
                         "url": "https://example.com/p",
-                        "location": "Montreal, Canada",
+                        "location": "Calgary, Canada",
                     },
                     cfg,
                 ),
@@ -721,7 +721,7 @@ class HuntTests(unittest.TestCase):
                     {
                         "role": "Software Engineer",
                         "url": "https://example.com/y",
-                        "location": "Montreal, Canada",
+                        "location": "Calgary, Canada",
                         "jd": "10-15 years of experience. Python Kafka.",
                     },
                     cfg,
@@ -745,7 +745,7 @@ class HuntTests(unittest.TestCase):
                     {
                         "role": "Backend Platform Engineer",
                         "url": "https://example.com/be",
-                        "location": "Montreal, Canada",
+                        "location": "Calgary, Canada",
                         "jd": "5+ years of experience with Python, Kafka, and AWS.",
                     },
                     cfg,
@@ -779,10 +779,10 @@ class HuntTests(unittest.TestCase):
             self.assertEqual(
                 score_listing(
                     {
-                        "company": "Uber Technologies",
+                        "company": "Hooli Technologies",
                         "role": "Senior Software Engineer",
                         "url": "https://www.uber.com/careers/list/1",
-                        "location": "Montreal, Canada",
+                        "location": "Calgary, Canada",
                         "jd": "5+ years of experience with Python and Kafka.",
                     },
                     cfg,
@@ -792,7 +792,7 @@ class HuntTests(unittest.TestCase):
             self.assertEqual(
                 score_listing(
                     {
-                        "company": "ForeFlight",
+                        "company": "Aviato",
                         "role": "Software Engineer",
                         "url": "https://boards.greenhouse.io/foreflight/jobs/1",
                         "location": "Canada",
@@ -822,22 +822,22 @@ class HuntTests(unittest.TestCase):
             cfg = self._cfg(
                 Path(tmp.name),
                 "  exclude_companies:\n"
-                "    - Crossing Hurdles\n"
+                "    - Initech\n"
                 "  exclude_job_boards:\n"
                 "    - remotive\n"
                 "    - themuse\n",
             )
-            # Test Crossing Hurdles employer exclusion
+            # Test Initech employer exclusion
             self.assertTrue(
                 company_is_excluded(
-                    {"company": "Crossing Hurdles", "url": "https://example.com/ch"},
+                    {"company": "Initech", "url": "https://example.com/ch"},
                     cfg,
                 )
             )
             self.assertEqual(
                 score_listing(
                     {
-                        "company": "Crossing Hurdles",
+                        "company": "Initech",
                         "role": "Senior Python Engineer",
                         "url": "https://example.com/ch",
                         "location": "Canada",
@@ -914,7 +914,7 @@ class HuntTests(unittest.TestCase):
         google_html = """
         <a href="/url?q=https://boards.greenhouse.io/northstar/jobs/99&amp;sa=U">GH via Google</a>
         <a href="/url?q=https://company.icims.com/jobs/12345/job&amp;sa=U">iCIMS</a>
-        <a href="/url?q=https://acme.wd1.myworkdayjobs.com/en-US/Careers/job/Montreal/SE_R1&amp;sa=U">Workday</a>
+        <a href="/url?q=https://acme.wd1.myworkdayjobs.com/en-US/Careers/job/Calgary/SE_R1&amp;sa=U">Workday</a>
         <a href="/url?q=https://www.google.com/search&amp;sa=U">skip google</a>
         """
         google_links = collect_job_links(google_html, "https://www.google.com/search")
@@ -927,7 +927,7 @@ class HuntTests(unittest.TestCase):
             unwrap_result_url("https://www.google.com/url?q=https://jobs.lever.co/acme/abc&sa=U"),
             "https://jobs.lever.co/acme/abc",
         )
-        self.assertIn("site:boards.greenhouse.io", build_google_dork("Software Engineer", "site:boards.greenhouse.io", "Montreal, Canada"))
+        self.assertIn("site:boards.greenhouse.io", build_google_dork("Software Engineer", "site:boards.greenhouse.io", "Calgary, Canada"))
         self.assertIn('"Software Engineer"', build_google_dork("Software Engineer", "greenhouse", "Canada"))
         self.assertEqual(
             canonicalize_job_url("https://www.linkedin.com/jobs/view/4423802476/?trk=flagship"),
@@ -938,14 +938,14 @@ class HuntTests(unittest.TestCase):
 
         salary = "https://ca.indeed.com/career/senior-software-engineer/salaries/Montr%C3%A9al--QC"
         self.assertFalse(is_job_posting_url(salary))
-        self.assertFalse(is_job_posting_url("https://ca.indeed.com/jobs?q=Software+Engineer&l=Montreal"))
+        self.assertFalse(is_job_posting_url("https://ca.indeed.com/jobs?q=Software+Engineer&l=Calgary"))
         self.assertTrue(is_job_posting_url("https://ca.indeed.com/viewjob?jk=abc123"))
         self.assertTrue(is_job_posting_url("https://www.linkedin.com/jobs/view/4456591134"))
         self.assertFalse(is_job_posting_url("https://www.linkedin.com/jobs/search/?keywords=Software+Engineer"))
         self.assertTrue(is_job_posting_url("https://boards.greenhouse.io/acme/jobs/9"))
         mixed = """
         <a href="https://ca.indeed.com/viewjob?jk=abc123">job</a>
-        <a href="https://ca.indeed.com/career/senior-software-engineer/salaries/Montréal--QC">salary</a>
+        <a href="https://ca.indeed.com/career/senior-software-engineer/salaries/Vancouver--BC">salary</a>
         """
         indeed_links = collect_job_links(mixed, "https://ca.indeed.com/jobs?q=Software+Engineer")
         self.assertTrue(any("jk=abc123" in item for item in indeed_links))
@@ -957,9 +957,9 @@ class HuntTests(unittest.TestCase):
                 score_listing(
                     {
                         "company": "Unknown",
-                        "role": "Senior software engineer salary in Montréal, QC",
+                        "role": "Senior software engineer salary in Vancouver, BC",
                         "url": salary,
-                        "location": "Montreal, Canada",
+                        "location": "Calgary, Canada",
                         "jd": "Average base salary $126,706",
                     },
                     cfg,
@@ -968,7 +968,7 @@ class HuntTests(unittest.TestCase):
             )
             self.assertTrue(
                 is_directory_or_salary_listing(
-                    {"role": "Senior software engineer salary in Montréal, QC", "url": salary}
+                    {"role": "Senior software engineer salary in Vancouver, BC", "url": salary}
                 )
             )
             url = fill_search_url(
@@ -978,7 +978,7 @@ class HuntTests(unittest.TestCase):
             )
             self.assertIn("Software+Engineer", url)
             self.assertIn("Canada", url)
-            self.assertNotIn("Montreal", url)
+            self.assertNotIn("Calgary", url)
             from pipeline.search import hunt_location, hunt_locations, listing_in_scope
 
             self.assertEqual(hunt_location(cfg), "Canada")
@@ -1031,7 +1031,7 @@ class HuntTests(unittest.TestCase):
                 {
                     "role": "Software Engineer",
                     "url": "https://boards.greenhouse.io/acme/jobs/7",
-                    "location": "Montreal, QC, Canada",
+                    "location": "Calgary, QC, Canada",
                     "jd": "Python Kafka distributed systems.",
                 },
                 cfg,
@@ -1177,7 +1177,7 @@ class HuntTests(unittest.TestCase):
                                 "name": "Software Engineer",
                                 "company": {"name": "Acme"},
                                 "refs": {"landing_page": "https://boards.greenhouse.io/acme/jobs/1"},
-                                "locations": [{"name": "Montreal, Canada"}],
+                                "locations": [{"name": "Calgary, Canada"}],
                                 "contents": "<p>Python Kafka</p>",
                             },
                             {
@@ -1205,7 +1205,7 @@ class HuntTests(unittest.TestCase):
                                 "name": "Barista",
                                 "company": {"name": "Cafe"},
                                 "refs": {"landing_page": "https://example.com/coffee"},
-                                "locations": [{"name": "Montreal, Canada"}],
+                                "locations": [{"name": "Calgary, Canada"}],
                                 "contents": "<p>Coffee</p>",
                             },
                         ]
@@ -1244,6 +1244,10 @@ class HuntTests(unittest.TestCase):
         extra = (
             "  exclude_levels:\n"
             "    - principal\n"
+            "  preferred_skills:\n"
+            "    - python\n"
+            "    - kafka\n"
+            "    - aws\n"
             "  reject_skills:\n"
             "    - java\n"
             "  saved_jobs:\n"
@@ -1255,7 +1259,7 @@ class HuntTests(unittest.TestCase):
                 "company": "SavedCo",
                 "role": "Principal Python Engineer",
                 "url": "https://example.com/saved",
-                "location": "Montreal, Canada",
+                "location": "Calgary, Canada",
                 "jd": "10-15 years of Python required.",
                 "saved": True,
             }
@@ -1263,7 +1267,7 @@ class HuntTests(unittest.TestCase):
                 "company": "FitCo",
                 "role": "Senior Software Engineer",
                 "url": "https://example.com/fit",
-                "location": "Montreal, Canada",
+                "location": "Calgary, Canada",
                 "jd": "5+ years of experience with Python and Kafka.",
             }
             self.assertEqual(score_listing(saved, cfg), 50)
@@ -1274,7 +1278,7 @@ class HuntTests(unittest.TestCase):
                         "company": "CppCo",
                         "role": "C++ Software Engineer",
                         "url": "https://example.com/cpp",
-                        "location": "Montreal, Canada",
+                        "location": "Calgary, Canada",
                         "jd": "5+ years of C++ required. STL and templates.",
                         "saved": True,
                     },
@@ -1300,7 +1304,7 @@ class HuntTests(unittest.TestCase):
                             "title": "Software Engineer",
                             "company": "McpCo",
                             "url": "https://ca.indeed.com/viewjob?jk=1",
-                            "location": "Montreal, QC",
+                            "location": "Calgary, QC",
                             "description": "Python Kafka",
                         }
                     ]
@@ -1393,7 +1397,7 @@ class HuntTests(unittest.TestCase):
         folder = root / "applications" / "Acme-Software-Engineer-2026-08-29"
         folder.mkdir(parents=True)
         (folder / "job.json").write_text(
-            '{"company": "Acme", "role": "Software Engineer", "url": "https://example.com/job", "location": "Montreal, QC, Canada", "work_mode": "hybrid"}'
+            '{"company": "Acme", "role": "Software Engineer", "url": "https://example.com/job", "location": "Calgary, QC, Canada", "work_mode": "hybrid"}'
         )
         (folder / "Test_CV.pdf").write_text("pdf")
         try:
@@ -1403,7 +1407,7 @@ class HuntTests(unittest.TestCase):
             self.assertEqual(summary["role"], "Software Engineer")
             self.assertEqual(summary["url"], "https://example.com/job")
             self.assertEqual(summary.get("apply_url"), "")
-            self.assertEqual(summary["location"], "Montreal")
+            self.assertEqual(summary["location"], "Calgary")
             self.assertEqual(summary["work_mode"], "hybrid")
             self.assertTrue(summary["has_pdf"])
             self.assertTrue(summary["pdf_path"])
@@ -1451,14 +1455,14 @@ class HuntTests(unittest.TestCase):
           <header class="header">
             <div class="header-name">Test User</div>
             <div class="header-title">Software Engineer</div>
-            <div class="header-contact"><span>Montreal</span></div>
+            <div class="header-contact"><span>Calgary</span></div>
           </header>
           <div class="summary">Python Kafka.</div>
           <div class="section-heading">Work Experience</div>
           <div class="job-block">
             <div class="job-header">
               <span class="company-name">Acme</span>
-              <span class="job-place">Montreal</span>
+              <span class="job-place">Calgary</span>
             </div>
             <ul><li><span class="point">Shipped a pipeline.</span></li></ul>
           </div>
@@ -1718,7 +1722,7 @@ class HuntTests(unittest.TestCase):
                 "company": "GitLab",
                 "role": "Senior Backend Engineer",
                 "url": "https://boards.greenhouse.io/gitlab/jobs/100",
-                "location": "Montreal, Canada",
+                "location": "Calgary, Canada",
                 "jd": "5+ years of Python and Kafka.",
             }
             second = {
@@ -1746,7 +1750,7 @@ class HuntTests(unittest.TestCase):
                 "company": "GitLab",
                 "role": "Senior Backend Engineer",
                 "url": "https://boards.greenhouse.io/gitlab/jobs/999",
-                "location": "Montreal, Canada",
+                "location": "Calgary, Canada",
                 "jd": "5+ years of Python and Kafka.",
             }
             self.assertIn("https://boards.greenhouse.io/gitlab/jobs/999", existing_job_urls(cfg))
@@ -1847,7 +1851,7 @@ class HuntTests(unittest.TestCase):
                 "company": "Acme",
                 "role": "Software Engineer",
                 "url": "https://example.com/py",
-                "location": "Montreal, QC, Canada",
+                "location": "Calgary, QC, Canada",
                 "jd": "5+ years of Python and Kafka. Distributed systems.",
             }
             cpp_job = {
@@ -1883,9 +1887,9 @@ class HuntTests(unittest.TestCase):
             self.assertFalse(apply_stack_gate(mixed, cfg, ask_llm=lambda *_: False))
             self.assertEqual(infer_work_mode("Toronto, ON (Hybrid)", ""), "hybrid")
             self.assertEqual(infer_work_mode("Remote, Canada", ""), "remote")
-            self.assertEqual(infer_work_mode("Montreal, QC", "On-site in downtown Montreal"), "onsite")
-            self.assertEqual(display_location("Montreal, QC, Canada", "onsite"), "Montreal")
-            self.assertEqual(display_location("Toronto / Montreal", "hybrid"), "Toronto, Montreal")
+            self.assertEqual(infer_work_mode("Calgary, QC", "On-site in downtown Calgary"), "onsite")
+            self.assertEqual(display_location("Calgary, QC, Canada", "onsite"), "Calgary")
+            self.assertEqual(display_location("Toronto / Calgary", "hybrid"), "Toronto, Calgary")
 
             from pipeline.jobs import apply_pasted_job_text, infer_company_role
             c1, r1 = infer_company_role("", "Company: Stripe\nRole: Senior Backend Engineer\nDescription: ...")
@@ -1920,7 +1924,7 @@ class HuntTests(unittest.TestCase):
             "role": "Software Engineer",
             "url": "https://example.com/acme",
             "jd": "Python Kafka",
-            "location": "Montreal",
+            "location": "Calgary",
         }
 
         async def fake_search(cfg, limit=None, on_listing=None, on_stage=None, should_stop=None):
@@ -1981,14 +1985,14 @@ class HuntTests(unittest.TestCase):
             "role": "Software Engineer",
             "url": "https://example.com/acme",
             "jd": "Python Kafka",
-            "location": "Montreal",
+            "location": "Calgary",
         }
         second = {
             "company": "Beta",
             "role": "Software Engineer",
             "url": "https://example.com/beta",
             "jd": "Python Kafka",
-            "location": "Montreal",
+            "location": "Calgary",
         }
         search_done = {"v": False}
 
@@ -2046,14 +2050,14 @@ class HuntTests(unittest.TestCase):
             "role": "Software Engineer",
             "url": "https://example.com/acme",
             "jd": "Python Kafka",
-            "location": "Montreal",
+            "location": "Calgary",
         }
         second = {
             "company": "Beta",
             "role": "Software Engineer",
             "url": "https://example.com/beta",
             "jd": "Python Kafka",
-            "location": "Montreal",
+            "location": "Calgary",
         }
         stop = {"v": False}
         processed: list[str] = []
@@ -2287,7 +2291,7 @@ class ApplyUrlTests(unittest.TestCase):
                 "url": "https://www.linkedin.com/jobs/view/4450738702",
                 "apply_url": "https://www.linkedin.com/jobs/view/4450738702",
                 "apply_kind": "easy_apply",
-                "location": "Montreal",
+                "location": "Calgary",
             }
         )
         self.assertEqual(listing["apply_kind"], "easy_apply")
@@ -2491,7 +2495,7 @@ class ApplyUrlTests(unittest.TestCase):
         (root / "applications").mkdir()
         (root / "config.yaml").write_text(
             "user:\n  full_name: Desk Tester\n  preferred_name: Desk\n  email: a@b.c\n  phone: 555\n"
-            "  city: Montreal\n  country: Canada\n  linkedin: https://linkedin.com/in/x\n"
+            "  city: Calgary\n  country: Canada\n  linkedin: https://linkedin.com/in/x\n"
             "visa:\n  status: permanent-resident\n  description: PR, no sponsorship\n"
         )
         os.environ["JOB_SEARCH_ROOT"] = str(root)

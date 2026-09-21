@@ -98,16 +98,8 @@ Write to `applications/<company>-<role>-<date>/analysis.md`:
 **If tailoring in-chat instead:**
 1. Copy `resumes/template.html` → `applications/<company>-<role>-<date>/<Name>_CV.html`.
 2. **Edit ONLY placeholder content** (do not restructure):
-   - **Tagline**: You MUST pick exactly ONE title from this pre-approved list that best matches the JD:
-     - Software Engineer — Forward Deployed Engineering & AI Systems
-     - Software Engineer — Real-Time Data & Distributed Systems
-     - Software Engineer — Backend Infrastructure & Data Pipelines
-     - Software Engineer — Customer-Facing Delivery & AI Solutions
-     - Software Engineer — Technical Prototyping & Customer Integrations
-     - Software Engineer — ML Pipelines, NLP & Analytics Automation
-     - Software Engineer — Distributed Systems & Platform Engineering
-     - Backend Engineer — Microservices, APIs & Data Streaming
-     Do NOT invent your own title or try to match a hyper-specific JD title.
+   - **Tagline**: You MUST pick exactly ONE title from the per-user pre-approved list at `tailor.approved_titles` in `config.yaml` (merged over `config.example.yaml`) that best matches the JD.
+     Do NOT invent your own title or try to match a hyper-specific JD title. Never hardcode a title list here — a second user's titles live in their own config.
    - **Job Titles**: Always use the exact employer titles from the master CV. Do NOT alter past job titles to match the JD.
    - **About / summary**: rewrite using `experience-bank/about-variants.md` matching the role type. Tweak the final sentence to name the role / company.
    - **Job bullets**: for each employer, synthesize highly targeted bullets from `experience-bank/<employer>.md` based on the JD. When `cv_format.bullets.dynamic` is true, give more bullets to the best-matching employer (within `min`–`max`) and leave unused slots empty. When it is false, keep the configured `bullets` count. Fill leftover slots from `cv_master.md`. Never invent facts, but do write fresh text based on the source material.

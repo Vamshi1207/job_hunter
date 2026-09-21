@@ -116,7 +116,7 @@ async function loadMe() {
     `Hunt looks for ${roles}` +
     (markets || where ? ` in ${markets || where}` : "") +
     (preferred ? ` (${preferred} preferred)` : "") +
-    ". US postings are kept only when they are open to Canada applicants" +
+    ". Extra-market postings are kept only when they are open to home-market applicants" +
     (state.hunt.max_jobs
       ? ` (safety cap ${state.hunt.max_jobs} matches)`
       : ", and tailors every posting that matches") +

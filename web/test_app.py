@@ -25,7 +25,7 @@ class DeskAPITests(unittest.TestCase):
         (self.root / "config.yaml").write_text(
             "user:\n"
             "  full_name: Desk Tester\n"
-            "  city: Montreal\n"
+            "  city: Calgary\n"
             "  country: Canada\n"
             "career:\n"
             "  years_experience: 6\n"
@@ -138,12 +138,12 @@ class DeskAPITests(unittest.TestCase):
         self.assertEqual(res.status_code, 200)
         body = res.json()
         self.assertEqual(body["name"], "Desk Tester")
-        self.assertEqual(body["city"], "Montreal")
+        self.assertEqual(body["city"], "Calgary")
         self.assertIn("Software Engineer", body["hunt"]["roles"])
         self.assertIn(body["hunt"]["max_jobs"], (0, None))
         self.assertIn("java", body["hunt"]["reject_skills"])
         self.assertIn("Canada", body["hunt"]["search_locations"])
-        self.assertEqual(body["hunt"]["preferred_city"], "Montreal")
+        self.assertEqual(body["hunt"]["preferred_city"], "Calgary")
         self.assertGreaterEqual(body["hunt"]["login_wait_seconds"], 120)
         self.assertIn("6080", body["camoufox"]["vnc"])
         self.assertIn("/extension", body["apply_helper"]["extension_path"].replace("\\", "/"))
@@ -196,7 +196,7 @@ class DeskAPITests(unittest.TestCase):
             "/api/inspect",
             json={
                 "url": "https://www.linkedin.com/jobs/view/123",
-                "jd": "Python Kafka engineer in Montreal",
+                "jd": "Python Kafka engineer in Calgary",
             },
         )
         self.assertEqual(res.status_code, 200)

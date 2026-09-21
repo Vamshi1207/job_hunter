@@ -30,6 +30,26 @@ from pipeline.llm import complete_prompt
 
 log = logging.getLogger(__name__)
 
+# Fallback taglines when `tailor.approved_titles` is not configured.
+# Real per-user lists live in config.yaml so no personal titles sit in code.
+DEFAULT_APPROVED_TITLES = [
+    "Software Engineer — Backend Systems",
+    "Software Engineer — Data & Distributed Systems",
+    "Software Engineer — APIs & Platform Engineering",
+    "Backend Engineer — Services & Data Pipelines",
+]
+
+
+def approved_titles(cfg: Config | None = None) -> list[str]:
+    """Taglines the tailor prompt may pick from. Per-user config, not code."""
+    cfg = cfg or load_config()
+    raw = cfg.get("tailor.approved_titles")
+    if isinstance(raw, str):
+        raw = [raw]
+    titles = [str(t).strip() for t in (raw or []) if str(t).strip()]
+    return titles or list(DEFAULT_APPROVED_TITLES)
+
+
 DEFAULT_JOB_BLOCKS = [
     {
         "prefix": "JOB1",
@@ -295,6 +315,8 @@ def build_tailor_prompt(cfg: Config, company: str, role: str, jd_text: str, feed
         if gen_cover
         else ""
     )
+    titles = approved_titles(cfg)
+    titles_block = "\n".join(f"  {i + 1}. {title}" for i, title in enumerate(titles))
 
     return f"""
 You are tailoring application materials for {cfg.full_name} applying to '{role}' at {company}.
@@ -335,14 +357,7 @@ LinkedIn DM max words: {dm_words}
 - If the bank has fewer bullets than needed, fill the rest from the master CV within the freedom level above.
 - Text changes only. Do not add/remove jobs, projects, education, or employers from the template.
 - Rewrite the tagline and summary for this role. The tagline MUST be picked EXACTLY from this pre-approved list (pick the one that best matches the JD):
-  1. Software Engineer — Forward Deployed Engineering & AI Systems
-  2. Software Engineer — Real-Time Data & Distributed Systems
-  3. Software Engineer — Backend Infrastructure & Data Pipelines
-  4. Software Engineer — Customer-Facing Delivery & AI Solutions
-  5. Software Engineer — Technical Prototyping & Customer Integrations
-  6. Software Engineer — ML Pipelines, NLP & Analytics Automation
-  7. Software Engineer — Distributed Systems & Platform Engineering
-  8. Backend Engineer — Microservices, APIs & Data Streaming
+{titles_block}
   DO NOT invent your own title. NEVER append buzzwords or domain specifics outside of this list.
 - EXACT KEYWORD MATCHING: Where the candidate has verified experience with a concept required by the JD, use the JD's exact technical terminology (e.g. 'FastAPI microservices' instead of 'Python web services', 'Kafka consumer lag' instead of 'messaging delays') to ensure ATS exact-match detection.
 - BULLET ARCHITECTURE: Write every experience bullet with high density: [Strong Action Verb] + [Specific Framework/Tool/Context] + [Measurable Impact, Latency, Scale, or Architectural Outcome]. Avoid weak passive descriptions like 'responsible for' or 'worked on'.

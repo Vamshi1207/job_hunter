@@ -16,6 +16,55 @@ def _text(path: Path) -> str:
     return path.read_text() if path.exists() else ""
 
 
+_STAGE_LABELS = {
+    "junior": ("a Junior", "Junior Engineer"),
+    "mid": ("a Mid-level", "Mid-Level Engineer"),
+    "senior": ("an experienced Senior", "Senior Engineer"),
+    "career-changer": ("a career-changing", "Software Engineer"),
+    "academic": ("an academic", "Research Engineer"),
+}
+
+
+def candidate_descriptor(cfg: Config) -> tuple[str, str]:
+    """(long, short) role descriptor derived from career config, never hardcoded.
+
+    Returns e.g. ("an experienced Senior Software Engineer", "Senior Engineer").
+    A second user gets their own stage/role without touching this code.
+    """
+    stage = str(cfg.get("career.stage") or "senior").strip().lower()
+    long_stage, short_role = _STAGE_LABELS.get(stage, ("an experienced", "Engineer"))
+    roles = cfg.get("career.target_roles") or []
+    if isinstance(roles, str):
+        roles = [roles]
+    role = next((str(r).strip() for r in roles if str(r).strip()), "Software Engineer")
+    return f"{long_stage} {role}", short_role
+
+
+def _signature_project_hint(cfg: Config) -> str:
+    """Build the 'most impactful thing' example from the user's own config.
+
+    Uses their real employers (experience.jobs) and stack (hunt.preferred_skills)
+    so the prompt never names one person's history.
+    """
+    from pipeline.search import preferred_skills
+
+    jobs = cfg.get("experience.jobs") or []
+    employers = [str(j.get("employer") or "").strip() for j in jobs if isinstance(j, dict)]
+    employers = [e for e in employers if e]
+    skills = [s for s in preferred_skills(cfg)[:3] if s]
+    stack = ", ".join(skills) if skills else "core stack"
+    if len(employers) >= 2:
+        project = f"{stack} work at {employers[0]} or {employers[1]}"
+    elif employers:
+        project = f"{stack} work at {employers[0]}"
+    else:
+        project = f"{stack} project from the experience bank"
+    return (
+        f"for low-latency, streaming, AI, or modern backend systems, prioritize {project}; "
+        "for enterprise customer integrations, highlight full-lifecycle customer API delivery"
+    )
+
+
 def fill_fields(cfg: Config, job: dict | None = None) -> dict:
     visa = visa_answers(cfg)
     city = (cfg.get("user.city") or "").strip()
@@ -603,13 +652,15 @@ The candidate reviewed the previous answer and provided this direct feedback for
 Strictly incorporate this direction (e.g. emphasize requested technologies, adjust length or tone) while remaining completely truthful to the profile.
 """
 
-    prompt = f"""You are answering job application form questions as {cfg.full_name}, an experienced Senior Software Engineer applying for '{role_name}' at {company_name}.
+    long_desc, short_role = candidate_descriptor(cfg)
+    project_hint = _signature_project_hint(cfg)
+    prompt = f"""You are answering job application form questions as {cfg.full_name}, {long_desc} applying for '{role_name}' at {company_name}.
 {feedback_section}
 ### Grounding & Truthfulness:
 Answer ONLY from the source materials below (Memory, CV, Projects, Writing rules). Do NOT invent employers, tools, users, revenue, or metrics that do not exist in the source materials. If a question cannot be answered honestly from the profile, set skip=true.
 
-### Reader's View & Voice Guidelines (Sound like an authentic, high-caliber Senior Engineer, not an ATS robot):
-1. **Conversational Senior Engineer Voice**:
+### Reader's View & Voice Guidelines (Sound like an authentic, high-caliber {short_role}, not an ATS robot):
+1. **Conversational {short_role} Voice**:
    - Write in the first person ("I", "my") with a natural, pragmatic, and confident tone.
    - Speak directly to the hiring manager or tech lead as a peer.
    - BANNED CLICHÉS: Never use "mirrors my work", "mirrors the problems I solve", "driving the stakeholder loop", "confirming behavioral constraints", "aligns with my passion", "testament to", or "seamless integration".
@@ -621,8 +672,8 @@ Answer ONLY from the source materials below (Memory, CV, Projects, Writing rules
      - Explain why this engineering problem genuinely interests you.
      - Connect 1-2 relevant technical strengths from your background (e.g. building reliable real-time pipelines, developer integrations, distributed systems) to show how you can contribute immediately.
      - NEVER lead with "Your focus matches my experience" or start by listing your past employers in sentence one.
-   - **"What is the most impactful thing you've built? / What was your specific contribution?"**:
-     - Pick the project from your experience that best matches {company_name}'s technical domain (e.g. for low-latency, streaming, AI, or modern backend systems, prioritize real-time Kafka event streaming at Uber or containerized streaming platform; for enterprise customer integrations, highlight full-lifecycle customer API delivery).
+    - **"What is the most impactful thing you've built? / What was your specific contribution?"**:
+      - Pick the project from your experience that best matches {company_name}'s technical domain (e.g. {project_hint}).
      - Structure as a builder: (1) what the core technical problem was, (2) what you personally architected and implemented (technologies, Python, data flow), and (3) the concrete impact (throughput, latency, user adoption).
    - **"How did you know it worked? / What did success look like?"**:
      - Frame verification like a software engineer:

@@ -72,6 +72,12 @@ def split_required_bonus(jd: str) -> tuple[str, str]:
 
 
 def user_language_families(cfg: Config) -> set[str]:
+    """Language families from hunt.preferred_skills (+ hunt.strong_skills).
+
+    Empty when nothing is configured — meaning "no stack opinion", not Python.
+    A hardcoded {"python"} default here would bake one user's stack into the
+    pipeline for every future user.
+    """
     found: set[str] = set()
     extra = cfg.get("hunt.strong_skills")
     skills = list(preferred_skills(cfg))
@@ -83,7 +89,7 @@ def user_language_families(cfg: Config) -> set[str]:
     for family, aliases in LANGUAGE_FAMILIES.items():
         if any(phrase_in(blob, alias) for alias in aliases):
             found.add(family)
-    return found or {"python"}
+    return found
 
 
 def allowed_families(cfg: Config) -> set[str]:
@@ -129,8 +135,10 @@ def mentioned_languages(listing: dict) -> set[str]:
 
 def stack_decision(listing: dict, cfg: Config) -> str:
     """Return keep, drop, or doubt for this posting vs the candidate's languages."""
-    allowed = allowed_families(cfg)
     mine = user_language_families(cfg)
+    if not mine:
+        return "keep"  # no stack configured → no stack gate for this user
+    allowed = allowed_families(cfg)
     title_langs = languages_in(listing.get("role") or "")
     required = required_languages(listing)
     mentioned = mentioned_languages(listing)
@@ -201,7 +209,7 @@ def apply_stack_gate(listing: dict, cfg: Config, *, ask_llm=None) -> bool:
 def confirm_stack_with_llm(listing: dict, cfg: Config) -> bool:
     from pipeline.llm import complete_prompt
 
-    skills = ", ".join(preferred_skills(cfg)[:12]) or "Python"
+    skills = ", ".join(preferred_skills(cfg)[:12]) or "(none configured — match leniently)"
     rejected = ", ".join(reject_skills(cfg)) or "none"
     jd = (listing.get("jd") or "")[:4000]
     prompt = f"""Decide if this job matches the candidate's strong skills.

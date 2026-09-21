@@ -166,6 +166,18 @@ experience:
       default_title: Software Engineer
       bullets: 6
 
+# ---------- Tailoring ----------
+# Per-user content the prompts may use. A different user overrides these in
+# their own config.yaml instead of editing pipeline code.
+tailor:
+  # Taglines the tailor prompt may pick from (exactly one per CV).
+  # Keep these aligned with the user's real background.
+  approved_titles:
+    - "Software Engineer — Backend Systems"
+    - "Software Engineer — Data & Distributed Systems"
+    - "Software Engineer — APIs & Platform Engineering"
+    - "Backend Engineer — Services & Data Pipelines"
+
 # ---------- Pipeline ----------
 pipeline:
   jobs_file: jobs.yaml
@@ -205,10 +217,15 @@ pipeline:
 hunt:
   max_jobs: 0                # 0 = tailor every match; >0 is a safety ceiling, not a ranking
   api_sources: true           # The Muse + Remotive public APIs (no extra keys). Fit gates still apply.
-  # Search the country, not the city. user.city (e.g. Montreal) only boosts ranking.
+  # Search the country, not the city. user.city only boosts ranking.
   search_locations:
     - Canada
-    - United States          # kept only when the posting is open to Canada applicants
+  # Extra markets searched in addition to the home market (user.country +
+  # career.target_markets). Postings there are kept only when they read as
+  # open to home-market applicants. A second user replaces this list instead
+  # of editing pipeline code.
+  extra_search_markets:
+    - United States
   greenhouse_boards: []
   # Example: the Greenhouse board token from boards.greenhouse.io/<token>
   ats_boards: []

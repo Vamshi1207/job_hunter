@@ -214,7 +214,7 @@ def fill_search_url(template: str, cfg: Config, query: str, extra: dict | None =
 
 
 def build_google_dork(query: str, ats: str, location: str = "") -> str:
-    """Role + ATS operator + location, e.g. "Software Engineer" site:boards.greenhouse.io Montreal, Canada."""
+    """Role + ATS operator + location, e.g. "Software Engineer" site:boards.greenhouse.io Toronto, Canada."""
     operator = (ats or "").strip()
     if operator and not operator.lower().startswith("site:") and "." in operator and " " not in operator:
         operator = f"site:{operator.lstrip('/')}"
@@ -604,7 +604,9 @@ async def _crawl_source(page, cfg: Config, source: dict, delay_ms: int, login_wa
         if _stopped():
             break
         is_remote = "remote" in location.lower()
-        clean_loc = re.sub(r"\bremote\b", "", location, flags=re.I).strip() or "Canada"
+        clean_loc = re.sub(r"\bremote\b", "", location, flags=re.I).strip() or (
+            cfg.get("user.country") or ""
+        ).strip()
         for query in queries:
             if _stopped():
                 break
@@ -1798,7 +1800,7 @@ async def _extract_posting(page, cfg: Config, source: dict, url: str, delay_ms: 
         ],
     )
     if loc and "·" in loc:
-        # e.g. "Montreal, QC · Reposted 4 days ago · Over 100 people clicked apply"
+        # e.g. "Toronto, ON · Reposted 4 days ago · Over 100 people clicked apply"
         loc = loc.split("·")[0].strip()
 
     extracted_mode = ""

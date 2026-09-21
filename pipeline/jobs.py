@@ -275,7 +275,7 @@ def infer_work_mode(location: str = "", jd: str = "") -> str:
 
 
 def display_location(location: str = "", work_mode: str = "") -> str:
-    """Short place list for the desk table, e.g. Montreal, Toronto, Remote."""
+    """Short place list for the desk table, e.g. Austin, Toronto, Remote."""
     text = (location or "").strip()
     if not text:
         return "Remote" if work_mode == "remote" else ""
