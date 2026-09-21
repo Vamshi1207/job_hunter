@@ -1,0 +1,220 @@
+# Default geography dataset for the hunt scope gates.
+#
+# World knowledge, not personal data: country names, aliases, provinces,
+# states, and major cities. The pipeline reads this file at runtime
+# (pipeline/geo.py) so no place names are hardcoded in code.
+#
+# Per-user additions (your own cities, alternate names) go in config.yaml
+# under hunt.home_aliases — never edit this file for personal data.
+# Short aliases (ca, us, uk, in, ...) are used ONLY for normalizing a
+# configured home/extra market name, never for matching text, because bare
+# short tokens false-positive ("contact us", "based on", ...).
+
+countries:
+  canada:
+    display: Canada
+    aliases: [canadian, canadians, ca, can]
+    codes: [on, qc, bc, ab, mb, sk, ns, nb, nl, pe, yt, nt, nu]
+    places: [ontario, quebec, "québec", british columbia, alberta, manitoba,
+      saskatchewan, nova scotia, new brunswick, newfoundland, prince edward,
+      yukon, nunavut, northwest territories, montreal, "montréal", toronto,
+      vancouver, calgary, ottawa, edmonton, winnipeg, halifax, victoria,
+      waterloo, kitchener, mississauga, brampton, markham, gatineau, hamilton,
+      saskatoon, regina, kelowna, burnaby, surrey, windsor, "london, on",
+      "québec city", quebec city]
+    # Phrases meaning "open to home applicants" for a Canada home.
+    eligible_phrases:
+      - 'canada'
+      - 'canadian'
+      - 'canadians'
+      - 'canada applicants?'
+      - 'open to canada'
+      - 'work from canada'
+      - 'eligible in canada'
+      - 'canada or (?:the )?u\.?s'
+      - 'u\.?s\.? or canada'
+      - 'north america(?:n)?'
+
+  united states:
+    display: United States
+    aliases: [usa, u.s., u.s.a., america, us, united states of america]
+    # ca omitted: collides with the Canada abbreviation.
+    codes: [al, ak, az, ar, co, ct, de, fl, ga, hi, ia, id, il, ks, ky, la,
+      ma, md, me, mi, mn, mo, ms, mt, nc, nd, ne, nh, nj, nm, nv, ny, oh, ok,
+      or, pa, ri, sc, sd, tn, tx, ut, va, vt, wa, wi, wv, dc]
+    places: [united states of america, new york, san francisco, bay area, seattle, austin, boston,
+      chicago, denver, los angeles, atlanta, miami, dallas, portland,
+      washington dc, "washington, dc", nyc, sf, alabama, alaska, arizona,
+      arkansas, california, colorado, connecticut, delaware, florida, georgia,
+      hawaii, idaho, illinois, indiana, iowa, kansas, kentucky, louisiana,
+      maine, maryland, massachusetts, michigan, minnesota, mississippi,
+      missouri, montana, nebraska, nevada, new hampshire, new jersey,
+      new mexico, north carolina, north dakota, ohio, oklahoma, oregon,
+      pennsylvania, rhode island, south carolina, south dakota, tennessee,
+      texas, utah, vermont, virginia, washington, west virginia, wisconsin,
+      wyoming, district of columbia]
+    eligible_phrases:
+      - 'north america(?:n)?'
+    # Unambiguous inside restrictive phrasing ("US citizenship required").
+    # Never used for general matching ("contact us" would false-positive).
+    auth_abbrs: [us]
+    default_home_aliases: [north america, north american]
+
+  united kingdom:
+    display: United Kingdom
+    aliases: [u.k., great britain, england, scotland, wales, uk]
+    codes: []
+    places: [northern ireland, london, manchester, birmingham, leeds,
+      edinburgh, glasgow, bristol, liverpool, sheffield, leicester, coventry,
+      nottingham]
+    eligible_phrases: []
+    auth_abbrs: [uk]
+    # Matched as home markers for a UK home (boundary-safe, unlike "us").
+    default_home_aliases: [UK]
+
+  ireland:
+    display: Ireland
+    aliases: [ie, eire]
+    codes: []
+    places: [dublin, cork, galway, limerick]
+    eligible_phrases: []
+
+  germany:
+    display: Germany
+    aliases: [deutschland, de]
+    codes: []
+    places: [berlin, munich, "münchen", hamburg, frankfurt, cologne, "köln",
+      stuttgart, dusseldorf, "düsseldorf", leipzig, dresden, nuremberg]
+    eligible_phrases: []
+
+  france:
+    display: France
+    aliases: [fr, "république française"]
+    codes: []
+    places: [paris, lyon, marseille, toulouse, bordeaux, nantes, lille]
+    eligible_phrases: []
+
+  netherlands:
+    display: Netherlands
+    aliases: [holland, dutch, nl]
+    codes: []
+    places: [amsterdam, rotterdam, utrecht, eindhoven, the hague]
+    eligible_phrases: []
+
+  spain:
+    display: Spain
+    aliases: [es, "españa"]
+    codes: []
+    places: [madrid, barcelona, valencia, seville]
+    eligible_phrases: []
+
+  australia:
+    display: Australia
+    aliases: [au, oz]
+    codes: [nsw, vic, qld, wa, sa, tas, act, nt]
+    places: [sydney, melbourne, brisbane, perth, adelaide, canberra,
+      new south wales, victoria, queensland, western australia,
+      south australia, tasmania]
+    eligible_phrases: []
+
+  india:
+    display: India
+    aliases: [ind, bharat]
+    codes: []
+    places: [indian, mumbai, delhi, new delhi, bengaluru, bangalore,
+      hyderabad, chennai, pune, kolkata, ahmedabad]
+    eligible_phrases: []
+
+  singapore:
+    display: Singapore
+    aliases: [sg]
+    codes: []
+    places: []
+    eligible_phrases: []
+
+  japan:
+    display: Japan
+    aliases: [jp, nippon]
+    codes: []
+    places: [tokyo, osaka, kyoto, yokohama]
+    eligible_phrases: []
+
+  brazil:
+    display: Brazil
+    aliases: [br, brasil]
+    codes: []
+    places: [sao paulo, "são paulo", rio de janeiro]
+    eligible_phrases: []
+
+  mexico:
+    display: Mexico
+    aliases: [mx]
+    codes: []
+    places: [mexico city, guadalajara, monterrey]
+    eligible_phrases: []
+
+  sweden:
+    display: Sweden
+    aliases: [se]
+    codes: []
+    places: [stockholm, gothenburg, malmo]
+    eligible_phrases: []
+
+  norway:
+    display: Norway
+    aliases: [no, norge]
+    codes: []
+    places: [oslo, bergen]
+    eligible_phrases: []
+
+  denmark:
+    display: Denmark
+    aliases: [dk, danmark]
+    codes: []
+    places: [copenhagen]
+    eligible_phrases: []
+
+  poland:
+    display: Poland
+    aliases: [pl, polska]
+    codes: []
+    places: [warsaw, krakow]
+    eligible_phrases: []
+
+  italy:
+    display: Italy
+    aliases: [it, italia]
+    codes: []
+    places: [rome, milan, turin]
+    eligible_phrases: []
+
+  switzerland:
+    display: Switzerland
+    aliases: [ch, schweiz, suisse]
+    codes: []
+    places: [zurich, geneva, bern]
+    eligible_phrases: []
+
+  israel:
+    display: Israel
+    aliases: [il]
+    codes: []
+    places: [tel aviv, jerusalem, haifa]
+    eligible_phrases: []
+
+  uae:
+    display: UAE
+    aliases: []
+    codes: []
+    places: [dubai, abu dhabi, sharjah]
+    eligible_phrases: []
+
+  philippines:
+    display: Philippines
+    aliases: [ph]
+    codes: []
+    places: [manila, cebu]
+    eligible_phrases: []
+
+# Supranational words treated as foreign-place mentions (not home for anyone).
+region_words: [latam, latin america, europe, emea, apac, asia, africa]

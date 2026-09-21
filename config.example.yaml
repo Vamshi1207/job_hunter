@@ -22,6 +22,7 @@ workspace:
   # Relative paths (don't change unless you renamed directories)
   master_cv: cv_master.md
   build_script: build.sh
+  geo: geo/regions.yaml
   experience_bank: experience-bank/
   templates: templates/
   applications: applications/

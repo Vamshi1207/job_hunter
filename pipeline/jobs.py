@@ -13,6 +13,7 @@ import requests
 from bs4 import BeautifulSoup
 
 from pipeline.config import Config
+from pipeline.geo import canonical_country, get_regions, stoplist_tokens
 
 log = logging.getLogger(__name__)
 
@@ -250,11 +251,18 @@ def parse_posting_meta(html: str, url: str = "") -> dict:
     return {"company": company.strip(), "role": (role or "").strip()[:160], "jd": jd.strip(), "location": location.strip()}
 
 
-REGION_TOKENS = {
-    "qc", "on", "bc", "ab", "mb", "sk", "ns", "nb", "nl", "pe", "yt", "nt", "nu",
-    "ca", "us", "usa", "uk", "canada", "united states", "america", "remote",
-    "latam", "latin america", "europe", "apac", "emea", "asia", "americas", "global", "worldwide", "anywhere",
+# Geographic tokens come from geo/regions.yaml; only display vocabulary
+# (remote / worldwide / ...) stays here since it is not place knowledge.
+_DISPLAY_WORDS = {
+    "remote", "americas", "global", "worldwide", "anywhere",
 }
+
+
+def _region_tokens() -> set[str]:
+    return set(_DISPLAY_WORDS) | stoplist_tokens(get_regions())
+
+
+REGION_TOKENS = _region_tokens()
 
 
 def infer_work_mode(location: str = "", jd: str = "") -> str:
@@ -298,8 +306,9 @@ def display_location(location: str = "", work_mode: str = "") -> str:
             break
     if not found:
         low = text.lower()
-        if "canada" in low or "canadian" in low:
-            return "Canada"
+        country = canonical_country(text, get_regions())
+        if country:
+            return country
         if any(w in low for w in ["worldwide", "anywhere", "global"]):
             return "Worldwide"
         if work_mode == "remote" or "remote" in low:
