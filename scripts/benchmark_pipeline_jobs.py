@@ -118,7 +118,7 @@ Requirements:
         "jd": """
 Role: Software Engineer, Integrations
 Company: Cohere
-Location: Remote - Canada (Toronto / Montreal OK)
+Location: Remote - Canada (Toronto / Vancouver OK)
 
 About the role:
 Build and maintain production integrations that connect Cohere's enterprise LLM platform to

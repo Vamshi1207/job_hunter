@@ -284,7 +284,7 @@ hunt:
   reject_skills:
     - java
   # Never tailor these employers (company name or job URL). Applies to search and saved jobs.
-  # Add brand aliases if a board uses a shorter name (e.g. ForeFlight vs the full employer).
+  # Add brand aliases if a board uses a shorter name (e.g. Acme Air vs the full employer).
   exclude_companies:
     - Example Current Employer
 

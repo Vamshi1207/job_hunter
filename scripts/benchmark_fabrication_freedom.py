@@ -48,7 +48,7 @@ CALL_TIMEOUT = 600  # ultra can be slow; still skip agy so we don't hang overnig
 TEST_JD = """
 Role: Software Engineer, Integrations
 Company: Cohere
-Location: Remote - Canada (Toronto / Montreal OK)
+Location: Remote - Canada (Toronto / Vancouver OK)
 
 About the role:
 Build and maintain production integrations that connect Cohere's enterprise LLM platform to

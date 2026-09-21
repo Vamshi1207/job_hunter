@@ -1766,7 +1766,7 @@
                     <span>Refine with AI:</span>
                   </div>
                   <div class="hud-refine-row">
-                    <input type="text" class="hud-refine-input" id="hud-refine-input" placeholder="e.g. Focus more on Kafka, make it shorter, mention Uber…" autocomplete="off" />
+                    <input type="text" class="hud-refine-input" id="hud-refine-input" placeholder="e.g. Make it shorter, emphasize my strongest project…" autocomplete="off" />
                     <button type="button" class="hud-refine-btn" id="hud-refine-btn" title="Submit feedback and regenerate answer">
                       <span>Regenerate</span>
                       <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">

@@ -8,6 +8,7 @@ deleted.yaml
 .env
 .camoufox-profile/
 .cursor/mcp.json
+.agents/mcp_config.json
 .DS_Store
 __pycache__/
 *.pyc

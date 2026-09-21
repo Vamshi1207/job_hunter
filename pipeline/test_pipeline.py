@@ -781,7 +781,7 @@ class HuntTests(unittest.TestCase):
                     {
                         "company": "Hooli Technologies",
                         "role": "Senior Software Engineer",
-                        "url": "https://www.uber.com/careers/list/1",
+                        "url": "https://www.hooli.com/careers/list/1",
                         "location": "Calgary, Canada",
                         "jd": "5+ years of experience with Python and Kafka.",
                     },
@@ -794,7 +794,7 @@ class HuntTests(unittest.TestCase):
                     {
                         "company": "Aviato",
                         "role": "Software Engineer",
-                        "url": "https://boards.greenhouse.io/foreflight/jobs/1",
+                        "url": "https://boards.greenhouse.io/aviato/jobs/1",
                         "location": "Canada",
                         "jd": "Python Kafka",
                         "saved": True,
