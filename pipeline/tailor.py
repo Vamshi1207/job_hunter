@@ -442,7 +442,7 @@ def validate_tailored_output(parsed: dict, cfg: Config | None = None) -> tuple[b
             for i in range(1, job["bullets"] + 1)
             if (parsed.get(f"{prefix}_B{i}") or "").strip()
         ]
-        min_bullets = max(1, min(2, job.get("bullets_min", 2)))
+        min_bullets = max(4, job.get("bullets_min", 4))
         if len(bullets) < min_bullets:
             errors.append(f"{employer} has only {len(bullets)} bullet(s) (minimum {min_bullets} required)")
 
