@@ -10,7 +10,7 @@
 - CLI: `docker compose run --rm pipeline python3 -m pipeline.run_pipeline --hunt` or `--job <CompanySubstring>` (edit `jobs.yaml` first; `--force` to overwrite an existing package).
 - `build.sh` is just `python3 -m pipeline.run_pipeline "$@"`.
 - Python changes need container restart; HTML/CSS/JS under `web/` hot-reload via bind mount. After `requirements.txt`/Dockerfile changes use `--build`.
-- Compose reads `.env` (`OPENCODE_API_KEY` primary when `pipeline.provider: opencode`; `NVIDIA_API_KEY`, else `GEMINI_API_KEY` or host `~/.gemini` for agy backup). LLM cascade: Muse Spark (Zen Responses API) → Zen chat fallbacks → NVIDIA chain (Nemotron 3 Ultra → DeepSeek V4 Flash → Gemma 4) → agy/Gemini.
+- Compose reads `.env` (`OPENCODE_API_KEY` primary when `pipeline.provider: opencode`; `NVIDIA_API_KEY`, else `GEMINI_API_KEY` or host `~/.gemini` for agy backup). LLM cascade: Muse Spark (Go responses API, subscription) → Go chat fallbacks → NVIDIA chain (Nemotron 3 Ultra → DeepSeek V4 Flash → Gemma 4) → agy/Gemini.
 
 ## Tests (no LLM, no browser)
 - Host (Python 3.10+): `python3 -m unittest discover -p 'test_*.py'`

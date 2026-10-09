@@ -1,4 +1,4 @@
-"""LLM calls: OpenCode Zen (Muse Spark), then NVIDIA NIM, then agy/Gemini."""
+"""LLM calls: OpenCode Go (Muse Spark, subscription), then NVIDIA NIM, then agy/Gemini."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import threading
 import time
+import uuid
 
 from pipeline.config import load_config
 
@@ -20,14 +21,19 @@ NVIDIA_FALLBACK_MODELS = [
     "google/gemma-4-31b-it",
 ]
 
-OPENCODE_DEFAULT_URL = "https://opencode.ai/zen/v1"
-# NOTE: Zen *-free models 403 via raw API ("free tier can only be used from
-# within OpenCode"), so the paid muse-spark-1.3 is the default primary.
-OPENCODE_DEFAULT_MODEL = "muse-spark-1.3"
+OPENCODE_DEFAULT_URL = "https://opencode.ai/zen/go/v1"
+# Go subscription model IDs (NOT Zen pay-per-use IDs: no -free suffix here,
+# and muse-spark-1.3-contributor, not muse-spark-1.3). Go requires the
+# x-opencode-session header and bills the subscription, not Zen credits.
+OPENCODE_DEFAULT_MODEL = "muse-spark-1.3-contributor"
 OPENCODE_FALLBACK_MODELS = [
     "deepseek-v4-flash",
     "minimax-m3",
 ]
+
+# Stable session per process so Go can route + cache our repeated tailor prompts.
+_SESSION_ID = os.environ.get("OPENCODE_SESSION_ID") or f"jobsearch-{uuid.uuid4().hex[:12]}"
+_USER_AGENT = "job-search-pipeline/1.0"
 
 # Zen model IDs served over the Responses API (not chat/completions).
 _OPENCODE_RESPONSES_PREFIXES = ("muse-spark", "gpt-", "grok-")
@@ -158,7 +164,7 @@ def nvidia_model_chain(cfg=None) -> list[str]:
 
 
 def opencode_model_chain(cfg=None) -> list[str]:
-    """Primary Zen model (muse-spark contributor), then configured Zen fallbacks."""
+    """Primary Go model (muse-spark contributor), then configured Go fallbacks."""
     cfg = cfg or load_config()
     primary = str(cfg.get("pipeline.model") or OPENCODE_DEFAULT_MODEL).strip()
     if not _looks_like_opencode_model(primary):
@@ -376,18 +382,31 @@ def _call_opencode(prompt: str, cfg, *, timeout: int, effort: str, model: str | 
     top_p = float(cfg.get("pipeline.opencode.top_p", 0.95))
     max_tokens = int(cfg.get("pipeline.opencode.max_tokens", 16384))
 
-    client = OpenAI(base_url=base_url, api_key=key, timeout=timeout)
+    client = OpenAI(
+        base_url=base_url,
+        api_key=key,
+        timeout=timeout,
+        default_headers={
+            "User-Agent": _USER_AGENT,
+            "x-opencode-session": _SESSION_ID,
+        },
+    )
     log.info("opencode %s (%s)", model, effort)
     last_error = None
     for attempt in range(3):
         try:
             if model.lower().startswith(_OPENCODE_RESPONSES_PREFIXES):
+                # Muse Spark always runs at max reasoning effort.
+                reasoning = (
+                    {"effort": "xhigh"} if model.lower().startswith("muse-spark") else None
+                )
                 resp = client.responses.create(
                     model=model,
                     input=prompt,
                     temperature=temperature,
                     top_p=top_p,
                     max_output_tokens=max_tokens,
+                    **({"reasoning": reasoning} if reasoning else {}),
                 )
                 return _responses_text(resp)
             completion = client.chat.completions.create(

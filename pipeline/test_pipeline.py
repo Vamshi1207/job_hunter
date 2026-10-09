@@ -1783,9 +1783,10 @@ class HuntTests(unittest.TestCase):
             def boom(*_a, **_k):
                 raise RuntimeError("nvidia down")
 
-            with patch("pipeline.llm._call_nvidia", boom), patch(
-                "pipeline.llm.call_agy", lambda prompt, effort="high": "from-agy"
-            ):
+            # No middle provider: earlier tests may leak real keys via dotenv.
+            with patch("pipeline.llm._provider_key", return_value=""), patch(
+                "pipeline.llm._call_nvidia", boom
+            ), patch("pipeline.llm.call_agy", lambda prompt, effort="high": "from-agy"):
                 self.assertEqual(complete_prompt("hi"), "from-agy")
         finally:
             os.environ.pop("JOB_SEARCH_ROOT", None)
@@ -1823,9 +1824,9 @@ class HuntTests(unittest.TestCase):
             def agy_should_not_run(*_a, **_k):
                 raise AssertionError("agy should not run when deepseek succeeds")
 
-            with patch("pipeline.llm._call_nvidia", nvidia), patch(
-                "pipeline.llm.call_agy", agy_should_not_run
-            ):
+            with patch("pipeline.llm._provider_key", return_value=""), patch(
+                "pipeline.llm._call_nvidia", nvidia
+            ), patch("pipeline.llm.call_agy", agy_should_not_run):
                 self.assertEqual(complete_prompt("hi"), "from-deepseek")
             self.assertEqual(
                 models,
@@ -1851,7 +1852,7 @@ class HuntTests(unittest.TestCase):
             (root / "config.yaml").write_text(
                 "pipeline:\n"
                 "  provider: opencode\n"
-                "  model: muse-spark-1.3\n"
+                "  model: muse-spark-1.3-contributor\n"
                 "  fallback_provider: agy\n"
                 "  fallback_model: gemini-3.1-pro\n"
                 "  opencode:\n"
@@ -1868,7 +1869,7 @@ class HuntTests(unittest.TestCase):
             self.assertEqual(
                 opencode_model_chain(cfg),
                 [
-                    "muse-spark-1.3",
+                    "muse-spark-1.3-contributor",
                     "deepseek-v4-flash",
                 ],
             )
@@ -1893,7 +1894,7 @@ class HuntTests(unittest.TestCase):
             self.assertEqual(
                 tried,
                 [
-                    "muse-spark-1.3",
+                    "muse-spark-1.3-contributor",
                     "deepseek-v4-flash",
                     "nvidia/nemotron-3-ultra-550b-a55b",
                 ],
@@ -1915,7 +1916,7 @@ class HuntTests(unittest.TestCase):
             (root / "config.yaml").write_text(
                 "pipeline:\n"
                 "  provider: opencode\n"
-                "  model: muse-spark-1.3-contributor-free\n"
+                "  model: muse-spark-1.3-contributor\n"
                 "  fallback_provider: agy\n"
             )
             os.environ["JOB_SEARCH_ROOT"] = str(root)
@@ -1938,7 +1939,7 @@ class HuntTests(unittest.TestCase):
     def test_llm_provider_inference_for_bare_zen_ids(self):
         from pipeline.llm import _looks_like_nvidia_model, _looks_like_opencode_model
 
-        self.assertTrue(_looks_like_opencode_model("muse-spark-1.3-contributor-free"))
+        self.assertTrue(_looks_like_opencode_model("muse-spark-1.3-contributor"))
         self.assertTrue(_looks_like_opencode_model("deepseek-v4-flash"))
         self.assertFalse(_looks_like_nvidia_model("deepseek-v4-flash"))
         self.assertTrue(_looks_like_nvidia_model("nvidia/nemotron-3-ultra-550b-a55b"))
@@ -1952,6 +1953,74 @@ class HuntTests(unittest.TestCase):
         self.assertTrue(_transient_error(RuntimeError("Error code: 429 - rate limit")))
         self.assertFalse(_transient_error(RuntimeError("Error code: 402 - Insufficient account funds")))
         self.assertFalse(_transient_error(RuntimeError("Error code: 403 - FreeTierError")))
+
+    def test_call_opencode_uses_go_endpoint_with_session(self):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+
+        from pipeline.config import Config
+        from pipeline.llm import _call_opencode
+
+        calls: dict = {}
+
+        class FakeResponses:
+            def create(self, **kwargs):
+                calls["responses"] = kwargs
+                return SimpleNamespace(output_text="tagged resume", output=[])
+
+        class FakeChatCompletions:
+            def create(self, **kwargs):
+                calls["chat"] = kwargs
+                return SimpleNamespace(
+                    choices=[SimpleNamespace(message=SimpleNamespace(content="chat reply"))]
+                )
+
+        class FakeClient:
+            def __init__(self, **kwargs):
+                calls["client"] = kwargs
+                self.responses = FakeResponses()
+                self.chat = SimpleNamespace(completions=FakeChatCompletions())
+
+        cfg = Config(
+            {
+                "pipeline": {
+                    "opencode": {
+                        "base_url": "https://opencode.ai/zen/go/v1",
+                        "rpm": 1000,
+                        "max_tokens": 64,
+                        "temperature": 1,
+                        "top_p": 0.95,
+                    }
+                }
+            },
+            Path("/tmp"),
+        )
+        old_key = os.environ.get("OPENCODE_API_KEY")
+        os.environ["OPENCODE_API_KEY"] = "test-key"
+        try:
+            with patch("openai.OpenAI", FakeClient):
+                text = _call_opencode(
+                    "hi", cfg, timeout=30, effort="high", model="muse-spark-1.3-contributor"
+                )
+            self.assertEqual(text, "tagged resume")
+            self.assertEqual(calls["client"]["base_url"], "https://opencode.ai/zen/go/v1")
+            headers = calls["client"]["default_headers"]
+            self.assertEqual(headers["User-Agent"], "job-search-pipeline/1.0")
+            self.assertTrue(headers["x-opencode-session"])
+            self.assertEqual(calls["responses"]["model"], "muse-spark-1.3-contributor")
+            self.assertEqual(calls["responses"]["reasoning"], {"effort": "xhigh"})
+
+            with patch("openai.OpenAI", FakeClient):
+                chat_text = _call_opencode(
+                    "hi", cfg, timeout=30, effort="high", model="deepseek-v4-flash"
+                )
+            self.assertEqual(chat_text, "chat reply")
+            self.assertEqual(calls["chat"]["model"], "deepseek-v4-flash")
+        finally:
+            if old_key is None:
+                os.environ.pop("OPENCODE_API_KEY", None)
+            else:
+                os.environ["OPENCODE_API_KEY"] = old_key
 
     def test_responses_text_prefers_output_text(self):
         from types import SimpleNamespace
