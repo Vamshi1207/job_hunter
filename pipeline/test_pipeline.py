@@ -1765,7 +1765,7 @@ class HuntTests(unittest.TestCase):
                 "  nvidia:\n"
                 "    fallback_models:\n"
                 "      - nvidia/nemotron-3-ultra-550b-a55b\n"
-                "      - deepseek-ai/deepseek-v4-flash-0731\n"
+                "      - deepseek-ai/deepseek-v4.1-flash\n"
             )
             os.environ["JOB_SEARCH_ROOT"] = str(root)
             cfg = load_config(force=True)
@@ -1776,7 +1776,7 @@ class HuntTests(unittest.TestCase):
                 [
                     "nvidia/nemotron-3.5-lightning-30b-a3b",
                     "nvidia/nemotron-3-ultra-550b-a55b",
-                    "deepseek-ai/deepseek-v4-flash-0731",
+                    "deepseek-ai/deepseek-v4.1-flash",
                 ],
             )
 
@@ -1808,7 +1808,7 @@ class HuntTests(unittest.TestCase):
                 "  nvidia:\n"
                 "    fallback_models:\n"
                 "      - nvidia/nemotron-3-ultra-550b-a55b\n"
-                "      - deepseek-ai/deepseek-v4-flash-0731\n"
+                "      - deepseek-ai/deepseek-v4.1-flash\n"
             )
             os.environ["JOB_SEARCH_ROOT"] = str(root)
             load_config(force=True)
@@ -1832,13 +1832,143 @@ class HuntTests(unittest.TestCase):
                 [
                     "nvidia/nemotron-3.5-lightning-30b-a3b",
                     "nvidia/nemotron-3-ultra-550b-a55b",
-                    "deepseek-ai/deepseek-v4-flash-0731",
+                    "deepseek-ai/deepseek-v4.1-flash",
                 ],
             )
         finally:
             os.environ.pop("JOB_SEARCH_ROOT", None)
             tmp.cleanup()
             load_config(force=True)
+
+    def test_llm_opencode_primary_then_nvidia_before_agy(self):
+        from unittest.mock import patch
+
+        from pipeline.llm import complete_prompt, opencode_model_chain, primary_provider
+
+        tmp = tempfile.TemporaryDirectory()
+        try:
+            root = Path(tmp.name)
+            (root / "config.yaml").write_text(
+                "pipeline:\n"
+                "  provider: opencode\n"
+                "  model: muse-spark-1.3\n"
+                "  fallback_provider: agy\n"
+                "  fallback_model: gemini-3.1-pro\n"
+                "  opencode:\n"
+                "    fallback_models:\n"
+                "      - deepseek-v4-flash\n"
+                "  nvidia:\n"
+                "    fallback_models:\n"
+                "      - deepseek-ai/deepseek-v4.1-flash\n"
+            )
+            os.environ["JOB_SEARCH_ROOT"] = str(root)
+            os.environ["NVIDIA_API_KEY"] = "test-key"
+            cfg = load_config(force=True)
+            self.assertEqual(primary_provider(cfg), "opencode")
+            self.assertEqual(
+                opencode_model_chain(cfg),
+                [
+                    "muse-spark-1.3",
+                    "deepseek-v4-flash",
+                ],
+            )
+
+            tried: list[str] = []
+
+            def zen_down(_prompt, _cfg, *, timeout, effort, model=None):
+                tried.append(model)
+                raise RuntimeError("zen down")
+
+            def nvidia(_prompt, _cfg, *, timeout, effort, model=None):
+                tried.append(model)
+                return "from-nvidia"
+
+            def agy_should_not_run(*_a, **_k):
+                raise AssertionError("agy should not run when nvidia succeeds")
+
+            with patch("pipeline.llm._call_opencode", zen_down), patch(
+                "pipeline.llm._call_nvidia", nvidia
+            ), patch("pipeline.llm.call_agy", agy_should_not_run):
+                self.assertEqual(complete_prompt("hi"), "from-nvidia")
+            self.assertEqual(
+                tried,
+                [
+                    "muse-spark-1.3",
+                    "deepseek-v4-flash",
+                    "nvidia/nemotron-3-ultra-550b-a55b",
+                ],
+            )
+        finally:
+            os.environ.pop("NVIDIA_API_KEY", None)
+            os.environ.pop("JOB_SEARCH_ROOT", None)
+            tmp.cleanup()
+            load_config(force=True)
+
+    def test_llm_opencode_falls_back_to_agy_without_nvidia_key(self):
+        from unittest.mock import patch
+
+        from pipeline.llm import complete_prompt
+
+        tmp = tempfile.TemporaryDirectory()
+        try:
+            root = Path(tmp.name)
+            (root / "config.yaml").write_text(
+                "pipeline:\n"
+                "  provider: opencode\n"
+                "  model: muse-spark-1.3-contributor-free\n"
+                "  fallback_provider: agy\n"
+            )
+            os.environ["JOB_SEARCH_ROOT"] = str(root)
+            os.environ.pop("NVIDIA_API_KEY", None)
+            os.environ.pop("OPENCODE_API_KEY", None)
+            load_config(force=True)
+
+            def zen_down(*_a, **_k):
+                raise RuntimeError("zen down")
+
+            with patch("pipeline.llm._call_opencode", zen_down), patch(
+                "pipeline.llm.call_agy", lambda prompt, effort="high": "from-agy"
+            ):
+                self.assertEqual(complete_prompt("hi"), "from-agy")
+        finally:
+            os.environ.pop("JOB_SEARCH_ROOT", None)
+            tmp.cleanup()
+            load_config(force=True)
+
+    def test_llm_provider_inference_for_bare_zen_ids(self):
+        from pipeline.llm import _looks_like_nvidia_model, _looks_like_opencode_model
+
+        self.assertTrue(_looks_like_opencode_model("muse-spark-1.3-contributor-free"))
+        self.assertTrue(_looks_like_opencode_model("deepseek-v4-flash"))
+        self.assertFalse(_looks_like_nvidia_model("deepseek-v4-flash"))
+        self.assertTrue(_looks_like_nvidia_model("nvidia/nemotron-3-ultra-550b-a55b"))
+        self.assertFalse(_looks_like_opencode_model("gemini-3.1-pro"))
+
+    def test_transient_error_marks_overload_and_5xx_retryable(self):
+        from pipeline.llm import _transient_error
+
+        self.assertTrue(_transient_error(RuntimeError("Service temporarily overloaded")))
+        self.assertTrue(_transient_error(RuntimeError("Error code: 503 - Service Unavailable")))
+        self.assertTrue(_transient_error(RuntimeError("Error code: 429 - rate limit")))
+        self.assertFalse(_transient_error(RuntimeError("Error code: 402 - Insufficient account funds")))
+        self.assertFalse(_transient_error(RuntimeError("Error code: 403 - FreeTierError")))
+
+    def test_responses_text_prefers_output_text(self):
+        from types import SimpleNamespace
+
+        from pipeline.llm import _responses_text
+
+        self.assertEqual(
+            _responses_text(SimpleNamespace(output_text="tagged resume", output=[])),
+            "tagged resume",
+        )
+        item = SimpleNamespace(
+            content=[SimpleNamespace(text="hello "), SimpleNamespace(text="world")]
+        )
+        self.assertEqual(
+            _responses_text(SimpleNamespace(output_text="", output=[item])),
+            "hello world",
+        )
 
     def test_nvidia_gpt_oss_uses_non_stream_content(self):
         from pipeline.llm import _nvidia_message_text

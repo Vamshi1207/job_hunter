@@ -6,8 +6,10 @@ ENV JOB_SEARCH_ROOT=/app
 ENV IN_DOCKER=1
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
     curl \
     gnupg \
+    libzstd-dev \
     tini \
     xvfb \
     x11-utils \
