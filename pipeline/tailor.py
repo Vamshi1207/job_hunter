@@ -211,10 +211,10 @@ def _is_job_bullet_tag(tag: str) -> bool:
 
 SKILL_BLOCKS = [
     ("SKILL_LANG", "Programming languages"),
-    ("SKILL_ML", "ML & AI"),
+    ("SKILL_ML", "AI & Agentic Systems"),
     ("SKILL_DATA", "Distributed systems & data"),
     ("SKILL_BACKEND", "Backend & APIs"),
-    ("SKILL_CLOUD", "Cloud & DevOps"),
+    ("SKILL_CLOUD", "Cloud-Native & DevOps"),
 ]
 
 EXTRA_TAGS = ["COVER_LETTER", "LINKEDIN_DM", "WHY_I_FIT", "ROLE_TYPE", "ANALYSIS"]
@@ -408,7 +408,12 @@ def parse_tagged_output(output: str, cfg: Config | None = None) -> dict:
 def strip_skill_prefix(text: str, label: str) -> str:
     text = text.strip()
     pattern = rf"^{re.escape(label)}\s*:\s*"
-    return re.sub(pattern, "", text, flags=re.IGNORECASE).strip()
+    text = re.sub(pattern, "", text, flags=re.IGNORECASE).strip()
+    if label == "AI & Agentic Systems":
+        text = re.sub(r"^ML\s*&\s*AI\s*:\s*", "", text, flags=re.IGNORECASE).strip()
+    elif label == "Cloud-Native & DevOps":
+        text = re.sub(r"^Cloud\s*&\s*DevOps\s*:\s*", "", text, flags=re.IGNORECASE).strip()
+    return text
 
 
 def strip_title_dates(text: str) -> str:

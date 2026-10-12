@@ -217,7 +217,8 @@ pipeline:
   opencode:
     base_url: https://opencode.ai/zen/go/v1
     rpm: 40
-    max_tokens: 16384
+    # High: xhigh reasoning on huge tailor prompts burns output tokens.
+    max_tokens: 32768
     temperature: 1
     top_p: 0.95
     fallback_models:
