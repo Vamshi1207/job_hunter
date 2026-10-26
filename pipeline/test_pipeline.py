@@ -272,7 +272,7 @@ class ParseTests(unittest.TestCase):
 
     def test_strip_helpers(self):
         self.assertEqual(strip_skill_prefix("ML & AI: MCP, NLP", "ML & AI"), "MCP, NLP")
-        self.assertEqual(strip_title_dates("Data Engineer    April 2022"), "Data Engineer")
+        self.assertEqual(strip_title_dates("Software Engineer    April 2022"), "Software Engineer")
         self.assertEqual(format_phone("5551234567"), "555-123-4567")
         self.assertEqual(format_phone("15551234567"), "555-123-4567")
 
@@ -373,6 +373,52 @@ class HonestyPromptTests(unittest.TestCase):
         )
         prompt = build_tailor_prompt(cfg, "Acme", "Engineer", "Need Kafka")
         self.assertIn("Keep the exact bullet counts: Alpha 7, Beta 4.", prompt)
+
+
+    def test_validation_respects_explicit_short_role_min(self):
+        from pipeline.config import Config
+        from pipeline.tailor import validate_tailored_output
+
+        cfg = Config(
+            {
+                "user": {"full_name": "Test User"},
+                "cv_format": {"bullets": {"dynamic": True, "min": 5, "max": 8}},
+                "experience": {
+                    "jobs": [
+                        {
+                            "prefix": "AMAZON",
+                            "employer": "Amazon",
+                            "default_title": "Software Engineer",
+                            "bullets": 3,
+                            "bullets_min": 1,
+                            "bullets_max": 3,
+                        }
+                    ]
+                },
+            },
+            Path("/tmp"),
+        )
+        parsed = {
+            "TITLE": "Software Engineer",
+            "SUMMARY": "Engineer with distributed systems experience across production teams.",
+            "AMAZON_TITLE": "Software Engineer",
+            "AMAZON_B1": "Built diagnostics for playback failures.",
+            "AMAZON_B2": "Automated recurring incident checks.",
+            "SKILL_LANG": "Python",
+            "SKILL_ML": "Machine learning",
+            "SKILL_DATA": "Kafka",
+            "SKILL_BACKEND": "FastAPI",
+            "SKILL_CLOUD": "AWS cloud",
+            "LINKEDIN_DM": "Hi there, saw the role and would like to connect about the team.",
+            "WHY_I_FIT": "1. Python.\n2. Data.\n3. Delivery.",
+        }
+        valid, errors = validate_tailored_output(parsed, cfg)
+        self.assertTrue(valid, errors)
+
+        parsed["AMAZON_B2"] = ""
+        valid, errors = validate_tailored_output(parsed, cfg)
+        self.assertFalse(valid)
+        self.assertTrue(any("minimum 2 required" in error for error in errors))
 
 
 class JobsAndPlaybookTests(unittest.TestCase):
@@ -3374,12 +3420,23 @@ class FabricationFreedomMatrixTests(unittest.TestCase):
             "JOB1_TITLE": "Software Engineer",
             "JOB1_B1": "Built high-throughput distributed systems in Python.",
             "JOB1_B2": "Engineered REST APIs with FastAPI.",
+            "JOB1_B3": "Mentored engineers on service reliability.",
+            "JOB1_B4": "Partnered with product on rollout planning.",
+            "JOB1_B5": "Wrote design docs for cross-team changes.",
+            "JOB1_B6": "Tracked reliability metrics after launch.",
+            "JOB1_B7": "Reviewed incident follow-ups with the team.",
             "JOB2_TITLE": "Software Engineer",
             "JOB2_B1": "Managed data pipelines with Kafka.",
             "JOB2_B2": "Deployed cloud infrastructure on AWS.",
+            "JOB2_B3": "Automated ingestion checks for upstream feeds.",
+            "JOB2_B4": "Documented data contracts for downstream teams.",
             "JOB3_TITLE": "Software Engineer",
             "JOB3_B1": "Optimized database performance in PostgreSQL.",
             "JOB3_B2": "Automated deployment processes with Docker.",
+            "JOB3_B3": "Built dashboards for pipeline health.",
+            "JOB3_B4": "Handled on-call for batch workloads.",
+            "JOB3_B5": "Tuned batch schedules around upstream delays.",
+            "JOB3_B6": "Documented recovery steps for failed jobs.",
             "SKILL_LANG": "Python, SQL",
             "SKILL_ML": "LLMs, Agents",
             "SKILL_DATA": "Kafka, Spark",
@@ -3541,12 +3598,23 @@ class FabricationFreedomMatrixTests(unittest.TestCase):
             "<JOB1_TITLE>Software Engineer</JOB1_TITLE>\n"
             "<JOB1_B1>Architected Python backend services handling millions of events daily.</JOB1_B1>\n"
             "<JOB1_B2>Optimized FastAPI endpoints reducing latency by 40%.</JOB1_B2>\n"
+            "<JOB1_B3>Reviewed service boundaries with the platform team.</JOB1_B3>\n"
+            "<JOB1_B4>Documented failure modes for on-call engineers.</JOB1_B4>\n"
+            "<JOB1_B5>Wrote design docs for cross-team changes.</JOB1_B5>\n"
+            "<JOB1_B6>Tracked reliability metrics after launch.</JOB1_B6>\n"
+            "<JOB1_B7>Reviewed incident follow-ups with the team.</JOB1_B7>\n"
             "<JOB2_TITLE>Software Engineer</JOB2_TITLE>\n"
             "<JOB2_B1>Built distributed pipelines with Kafka.</JOB2_B1>\n"
             "<JOB2_B2>Deployed services on AWS with Docker.</JOB2_B2>\n"
+            "<JOB2_B3>Added schema checks to the ingestion path.</JOB2_B3>\n"
+            "<JOB2_B4>Wrote runbooks for pipeline recovery.</JOB2_B4>\n"
             "<JOB3_TITLE>Software Engineer</JOB3_TITLE>\n"
             "<JOB3_B1>Managed PostgreSQL databases and schema migrations.</JOB3_B1>\n"
             "<JOB3_B2>Configured CI/CD automation pipelines.</JOB3_B2>\n"
+            "<JOB3_B3>Built health dashboards for batch jobs.</JOB3_B3>\n"
+            "<JOB3_B4>Handled on-call rotation for data workloads.</JOB3_B4>\n"
+            "<JOB3_B5>Tuned batch schedules around upstream delays.</JOB3_B5>\n"
+            "<JOB3_B6>Documented recovery steps for failed jobs.</JOB3_B6>\n"
             "<SKILL_LANG>Python, SQL</SKILL_LANG>\n"
             "<SKILL_ML>LLMs, NLP</SKILL_ML>\n"
             "<SKILL_DATA>Kafka, Redis</SKILL_DATA>\n"
@@ -3561,12 +3629,23 @@ class FabricationFreedomMatrixTests(unittest.TestCase):
             "<JOB1_TITLE>Software Engineer</JOB1_TITLE>\n"
             "<JOB1_B1>Architected Python backend services handling millions of events daily.</JOB1_B1>\n"
             "<JOB1_B2>Optimized FastAPI endpoints reducing latency by 40%.</JOB1_B2>\n"
+            "<JOB1_B3>Reviewed service boundaries with the platform team.</JOB1_B3>\n"
+            "<JOB1_B4>Documented failure modes for on-call engineers.</JOB1_B4>\n"
+            "<JOB1_B5>Wrote design docs for cross-team changes.</JOB1_B5>\n"
+            "<JOB1_B6>Tracked reliability metrics after launch.</JOB1_B6>\n"
+            "<JOB1_B7>Reviewed incident follow-ups with the team.</JOB1_B7>\n"
             "<JOB2_TITLE>Software Engineer</JOB2_TITLE>\n"
             "<JOB2_B1>Built distributed pipelines with Kafka.</JOB2_B1>\n"
             "<JOB2_B2>Deployed services on AWS with Docker.</JOB2_B2>\n"
+            "<JOB2_B3>Added schema checks to the ingestion path.</JOB2_B3>\n"
+            "<JOB2_B4>Wrote runbooks for pipeline recovery.</JOB2_B4>\n"
             "<JOB3_TITLE>Software Engineer</JOB3_TITLE>\n"
             "<JOB3_B1>Managed PostgreSQL databases and schema migrations.</JOB3_B1>\n"
             "<JOB3_B2>Configured CI/CD automation pipelines.</JOB3_B2>\n"
+            "<JOB3_B3>Built health dashboards for batch jobs.</JOB3_B3>\n"
+            "<JOB3_B4>Handled on-call rotation for data workloads.</JOB3_B4>\n"
+            "<JOB3_B5>Tuned batch schedules around upstream delays.</JOB3_B5>\n"
+            "<JOB3_B6>Documented recovery steps for failed jobs.</JOB3_B6>\n"
             "<SKILL_LANG>Python, SQL</SKILL_LANG>\n"
             "<SKILL_ML>LLMs, NLP</SKILL_ML>\n"
             "<SKILL_DATA>Kafka, Redis</SKILL_DATA>\n"
@@ -3593,7 +3672,12 @@ class FabricationFreedomMatrixTests(unittest.TestCase):
             out_path.mkdir(parents=True, exist_ok=True)
             mock_save = AsyncMock(return_value=out_path)
             with patch("pipeline.run_pipeline.generate_tailored_materials", side_effect=fake_llm), \
+                 patch("pipeline.run_pipeline.generate_jd_brief", return_value={}), \
                  patch("pipeline.run_pipeline.evaluate_ats_score", side_effect=fake_eval), \
+                 patch("pipeline.run_pipeline.evaluate_voice", side_effect=lambda *a, **k: {
+                     "naturalness": 90, "sameness": 10, "skip_risk": [], "flags": [],
+                     "rewrite_instructions": "",
+                 }), \
                  patch("pipeline.run_pipeline.save_materials", new=mock_save), \
                  patch("pipeline.run_pipeline.render_playbook", return_value="Playbook"):
                 progress_messages = []
@@ -3622,3 +3706,1242 @@ class FabricationFreedomMatrixTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class VoiceFlowTests(unittest.TestCase):
+    def _cfg(self, **pipeline):
+        from pipeline.config import Config
+
+        return Config(
+            {
+                "workspace": {"root": "/tmp"},
+                "user": {"full_name": "Test User"},
+                "pipeline": {"fabrication_freedom": 1, **pipeline},
+                "cv_format": {"pages": 2},
+            },
+            Path("/tmp"),
+        )
+
+    def test_tailor_prompt_has_voice_contract_and_jd_brief(self):
+        from unittest.mock import patch
+        from pipeline.tailor import build_tailor_prompt
+
+        cfg = self._cfg()
+        brief = {
+            "match_score": 72,
+            "must_have_keywords": ["Kafka", "Python"],
+            "nice_to_have_keywords": ["Go"],
+            "missing_keywords": ["Kubernetes operators"],
+            "red_flags": ["generic summary"],
+            "skip_risks": ["Key Skills — too dense"],
+            "angle": "Distributed backend engineer with Kafka depth.",
+        }
+        with patch("pipeline.tailor.load_optional", return_value="master"), patch(
+            "pipeline.tailor.load_experience_bank", return_value="bank"
+        ):
+            prompt = build_tailor_prompt(
+                cfg, "Acme", "Engineer", "Need Kafka", jd_brief=brief
+            )
+        self.assertIn("VOICE CONTRACT", prompt)
+        self.assertIn("Match score: 72/100", prompt)
+        self.assertIn("Kafka", prompt)
+        self.assertIn("Do not force a metric into every bullet", prompt)
+        self.assertNotIn("BULLET ARCHITECTURE", prompt)
+        self.assertNotIn("EXACT KEYWORD MATCHING", prompt)
+
+    def test_generate_jd_brief_parses_json(self):
+        from unittest.mock import patch
+        from pipeline.tailor import generate_jd_brief
+
+        payload = """
+        ```json
+        {
+          "match_score": 81,
+          "must_have_keywords": ["Kafka", "Python", "Kafka"],
+          "nice_to_have_keywords": ["Go"],
+          "missing_keywords": ["Kubernetes operators"],
+          "red_flags": ["title mismatch"],
+          "skip_risks": ["Summary — generic"],
+          "angle": "Real-time data engineer."
+        }
+        ```
+        """
+        cfg = self._cfg()
+        with patch("pipeline.tailor.load_optional", return_value="master"), patch(
+            "pipeline.tailor.load_experience_bank", return_value="bank"
+        ), patch("pipeline.tailor.complete_prompt", return_value=payload):
+            brief = generate_jd_brief("Acme", "SWE", "Need Kafka", cfg)
+        self.assertEqual(brief["match_score"], 81)
+        self.assertEqual(brief["must_have_keywords"], ["Kafka", "Python"])
+        self.assertEqual(brief["missing_keywords"], ["Kubernetes operators"])
+        self.assertEqual(brief["angle"], "Real-time data engineer.")
+
+    def test_voice_critic_and_gate(self):
+        from unittest.mock import patch
+        from pipeline.tailor import evaluate_voice, voice_passes
+
+        cfg = self._cfg(voice_threshold=80)
+        payload = (
+            '{"naturalness": 86, "sameness": 14, "skip_risk": [], '
+            '"flags": [], "rewrite_instructions": "none"}'
+        )
+        with patch("pipeline.tailor.load_config", return_value=cfg), patch(
+            "pipeline.tailor.complete_prompt", return_value=payload
+        ):
+            result = evaluate_voice("jd", "resume", "truth")
+        self.assertEqual(result["naturalness"], 86)
+        self.assertEqual(result["sameness"], 14)
+        ok, issues = voice_passes(result, cfg)
+        self.assertTrue(ok)
+        self.assertEqual(issues, [])
+
+        flagged = dict(result, flags=["metric_stuffing"], naturalness=85)
+        ok, issues = voice_passes(flagged, cfg)
+        self.assertFalse(ok)
+        self.assertIn("metric_stuffing", " ".join(issues))
+
+        samey = dict(result, sameness=70)
+        ok, issues = voice_passes(samey, cfg)
+        self.assertFalse(ok)
+        self.assertIn("sameness", " ".join(issues))
+
+        zero_payload = (
+            '{"naturalness": 90, "sameness": 0, "skip_risk": [], '
+            '"flags": [], "rewrite_instructions": "none"}'
+        )
+        with patch("pipeline.tailor.load_config", return_value=cfg), patch(
+            "pipeline.tailor.complete_prompt", return_value=zero_payload
+        ):
+            zero = evaluate_voice("jd", "resume", "truth")
+        self.assertEqual(zero["sameness"], 0)
+
+    def test_voice_rewrite_prompt_is_targeted(self):
+        from pipeline.tailor import build_voice_revision_prompt
+
+        prompt = build_voice_revision_prompt(
+            "Acme",
+            "Engineer",
+            "Need Kafka",
+            "<TITLE>Engineer</TITLE>",
+            {"naturalness": 60, "flags": ["uniform_openers"], "rewrite_instructions": "Fix JOB1_B2."},
+            {"match_score": 70},
+        )
+        self.assertIn("Rewrite only the flagged fields", prompt)
+        self.assertIn("Preserve every employer", prompt)
+        self.assertIn("Fix JOB1_B2.", prompt)
+
+    def test_apply_changes_has_no_hidden_keyword_injection(self):
+        import inspect
+        from pipeline.tailor import apply_changes_to_html
+
+        self.assertNotIn("gaps", inspect.signature(apply_changes_to_html).parameters)
+
+
+class VoiceGateIntegrationTests(unittest.TestCase):
+    def test_voice_gate_blocks_ats_pass(self):
+        import asyncio
+        from unittest.mock import AsyncMock, patch
+        from pipeline.config import Config
+        from pipeline.run_pipeline import process_job
+
+        tmp = tempfile.TemporaryDirectory()
+        root = Path(tmp.name)
+        cfg = Config(
+            {
+                "workspace": {
+                    "root": str(root),
+                    "tracker": str(root / "tracker.md"),
+                    "applications": str(root / "apps"),
+                },
+                "pipeline": {
+                    "ats_threshold": 80,
+                    "max_attempts": 1,
+                    "fabrication_freedom": 1,
+                    "voice_gate": True,
+                    "voice_rewrite": False,
+                },
+                "user": {"full_name": "Test User"},
+            },
+            root,
+        )
+        job = {
+            "company": "VoiceCo",
+            "role": "Python Engineer",
+            "jd": "Python distributed systems engineer with FastAPI and Kafka.",
+        }
+
+        parts = [
+            "<TITLE>Software Engineer</TITLE>",
+            "<SUMMARY>Grounded Python engineer with verified production experience across distributed systems.</SUMMARY>",
+        ]
+        for prefix, count in (("JOB1", 7), ("JOB2", 4), ("JOB3", 6)):
+            parts.append(f"<{prefix}_TITLE>Software Engineer</{prefix}_TITLE>")
+            for i in range(1, count + 1):
+                parts.append(
+                    f"<{prefix}_B{i}>Built Python services and reviewed rollout plans with the team.</{prefix}_B{i}>"
+                )
+        parts.extend(
+            [
+                "<SKILL_LANG>Python, SQL</SKILL_LANG>",
+                "<SKILL_ML>LLMs, NLP</SKILL_ML>",
+                "<SKILL_DATA>Kafka, Redis</SKILL_DATA>",
+                "<SKILL_BACKEND>FastAPI, Flask</SKILL_BACKEND>",
+                "<SKILL_CLOUD>AWS, Docker</SKILL_CLOUD>",
+                "<LINKEDIN_DM>Hi there, saw your posting for Python Engineer and would love to connect about the role.</LINKEDIN_DM>",
+                "<WHY_I_FIT>1. Python depth.\n2. Distributed systems.\n3. Fast execution.</WHY_I_FIT>",
+            ]
+        )
+        llm_output = "\n".join(parts)
+
+        async def run_test():
+            out_path = root / "apps" / "VoiceCo-Python-Engineer-2026-09-09"
+            out_path.mkdir(parents=True, exist_ok=True)
+            mock_save = AsyncMock(return_value=out_path)
+            with patch(
+                "pipeline.run_pipeline.generate_tailored_materials",
+                return_value=llm_output,
+            ), patch("pipeline.run_pipeline.generate_jd_brief", return_value={}), patch(
+                "pipeline.run_pipeline.evaluate_ats_score",
+                return_value={
+                    "score": 92,
+                    "honesty": 92,
+                    "critique": "Strong match.",
+                    "gaps": [],
+                },
+            ), patch(
+                "pipeline.run_pipeline.evaluate_voice",
+                return_value={
+                    "naturalness": 40,
+                    "sameness": 60,
+                    "skip_risk": ["Summary — generic"],
+                    "flags": ["uniform_openers"],
+                    "rewrite_instructions": "Fix the summary and vary openers.",
+                },
+            ), patch(
+                "pipeline.run_pipeline.save_materials", new=mock_save
+            ), patch(
+                "pipeline.run_pipeline.render_playbook", return_value="Playbook"
+            ):
+                out_dir = await process_job(job, fill_form=False, cfg=cfg)
+            self.assertIsNotNone(out_dir)
+            saved_eval = mock_save.call_args.kwargs.get("eval_result") or {}
+            self.assertFalse(job["passed"])
+            self.assertEqual(saved_eval["score"], 92)
+            self.assertEqual(saved_eval["voice_score"], 40)
+            self.assertIn("uniform_openers", saved_eval["voice"]["flags"])
+
+        asyncio.run(run_test())
+        tmp.cleanup()
+
+
+class DraftQualityTests(unittest.TestCase):
+    def test_voice_and_honesty_outweigh_one_ats_point(self):
+        from pipeline.run_pipeline import draft_quality
+
+        natural = {"score": 34, "honesty": 97, "voice_score": 69}
+        louder = {"score": 35, "honesty": 86, "voice_score": 58}
+        self.assertGreater(
+            draft_quality(natural, voice_gate=True),
+            draft_quality(louder, voice_gate=True),
+        )
+        self.assertEqual(draft_quality({"score": 90, "honesty": 60}, voice_gate=False), 60)
+
+
+class LivenessTests(unittest.TestCase):
+    def test_hard_expired_banners(self):
+        from pipeline.liveness import classify_liveness, is_expired
+
+        for jd in (
+            "This job is no longer available. Thanks for your interest.",
+            "The position you are trying to apply for has been filled.",
+            "This job posting has expired on our careers page.",
+            "We are no longer accepting applications for this role.",
+            "This role is closed. Please see our other openings.",
+            "Cette offre n’est plus disponible.",  # typographic apostrophe
+            "Offre pourvue — recrutement terminé.",
+            "Diese Stelle ist bereits besetzt.",
+        ):
+            self.assertEqual(classify_liveness(jd), "expired", jd)
+            self.assertTrue(is_expired(jd))
+
+    def test_closed_loop_prose_is_not_expired(self):
+        from pipeline.liveness import classify_liveness
+
+        jd = (
+            "Senior Controls Engineer. This role is closed-loop control of the "
+            "platform with Python services, on-call rotation, and 5+ years of "
+            "experience building production systems for our customers."
+        )
+        self.assertEqual(classify_liveness(jd), "active")
+
+    def test_http_status_codes(self):
+        from pipeline.liveness import classify_liveness
+
+        jd = "Software Engineer with Python and Kafka. " * 20
+        self.assertEqual(classify_liveness(jd, status_code=404), "expired")
+        self.assertEqual(classify_liveness(jd, status_code=410), "expired")
+        self.assertEqual(classify_liveness(jd, status_code=429), "uncertain")
+        self.assertEqual(classify_liveness(jd, status_code=503), "uncertain")
+        self.assertEqual(classify_liveness(jd, status_code=200), "active")
+
+    def test_weak_signals_are_uncertain_not_expired(self):
+        from pipeline.liveness import classify_liveness, is_expired
+
+        jd = (
+            "Software Engineer, Python/Kafka. See similar jobs below. "
+            "Job Expired filter: hide job expired entries. " * 6
+        )
+        self.assertEqual(classify_liveness(jd, has_apply=True), "uncertain")
+        self.assertFalse(is_expired(jd, has_apply=True))
+        self.assertEqual(classify_liveness(""), "uncertain")
+        self.assertEqual(classify_liveness("Hi"), "uncertain")
+
+    def test_liveness_gate_skips_tailor(self):
+        import asyncio
+        from unittest.mock import patch
+        from pipeline.config import Config
+        from pipeline.run_pipeline import process_job
+
+        tmp = tempfile.TemporaryDirectory()
+        root = Path(tmp.name)
+        cfg = Config(
+            {
+                "workspace": {"root": str(root), "tracker": str(root / "tracker.md"), "applications": str(root / "apps")},
+                "pipeline": {"ats_threshold": 80, "max_attempts": 1, "liveness_check": True},
+                "user": {"full_name": "Test User"},
+            },
+            root,
+        )
+        job = {
+            "company": "DeadCo",
+            "role": "Python Engineer",
+            "jd": "This job is no longer available on our careers site.",
+        }
+
+        async def run_test():
+            with patch(
+                "pipeline.run_pipeline.generate_tailored_materials",
+                side_effect=AssertionError("LLM must not run for dead postings"),
+            ):
+                result = await process_job(job, fill_form=False, cfg=cfg)
+            self.assertIsNone(result)
+
+        asyncio.run(run_test())
+        tmp.cleanup()
+
+    def test_liveness_gate_can_be_disabled(self):
+        import asyncio
+        from unittest.mock import AsyncMock, patch
+        from pipeline.config import Config
+        from pipeline.run_pipeline import process_job
+
+        tmp = tempfile.TemporaryDirectory()
+        root = Path(tmp.name)
+        cfg = Config(
+            {
+                "workspace": {"root": str(root), "tracker": str(root / "tracker.md"), "applications": str(root / "apps")},
+                "pipeline": {
+                    "ats_threshold": 80,
+                    "max_attempts": 1,
+                    "fabrication_freedom": 1,
+                    "liveness_check": False,
+                    "jd_brief": False,
+                    "voice_gate": False,
+                },
+                "user": {"full_name": "Test User"},
+            },
+            root,
+        )
+        job = {
+            "company": "DeadCo",
+            "role": "Python Engineer",
+            "jd": "This job is no longer available on our careers site.",
+        }
+        parts = [
+            "<TITLE>Software Engineer</TITLE>",
+            "<SUMMARY>Grounded Python engineer with verified production experience across distributed teams.</SUMMARY>",
+        ]
+        for prefix, count in (("JOB1", 7), ("JOB2", 4), ("JOB3", 6)):
+            parts.append(f"<{prefix}_TITLE>Software Engineer</{prefix}_TITLE>")
+            for i in range(1, count + 1):
+                parts.append(f"<{prefix}_B{i}>Built Python services and reviewed rollout plans with the team.</{prefix}_B{i}>")
+        parts.extend(
+            [
+                "<SKILL_LANG>Python, SQL</SKILL_LANG>",
+                "<SKILL_ML>LLMs, NLP</SKILL_ML>",
+                "<SKILL_DATA>Kafka, Redis</SKILL_DATA>",
+                "<SKILL_BACKEND>FastAPI, Flask</SKILL_BACKEND>",
+                "<SKILL_CLOUD>AWS, Docker</SKILL_CLOUD>",
+                "<LINKEDIN_DM>Hi there, saw your posting and would love to connect about the team.</LINKEDIN_DM>",
+                "<WHY_I_FIT>1. Python depth.\n2. Distributed systems.\n3. Fast execution.</WHY_I_FIT>",
+            ]
+        )
+
+        async def run_test():
+            out_path = root / "apps" / "DeadCo-Python-Engineer-2026-09-09"
+            out_path.mkdir(parents=True, exist_ok=True)
+            with patch(
+                "pipeline.run_pipeline.generate_tailored_materials", return_value="\n".join(parts)
+            ), patch(
+                "pipeline.run_pipeline.evaluate_ats_score",
+                return_value={"score": 85, "honesty": 90, "critique": "Good.", "gaps": []},
+            ), patch(
+                "pipeline.run_pipeline.save_materials", new=AsyncMock(return_value=out_path)
+            ), patch(
+                "pipeline.run_pipeline.render_playbook", return_value="Playbook"
+            ):
+                out_dir = await process_job(job, fill_form=False, cfg=cfg)
+            self.assertIsNotNone(out_dir)
+
+        asyncio.run(run_test())
+        tmp.cleanup()
+
+
+class FitEvaluationTests(unittest.TestCase):
+    def test_ats_to_global_mapping(self):
+        from pipeline.evaluation import ats_to_global
+
+        self.assertEqual(ats_to_global(100), 5.0)
+        self.assertEqual(ats_to_global(80), 4.2)
+        self.assertEqual(ats_to_global(0), 1.0)
+        self.assertEqual(ats_to_global(None), 1.0)
+        self.assertGreaterEqual(ats_to_global(1000), 1.0)
+        self.assertLessEqual(ats_to_global(1000), 5.0)
+
+    def test_decision_bands_and_apply_line(self):
+        from pipeline.evaluation import decision_for_score, recommend_apply
+
+        self.assertEqual(decision_for_score(4.8), "Apply")
+        self.assertEqual(decision_for_score(4.5), "Apply")
+        self.assertEqual(decision_for_score(4.2), "Consider")
+        self.assertEqual(decision_for_score(4.0), "Consider")
+        self.assertEqual(decision_for_score(3.7), "Research first")
+        self.assertEqual(decision_for_score(2.0), "Skip")
+        self.assertTrue(recommend_apply(4.0))
+        self.assertFalse(recommend_apply(3.9))
+
+    def test_work_auth_hard_stop_only_outside_home(self):
+        from pipeline.config import Config
+        from pipeline.evaluation import work_auth_signal
+
+        cfg = Config(
+            {
+                "user": {"country": "Canada"},
+                "career": {"target_markets": ["Canada"]},
+                "hunt": {"extra_search_markets": []},
+            },
+            Path("/tmp"),
+        )
+        jd = "Senior Engineer in New York. Must be authorized to work in the United States. No sponsorship available."
+        blocked = work_auth_signal("New York, NY", jd, cfg)
+        self.assertEqual(blocked["tier"], "no_sponsorship")
+        self.assertTrue(blocked["hard_stop"])
+
+        home = work_auth_signal("Toronto, Canada", jd, cfg)
+        self.assertEqual(home["tier"], "not_needed")
+        self.assertFalse(home["hard_stop"])
+
+        silent = work_auth_signal(
+            "Berlin, Germany", "Software Engineer with Python and Kafka. " * 20, cfg
+        )
+        self.assertEqual(silent["tier"], "unstated")
+        self.assertFalse(silent["hard_stop"])
+
+    def test_legitimacy_observations(self):
+        from pipeline.evaluation import assess_legitimacy
+
+        good_jd = (
+            "Requirements: 5+ years of Python, Kafka, AWS. "
+            "Responsibilities: own services end to end. " * 12
+        )
+        good = assess_legitimacy(good_jd, "https://boards.greenhouse.io/acme/jobs/9", "Calgary, Canada")
+        self.assertEqual(good["tier"], "High Confidence")
+
+        thin = assess_legitimacy(
+            "Great role, apply now!", "https://boards.greenhouse.io/acme/jobs/9", "Calgary"
+        )
+        self.assertEqual(thin["tier"], "Proceed with Caution")
+
+        scam = assess_legitimacy(
+            "Remote role! Just pay a refundable deposit for equipment to start. " * 10,
+            "https://example.com/apply",
+            "Remote",
+        )
+        self.assertEqual(scam["tier"], "Suspicious")
+
+    def test_confidence_tier_ordering(self):
+        from pipeline.evaluation import confidence_tier
+
+        full = {dim: "supported" for dim in ("cv_match", "north_star", "compensation", "culture", "red_flags")}
+        self.assertEqual(confidence_tier(full), "High")
+        partial = dict(full, culture="partial")
+        self.assertEqual(confidence_tier(partial), "Medium")
+        two_unknown = dict(full, compensation="unknown", culture="unknown")
+        self.assertEqual(confidence_tier(two_unknown), "Low")
+        self.assertEqual(confidence_tier(dict(full, cv_match="unknown")), "Low")
+        self.assertEqual(confidence_tier(full, jd_accessible=False), "Low")
+
+    def test_machine_summary_roundtrip(self):
+        from pipeline.evaluation import parse_machine_summary, render_machine_summary
+
+        fence = render_machine_summary(company="Acme", role="Engineer", ats_score=85)
+        self.assertIn("## Machine Summary", fence)
+        self.assertIn("final_decision", fence)
+        parsed = parse_machine_summary("Some text\n\n" + fence)
+        self.assertAlmostEqual(parsed["score"], 4.4)
+        self.assertEqual(parsed["final_decision"], "Consider")
+        self.assertEqual(parse_machine_summary("no fence here"), {})
+
+    def test_enrich_evaluation_adds_fit_fields(self):
+        from pipeline.config import Config
+        from pipeline.evaluation import enrich_evaluation
+
+        cfg = Config(
+            {
+                "user": {"country": "Canada"},
+                "career": {"target_markets": ["Canada"], "target_roles": ["Software Engineer"]},
+                "hunt": {"extra_search_markets": []},
+            },
+            Path("/tmp"),
+        )
+        jd = (
+            "Software Engineer in Calgary. Requirements: 5+ years of Python, "
+            "Kafka, AWS. Responsibilities: own data pipelines end to end. " * 12
+        )
+        job = {
+            "company": "Acme",
+            "role": "Software Engineer",
+            "url": "https://boards.greenhouse.io/acme/jobs/9",
+            "location": "Calgary, Canada",
+            "jd": jd,
+        }
+        enriched = enrich_evaluation({"score": 85, "honesty": 90, "gaps": []}, job, cfg)
+        self.assertAlmostEqual(enriched["global_score"], 4.4)
+        self.assertEqual(enriched["fit_decision"], "Consider")
+        self.assertTrue(enriched["recommend_apply"])
+        self.assertEqual(enriched["legitimacy_tier"], "High Confidence")
+        self.assertEqual(enriched["work_auth"], "not_needed")
+        self.assertIn("## Machine Summary", enriched["machine_summary"])
+
+    def test_reports_surface_fit_fields(self):
+        import json as _json
+        from pipeline.config import Config
+        from pipeline.reports import package_summary
+
+        tmp = tempfile.TemporaryDirectory()
+        root = Path(tmp.name)
+        cfg = Config(
+            {
+                "workspace": {"root": str(root), "tracker": str(root / "tracker.md"), "applications": str(root / "apps")},
+                "pipeline": {"ats_threshold": 80},
+                "user": {"full_name": "Test User"},
+            },
+            root,
+        )
+        folder = root / "apps" / "Acme-Engineer-2026-09-02"
+        folder.mkdir(parents=True)
+        (folder / "job.json").write_text(
+            _json.dumps({"company": "Acme", "role": "Engineer", "url": "https://boards.greenhouse.io/acme/jobs/9"})
+        )
+        (folder / "evaluation.json").write_text(
+            _json.dumps({"score": 85, "honesty": 90, "global_score": 4.4, "fit_decision": "Consider"})
+        )
+        summary = package_summary(cfg, folder)
+        self.assertEqual(summary["fit_score_5"], 4.4)
+        self.assertEqual(summary["fit_decision"], "Consider")
+        self.assertEqual(summary["evaluation"]["fit_score_5"], 4.4)
+        tmp.cleanup()
+
+
+class FollowupTests(unittest.TestCase):
+    def test_fold_status(self):
+        from pipeline.followup import fold_status
+
+        self.assertEqual(fold_status("✏️ draft"), "draft")
+        self.assertEqual(fold_status("submitted"), "applied")
+        self.assertEqual(fold_status("Applied via greenhouse"), "applied")
+        self.assertEqual(fold_status("phone screen booked"), "interview")
+        self.assertEqual(fold_status("offer received"), "offer")
+        self.assertEqual(fold_status("rejected after onsite"), "rejected")
+        self.assertEqual(fold_status("hired!"), "hired")
+        self.assertEqual(fold_status("⚠️ failed gates"), "draft")
+
+    def test_due_followups_cadence(self):
+        from datetime import date
+        from pipeline.followup import due_followups
+
+        today = date(2026, 10, 26)
+        apps = [
+            {"company": "Old", "role": "Eng", "status": "applied", "date": "2026-10-10", "followups": 0},
+            {"company": "Fresh", "role": "Eng", "status": "applied", "date": "2026-10-24", "followups": 0},
+            {"company": "Maxed", "role": "Eng", "status": "applied", "date": "2026-10-01", "followups": 2},
+            {"company": "Draft", "role": "Eng", "status": "draft", "date": "2026-09-01", "followups": 0},
+            {"company": "Talk", "role": "Eng", "status": "interview", "date": "2026-10-25", "followups": 0},
+        ]
+        due = due_followups(apps, today=today)
+        companies = [item["company"] for item in due]
+        self.assertIn("Old", companies)
+        self.assertIn("Talk", companies)
+        self.assertNotIn("Fresh", companies)
+        self.assertNotIn("Maxed", companies)
+        self.assertNotIn("Draft", companies)
+        # Most overdue first: Old (16d) before Talk (1d).
+        self.assertEqual(companies[0], "Old")
+        self.assertEqual(due[0]["followup_number"], 1)
+
+    def test_funnel_stats_rates(self):
+        from pipeline.followup import funnel_stats
+
+        apps = [
+            {"company": "A", "role": "E", "status": "draft", "channel": "jobs.yaml"},
+            {"company": "B", "role": "E", "status": "applied", "channel": "jobs.yaml"},
+            {"company": "C", "role": "E", "status": "interview", "channel": "hunt"},
+            {"company": "D", "role": "E", "status": "rejected", "channel": "hunt"},
+        ]
+        stats = funnel_stats(apps)
+        self.assertEqual(stats["total"], 4)
+        self.assertEqual(stats["applied"], 3)
+        self.assertAlmostEqual(stats["applied_rate"], 0.75)
+        self.assertAlmostEqual(stats["interview_rate"], 1 / 3, places=3)
+        self.assertEqual(stats["channels"]["jobs.yaml"]["applied"], 1)
+        self.assertEqual(stats["channels"]["hunt"]["interviewed"], 1)
+
+    def test_parse_tracker_rows(self):
+        from pipeline.followup import parse_tracker_rows
+
+        md = (
+            "| Date | Company | Role | Channel | Status | Folder | Follow-up |\n"
+            "|---|---|---|---|---|---|---|\n"
+            "| 2026-10-01 | Acme | Engineer | hunt | applied | applications/Acme-Engineer-2026-10-01 | 2026-10-09 |\n"
+            "| 2026-10-02 | Beta | PM | jobs.yaml | ✏️ draft | applications/Beta-PM-2026-10-02 | |\n"
+        )
+        rows = parse_tracker_rows(md)
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[0]["company"], "Acme")
+        self.assertEqual(rows[0]["followups"], 1)
+        self.assertEqual(rows[0]["last_followup"], "2026-10-09")
+        self.assertEqual(rows[1]["followups"], 0)
+
+    def test_resolve_cadence_overlay(self):
+        from pipeline.config import Config
+        from pipeline.followup import DEFAULT_CADENCE, followups_enabled, resolve_cadence
+
+        cfg = Config({"followup": {"applied_first_days": 10, "enabled": True}}, Path("/tmp"))
+        cadence = resolve_cadence(cfg)
+        self.assertEqual(cadence["applied_first"], 10)
+        self.assertEqual(cadence["applied_subsequent"], DEFAULT_CADENCE["applied_subsequent"])
+        self.assertTrue(followups_enabled(cfg))
+        off = Config({"followup": {"enabled": False}}, Path("/tmp"))
+        self.assertFalse(followups_enabled(off))
+        bad = Config({"followup": {"applied_first_days": "soon"}}, Path("/tmp"))
+        self.assertEqual(resolve_cadence(bad)["applied_first"], DEFAULT_CADENCE["applied_first"])
+
+
+class TitleDriftTests(unittest.TestCase):
+    def test_plain_reframes_are_quiet(self):
+        from pipeline.verify import check_title_drift
+
+        warnings, skipped = check_title_drift(
+            [
+                {"prefix": "JOB1", "employer": "Alpha", "canonical": "Software Engineer", "tailored": "Software Engineer"},
+                {"prefix": "JOB2", "employer": "Beta", "canonical": "Software Engineer", "tailored": "Software Engineer, Backend"},
+                {"prefix": "JOB3", "employer": "Gamma", "canonical": "Software Engineer", "tailored": "Backend Engineer"},
+            ]
+        )
+        self.assertEqual(warnings, [])
+        self.assertEqual(skipped, [])
+
+    def test_seniority_escalation_warns(self):
+        from pipeline.verify import check_title_drift
+
+        warnings, _ = check_title_drift(
+            [{"prefix": "JOB1", "employer": "Alpha", "canonical": "Software Engineer", "tailored": "Senior Staff Software Engineer"}]
+        )
+        self.assertEqual(len(warnings), 1)
+        self.assertEqual(warnings[0]["kind"], "seniority")
+        self.assertIn("Alpha", warnings[0]["employer"])
+
+    def test_role_swap_warns(self):
+        from pipeline.verify import check_title_drift
+
+        warnings, _ = check_title_drift(
+            [{"prefix": "JOB1", "employer": "Alpha", "canonical": "Software Engineer", "tailored": "Product Manager"}]
+        )
+        self.assertEqual(len(warnings), 1)
+        self.assertEqual(warnings[0]["kind"], "role_swap")
+
+    def test_missing_sides_are_skipped_not_passed(self):
+        from pipeline.verify import check_title_drift
+
+        warnings, skipped = check_title_drift(
+            [
+                {"prefix": "JOB1", "employer": "Alpha", "canonical": "", "tailored": "Engineer"},
+                {"prefix": "JOB2", "employer": "Beta", "canonical": "Engineer", "tailored": ""},
+            ]
+        )
+        self.assertEqual(warnings, [])
+        self.assertEqual(len(skipped), 2)
+
+
+class ClaimGroundingTests(unittest.TestCase):
+    SOURCE = (
+        "Managed 8 engineers across two teams. Cut p99 latency by 40 percent. "
+        "Five years of Python and Kafka work. Salary was $120k base."
+    )
+
+    def test_supported_and_unsupported(self):
+        from pipeline.verify import ground_claims
+
+        claims = [
+            {"claim": "8 engineers", "number": "8", "context": "led a team of 8 engineers"},
+            {"claim": "40%", "number": "40", "context": "cut latency by 40%"},
+            {"claim": "$120k", "number": "120", "context": "earned $120k base"},
+            {"claim": "200 engineers", "number": "200", "context": "led 200 engineers"},
+            {"claim": "$500k", "number": "500", "context": "closed $500k deal"},
+        ]
+        supported, reviews, unsupported = ground_claims(claims, self.SOURCE, career_years=5)
+        self.assertEqual(len(supported), 3)
+        self.assertEqual({item["claim"] for item in unsupported}, {"200 engineers", "$500k"})
+
+    def test_years_claim_within_experience_is_review_not_block(self):
+        from pipeline.verify import ground_claims
+
+        claims = [{"claim": "6 years", "number": "6", "context": "6 years of experience"}]
+        supported, reviews, unsupported = ground_claims(claims, "Built Python services.", career_years=5)
+        self.assertEqual(supported, [])
+        self.assertEqual(unsupported, [])
+        self.assertEqual(len(reviews), 1)
+
+    def test_dates_and_phones_are_not_claims(self):
+        from pipeline.verify import extract_numeric_claims
+
+        text = (
+            "Software Engineer September 2023 – Present. Built Python services. "
+            "Call 555-123-4567. Shipped v2.4 of the API."
+        )
+        self.assertEqual(extract_numeric_claims(text), [])
+
+    def test_empty_source_fails_loud(self):
+        from pipeline.verify import verify_application
+
+        result = verify_application(
+            titles=[{"prefix": "JOB1", "employer": "Alpha", "canonical": "Engineer", "tailored": "Engineer"}],
+            resume_text="Cut latency by 40%.",
+            source_text="",
+        )
+        self.assertEqual(result["ungrounded_claims"], [])
+        self.assertTrue(any("no source text" in item for item in result["verification_skipped"]))
+
+    def test_orchestrator_keys(self):
+        from pipeline.verify import verify_application
+
+        result = verify_application(
+            titles=[{"prefix": "JOB1", "employer": "Alpha", "canonical": "Software Engineer", "tailored": "Senior Software Engineer"}],
+            resume_text="Led 8 engineers. Cut latency 40%. Closed $500k deal.",
+            source_text=self.SOURCE,
+            career_years=5,
+        )
+        self.assertEqual(len(result["title_warnings"]), 1)
+        self.assertEqual({item["claim"] for item in result["ungrounded_claims"]}, {"$500k"})
+        self.assertEqual(result["claims_supported"], 2)
+        self.assertEqual(result["verification_skipped"], [])
+
+
+class AtsLintTests(unittest.TestCase):
+    def _repo_file(self, *parts):
+        from pathlib import Path as _Path
+
+        return _Path(__file__).resolve().parent.parent.joinpath(*parts)
+
+    def test_example_template_is_clean(self):
+        from pipeline.verify import lint_template, load_ats_rules
+
+        rules = load_ats_rules(self._repo_file("resumes", "ats-rules.yaml"))
+        self.assertGreater(len(rules), 3)
+        html = self._repo_file("resumes", "template.example.html").read_text()
+        result = lint_template(html, rules)
+        self.assertEqual(result["findings"], [])
+        # The content-scope rule has no detector: skipped, never passed.
+        self.assertTrue(any("extraction-order-audit" in item for item in result["skipped"]))
+
+    def test_tables_images_and_missing_contact_are_findings(self):
+        from pipeline.verify import lint_template, load_ats_rules
+
+        rules = load_ats_rules(self._repo_file("resumes", "ats-rules.yaml"))
+        bad = "<html><body><table><tr><td>x</td></tr></table><img src='a.png'></body></html>"
+        result = lint_template(bad, rules)
+        rule_ids = {item["rule"] for item in result["findings"]}
+        self.assertIn("no-layout-tables", rule_ids)
+        self.assertIn("no-images", rule_ids)
+        self.assertIn("contact-block", rule_ids)
+
+    def test_unknown_detector_is_skipped(self):
+        from pipeline.verify import lint_template
+
+        result = lint_template("<html></html>", [{"id": "x", "detect": "nope"}])
+        self.assertEqual(result["findings"], [])
+        self.assertEqual(len(result["skipped"]), 1)
+
+    def test_unreadable_rules_load_empty(self):
+        from pipeline.verify import lint_template, load_ats_rules
+
+        self.assertEqual(load_ats_rules("/nonexistent/rules.yaml"), [])
+        self.assertEqual(lint_template("<html></html>", []), {"findings": [], "skipped": []})
+
+
+class VerifyIntegrationTests(unittest.TestCase):
+    def test_changes_file_renders_verification(self):
+        import tempfile as _tempfile
+        from pipeline.tailor import write_changes_file
+
+        tmp = _tempfile.TemporaryDirectory()
+        path = Path(tmp.name) / "changes.md"
+        write_changes_file(
+            path,
+            [{"tag": "TITLE", "new": "Engineer", "reasoning": "r"}],
+            eval_result={
+                "score": 85,
+                "honesty": 90,
+                "critique": "Good.",
+                "title_warnings": [
+                    {"employer": "Alpha", "tailored": "Senior Engineer", "canonical": "Engineer", "detail": "Adds seniority"}
+                ],
+                "ungrounded_claims": [{"claim": "$500k", "reason": "amount not found in sources"}],
+                "claim_reviews": [],
+                "verification_skipped": [],
+            },
+        )
+        text = path.read_text()
+        self.assertIn("Title drift warnings", text)
+        self.assertIn("Senior Engineer", text)
+        self.assertIn("Ungrounded numbers", text)
+        self.assertIn("$500k", text)
+        tmp.cleanup()
+
+    def test_process_job_blocks_ungrounded_with_annotated_fallback(self):
+        import asyncio
+        from unittest.mock import AsyncMock, patch
+        from pipeline.config import Config
+        from pipeline.run_pipeline import process_job
+
+        tmp = tempfile.TemporaryDirectory()
+        root = Path(tmp.name)
+        (root / "cv_master.md").write_text("Software Engineer with Python and Kafka. Managed 8 engineers.")
+        (root / "experience-bank").mkdir()
+        cfg = Config(
+            {
+                "workspace": {
+                    "root": str(root),
+                    "tracker": str(root / "tracker.md"),
+                    "applications": str(root / "apps"),
+                    "master_cv": "cv_master.md",
+                    "experience_bank": "experience-bank/",
+                },
+                "pipeline": {
+                    "ats_threshold": 80,
+                    "max_attempts": 1,
+                    "fabrication_freedom": 1,
+                    "jd_brief": False,
+                    "voice_gate": False,
+                    "liveness_check": False,
+                },
+                "user": {"full_name": "Test User"},
+                "career": {"years_experience": 5},
+                "experience": {
+                    "jobs": [{"prefix": "JOB1", "employer": "Alpha", "default_title": "Software Engineer", "bullets": 7}]
+                },
+                "cv_format": {"bullets": {"dynamic": False}},
+            },
+            root,
+        )
+        job = {
+            "company": "WarnCo",
+            "role": "Python Engineer",
+            "jd": "Python distributed systems engineer with FastAPI and Kafka.",
+        }
+        parts = [
+            "<TITLE>Software Engineer</TITLE>",
+            "<SUMMARY>Grounded Python engineer with verified production experience across distributed teams.</SUMMARY>",
+            "<JOB1_TITLE>Senior Staff Software Engineer</JOB1_TITLE>",
+        ]
+        for i in range(1, 8):
+            parts.append(f"<JOB1_B{i}>Built Python services and closed a $500k deal with the team.</JOB1_B{i}>")
+        parts.extend(
+            [
+                "<SKILL_LANG>Python, SQL</SKILL_LANG>",
+                "<SKILL_ML>LLMs, NLP</SKILL_ML>",
+                "<SKILL_DATA>Kafka, Redis</SKILL_DATA>",
+                "<SKILL_BACKEND>FastAPI, Flask</SKILL_BACKEND>",
+                "<SKILL_CLOUD>AWS, Docker</SKILL_CLOUD>",
+                "<LINKEDIN_DM>Hi there, saw your posting and would love to connect about the team and role.</LINKEDIN_DM>",
+                "<WHY_I_FIT>1. Python depth.\n2. Distributed systems.\n3. Fast execution.</WHY_I_FIT>",
+            ]
+        )
+
+        async def run_test():
+            out_path = root / "apps" / "WarnCo-Python-Engineer-2026-09-09"
+            out_path.mkdir(parents=True, exist_ok=True)
+            mock_save = AsyncMock(return_value=out_path)
+            with patch(
+                "pipeline.run_pipeline.generate_tailored_materials", return_value="\n".join(parts)
+            ), patch(
+                "pipeline.run_pipeline.evaluate_ats_score",
+                return_value={"score": 85, "honesty": 90, "critique": "Good.", "gaps": []},
+            ) as mock_ats, patch(
+                "pipeline.run_pipeline.save_materials", new=mock_save
+            ), patch(
+                "pipeline.run_pipeline.render_playbook", return_value="Playbook"
+            ):
+                out_dir = await process_job(job, fill_form=False, cfg=cfg)
+            # Blocked draft never reaches the LLM critics (tokens saved)...
+            mock_ats.assert_not_called()
+            # ...and exhaustion falls back to an annotated failed-gates save.
+            self.assertIsNotNone(out_dir)
+            self.assertFalse(job["passed"])
+            saved_eval = mock_save.call_args.kwargs.get("eval_result") or {}
+            self.assertTrue(saved_eval.get("blocked_by_grounding"))
+            self.assertEqual(len(saved_eval["title_warnings"]), 1)
+            self.assertTrue(any(item["claim"] == "$500k" for item in saved_eval["ungrounded_claims"]))
+
+        asyncio.run(run_test())
+        tmp.cleanup()
+
+    def test_process_job_retries_then_passes_clean(self):
+        import asyncio
+        from unittest.mock import AsyncMock, patch
+        from pipeline.config import Config
+        from pipeline.run_pipeline import process_job
+
+        tmp = tempfile.TemporaryDirectory()
+        root = Path(tmp.name)
+        (root / "cv_master.md").write_text("Software Engineer with Python and Kafka. Managed 8 engineers.")
+        (root / "experience-bank").mkdir()
+        cfg = Config(
+            {
+                "workspace": {
+                    "root": str(root),
+                    "tracker": str(root / "tracker.md"),
+                    "applications": str(root / "apps"),
+                    "master_cv": "cv_master.md",
+                    "experience_bank": "experience-bank/",
+                },
+                "pipeline": {
+                    "ats_threshold": 80,
+                    "max_attempts": 2,
+                    "fabrication_freedom": 1,
+                    "jd_brief": False,
+                    "voice_gate": False,
+                    "liveness_check": False,
+                },
+                "user": {"full_name": "Test User"},
+                "career": {"years_experience": 5},
+                "experience": {
+                    "jobs": [{"prefix": "JOB1", "employer": "Alpha", "default_title": "Software Engineer", "bullets": 7}]
+                },
+                "cv_format": {"bullets": {"dynamic": False}},
+            },
+            root,
+        )
+        job = {
+            "company": "RetryCo",
+            "role": "Python Engineer",
+            "jd": "Python distributed systems engineer with FastAPI and Kafka.",
+        }
+
+        def _draft(title, bullet):
+            chunks = [
+                "<TITLE>Software Engineer</TITLE>",
+                "<SUMMARY>Grounded Python engineer with verified production experience across distributed teams.</SUMMARY>",
+                f"<JOB1_TITLE>{title}</JOB1_TITLE>",
+            ]
+            chunks.extend(f"<JOB1_B{i}>{bullet}</JOB1_B{i}>" for i in range(1, 8))
+            chunks.extend(
+                [
+                    "<SKILL_LANG>Python, SQL</SKILL_LANG>",
+                    "<SKILL_ML>LLMs, NLP</SKILL_ML>",
+                    "<SKILL_DATA>Kafka, Redis</SKILL_DATA>",
+                    "<SKILL_BACKEND>FastAPI, Flask</SKILL_BACKEND>",
+                    "<SKILL_CLOUD>AWS, Docker</SKILL_CLOUD>",
+                    "<LINKEDIN_DM>Hi there, saw your posting and would love to connect about the team and role.</LINKEDIN_DM>",
+                    "<WHY_I_FIT>1. Python depth.\n2. Distributed systems.\n3. Fast execution.</WHY_I_FIT>",
+                ]
+            )
+            return "\n".join(chunks)
+
+        dirty = _draft("Software Engineer", "Built Python services and closed a $500k deal with the team.")
+        clean = _draft("Software Engineer", "Built Python services for a team of 8 engineers.")
+
+        async def run_test():
+            out_path = root / "apps" / "RetryCo-Python-Engineer-2026-09-09"
+            out_path.mkdir(parents=True, exist_ok=True)
+            mock_save = AsyncMock(return_value=out_path)
+            with patch(
+                "pipeline.run_pipeline.generate_tailored_materials", side_effect=[dirty, clean]
+            ), patch(
+                "pipeline.run_pipeline.evaluate_ats_score",
+                return_value={"score": 85, "honesty": 90, "critique": "Good.", "gaps": []},
+            ) as mock_ats, patch(
+                "pipeline.run_pipeline.save_materials", new=mock_save
+            ), patch(
+                "pipeline.run_pipeline.render_playbook", return_value="Playbook"
+            ):
+                out_dir = await process_job(job, fill_form=False, cfg=cfg)
+            self.assertIsNotNone(out_dir)
+            self.assertTrue(job["passed"])
+            # Only the clean draft was scored; the blocked one never spent critic tokens.
+            self.assertEqual(mock_ats.call_count, 1)
+            saved_eval = mock_save.call_args.kwargs.get("eval_result") or {}
+            self.assertEqual(saved_eval.get("ungrounded_claims"), [])
+
+        asyncio.run(run_test())
+        tmp.cleanup()
+
+
+class SkillGapTests(unittest.TestCase):
+    SOURCE = "Senior Python engineer. Built Kafka pipelines on AWS with Docker. Led a team of 5."
+    JD = (
+        "Requirements:\n"
+        "- 5+ years of experience with Python\n"
+        "- Strong Kafka and event streaming background\n"
+        "- Rust systems programming\n"
+        "Nice to have:\n"
+        "- Go microservices\n"
+        "- AWS deployment experience\n"
+        "Responsibilities:\n"
+        "- Build scalable backend services\n"
+    )
+
+    def _phrases(self, items):
+        return {item["phrase"] for item in items}
+
+    def test_buckets_existing_supported_gaps(self):
+        from pipeline.verify import check_skill_gaps
+
+        result = check_skill_gaps(self.JD, self.SOURCE)
+        self.assertFalse(result["inconclusive"])
+        existing = {item["phrase"]: item["importance"] for item in result["existing"]}
+        self.assertEqual(existing.get("Python"), "required")
+        self.assertEqual(existing.get("Kafka"), "required")
+        self.assertEqual(existing.get("AWS"), "bonus")
+        gaps = {item["phrase"]: item["importance"] for item in result["gaps"]}
+        self.assertEqual(gaps.get("Rust systems programming"), "required")
+        self.assertEqual(gaps.get("Go microservices"), "bonus")
+        # Duties prose from Responsibilities is not requirement-scanned.
+        self.assertNotIn("Build scalable backend services", self._phrases(result["gaps"]))
+
+    def test_inconclusive_cases_say_so(self):
+        from pipeline.verify import check_skill_gaps
+
+        for jd, source, reason in (
+            ("Great role, apply now!", self.SOURCE, "no requirements section"),
+            ("", self.SOURCE, "empty JD"),
+            (self.JD, "", "no source text"),
+            ("Requirements:\n", self.SOURCE, "no skill candidates"),
+        ):
+            with self.subTest(jd=jd[:20]):
+                result = check_skill_gaps(jd, source)
+                self.assertTrue(result["inconclusive"])
+                self.assertIn(reason, result["reason"])
+                self.assertEqual(result["gaps"], [])
+
+    def test_gap_note_lines(self):
+        from pipeline.verify import skill_gap_note_lines
+
+        self.assertEqual(skill_gap_note_lines({}), [])
+        self.assertEqual(
+            skill_gap_note_lines({"skill_gaps": {"inconclusive": True, "reason": "empty JD"}}),
+            ["**Skill-gap check:** inconclusive — empty JD."],
+        )
+        lines = skill_gap_note_lines(
+            {
+                "skill_gaps": {
+                    "inconclusive": False,
+                    "gaps": [
+                        {"phrase": "Rust", "importance": "required"},
+                        {"phrase": "Go", "importance": "bonus"},
+                    ],
+                }
+            }
+        )
+        self.assertEqual(lines, ["**Known gaps (proceeding anyway):** Rust."])
+
+    def test_brief_carries_gaps_into_analysis(self):
+        import asyncio
+        from unittest.mock import AsyncMock, patch
+        from pipeline.config import Config
+        from pipeline.run_pipeline import process_job
+
+        tmp = tempfile.TemporaryDirectory()
+        root = Path(tmp.name)
+        (root / "cv_master.md").write_text("Python engineer. Kafka pipelines.")
+        (root / "experience-bank").mkdir()
+        (root / "resumes").mkdir()
+        (root / "resumes" / "template.html").write_text(
+            (Path(__file__).resolve().parent.parent / "resumes" / "template.example.html").read_text()
+        )
+        cfg = Config(
+            {
+                "workspace": {
+                    "root": str(root),
+                    "tracker": str(root / "tracker.md"),
+                    "applications": str(root / "apps"),
+                    "master_cv": "cv_master.md",
+                    "experience_bank": "experience-bank/",
+                },
+                "pipeline": {
+                    "ats_threshold": 80,
+                    "max_attempts": 1,
+                    "fabrication_freedom": 1,
+                    "jd_brief": True,
+                    "voice_gate": False,
+                    "liveness_check": False,
+                },
+                "verification": {"enabled": True, "mode": "enforce"},
+                "user": {"full_name": "Test User"},
+                "career": {"years_experience": 5},
+                "experience": {
+                    "jobs": [
+                        {"prefix": "JOB1", "employer": "Alpha", "default_title": "Software Engineer", "bullets": 2},
+                        {"prefix": "JOB2", "employer": "Beta", "default_title": "Software Engineer", "bullets": 2},
+                        {"prefix": "JOB3", "employer": "Gamma", "default_title": "Software Engineer", "bullets": 2},
+                    ]
+                },
+                "cv_format": {"bullets": {"dynamic": False}},
+            },
+            root,
+        )
+        job = {
+            "company": "GapCo",
+            "role": "Python Engineer",
+            "jd": "Requirements:\n- Python services\n- Rust systems programming\n",
+        }
+        parts = [
+            "<TITLE>Software Engineer</TITLE>",
+            "<SUMMARY>Grounded Python engineer with verified production experience across platform teams.</SUMMARY>",
+            "<JOB1_TITLE>Software Engineer</JOB1_TITLE>",
+            "<JOB1_B1>Built Python services for platform teams.</JOB1_B1>",
+            "<JOB1_B2>Reviewed rollout plans with the team.</JOB1_B2>",
+            "<JOB2_TITLE>Software Engineer</JOB2_TITLE>",
+            "<JOB2_B1>Built data pipelines for platform teams.</JOB2_B1>",
+            "<JOB2_B2>Reviewed data quality checks with the team.</JOB2_B2>",
+            "<JOB3_TITLE>Software Engineer</JOB3_TITLE>",
+            "<JOB3_B1>Shipped backend services for platform teams.</JOB3_B1>",
+            "<JOB3_B2>Reviewed incident reports with the team.</JOB3_B2>",
+            "<SKILL_LANG>Python, SQL</SKILL_LANG>",
+            "<SKILL_ML>LLMs, NLP</SKILL_ML>",
+            "<SKILL_DATA>Kafka, Redis</SKILL_DATA>",
+            "<SKILL_BACKEND>FastAPI, Flask</SKILL_BACKEND>",
+            "<SKILL_CLOUD>AWS, Docker</SKILL_CLOUD>",
+            "<LINKEDIN_DM>Hi there, saw your posting and would love to connect about the team and role.</LINKEDIN_DM>",
+            "<WHY_I_FIT>1. Python depth.\n2. Distributed systems.\n3. Fast execution.</WHY_I_FIT>",
+        ]
+
+        async def run_test():
+            out_path = root / "apps" / "GapCo-Python-Engineer-2026-09-09"
+            out_path.mkdir(parents=True, exist_ok=True)
+            with patch(
+                "pipeline.run_pipeline.generate_tailored_materials", return_value="\n".join(parts)
+            ), patch(
+                "pipeline.run_pipeline.generate_jd_brief",
+                return_value={"match_score": 70, "angle": "Platform fit"},
+            ), patch(
+                "pipeline.run_pipeline.evaluate_ats_score",
+                return_value={"score": 85, "honesty": 90, "critique": "Good.", "gaps": []},
+            ), patch(
+                "pipeline.tailor.html_to_pdf", new=AsyncMock()
+            ), patch(
+                "pipeline.cv_export.write_editable_exports", return_value=None
+            ), patch(
+                "pipeline.run_pipeline.render_playbook", return_value="Playbook"
+            ):
+                out_dir = await process_job(job, fill_form=False, cfg=cfg)
+            self.assertIsNotNone(out_dir)
+            brief = __import__("json").loads((out_dir / "jd_brief.json").read_text())
+            gap_phrases = {item["phrase"] for item in brief["skill_gaps"]["gaps"]}
+            self.assertIn("Rust systems programming", gap_phrases)
+            analysis = (out_dir / "analysis.md").read_text()
+            self.assertIn("Known gaps (proceeding anyway)", analysis)
+            self.assertIn("Rust systems programming", analysis)
+
+        asyncio.run(run_test())
+        tmp.cleanup()
+
+    def test_advisory_mode_passes_with_flags(self):
+        import asyncio
+        from unittest.mock import AsyncMock, patch
+        from pipeline.config import Config
+        from pipeline.run_pipeline import process_job
+
+        tmp = tempfile.TemporaryDirectory()
+        root = Path(tmp.name)
+        (root / "cv_master.md").write_text("Software Engineer with Python and Kafka.")
+        (root / "experience-bank").mkdir()
+        cfg = Config(
+            {
+                "workspace": {
+                    "root": str(root),
+                    "tracker": str(root / "tracker.md"),
+                    "applications": str(root / "apps"),
+                    "master_cv": "cv_master.md",
+                    "experience_bank": "experience-bank/",
+                },
+                "pipeline": {
+                    "ats_threshold": 80,
+                    "max_attempts": 1,
+                    "fabrication_freedom": 1,
+                    "jd_brief": False,
+                    "voice_gate": False,
+                    "liveness_check": False,
+                },
+                "verification": {"enabled": True, "mode": "advisory"},
+                "user": {"full_name": "Test User"},
+                "career": {"years_experience": 5},
+                "experience": {
+                    "jobs": [{"prefix": "JOB1", "employer": "Alpha", "default_title": "Software Engineer", "bullets": 2}]
+                },
+                "cv_format": {"bullets": {"dynamic": False}},
+            },
+            root,
+        )
+        job = {
+            "company": "AdvisoryCo",
+            "role": "Python Engineer",
+            "jd": "Python distributed systems engineer with FastAPI and Kafka.",
+        }
+        parts = [
+            "<TITLE>Software Engineer</TITLE>",
+            "<SUMMARY>Grounded Python engineer with verified production experience across platform teams.</SUMMARY>",
+            "<JOB1_TITLE>Software Engineer</JOB1_TITLE>",
+            "<JOB1_B1>Built Python services and closed a $500k deal with the team.</JOB1_B1>",
+            "<JOB1_B2>Reviewed rollout plans with the team.</JOB1_B2>",
+            "<SKILL_LANG>Python, SQL</SKILL_LANG>",
+            "<SKILL_ML>LLMs, NLP</SKILL_ML>",
+            "<SKILL_DATA>Kafka, Redis</SKILL_DATA>",
+            "<SKILL_BACKEND>FastAPI, Flask</SKILL_BACKEND>",
+            "<SKILL_CLOUD>AWS, Docker</SKILL_CLOUD>",
+            "<LINKEDIN_DM>Hi there, saw your posting and would love to connect about the team and role.</LINKEDIN_DM>",
+            "<WHY_I_FIT>1. Python depth.\n2. Distributed systems.\n3. Fast execution.</WHY_I_FIT>",
+        ]
+
+        async def run_test():
+            out_path = root / "apps" / "AdvisoryCo-Python-Engineer-2026-09-09"
+            out_path.mkdir(parents=True, exist_ok=True)
+            mock_save = AsyncMock(return_value=out_path)
+            with patch(
+                "pipeline.run_pipeline.generate_tailored_materials", return_value="\n".join(parts)
+            ), patch(
+                "pipeline.run_pipeline.evaluate_ats_score",
+                return_value={"score": 85, "honesty": 90, "critique": "Good.", "gaps": []},
+            ), patch(
+                "pipeline.run_pipeline.save_materials", new=mock_save
+            ), patch(
+                "pipeline.run_pipeline.render_playbook", return_value="Playbook"
+            ):
+                out_dir = await process_job(job, fill_form=False, cfg=cfg)
+            self.assertIsNotNone(out_dir)
+            self.assertTrue(job["passed"])
+            saved_eval = mock_save.call_args.kwargs.get("eval_result") or {}
+            self.assertTrue(any(item["claim"] == "$500k" for item in saved_eval["ungrounded_claims"]))
+
+        asyncio.run(run_test())
+        tmp.cleanup()

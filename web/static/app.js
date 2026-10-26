@@ -396,10 +396,39 @@ function locationLabel(row, pkg) {
   return text || "—";
 }
 
+function fitInfo(row, pkg) {
+  const fit =
+    row && row.fit_score_5 != null && row.fit_score_5 !== ""
+      ? row.fit_score_5
+      : pkg && pkg.fit_score_5;
+  if (fit == null || fit === "") return null;
+  return {
+    fit,
+    decision: (row && row.fit_decision) || (pkg && pkg.fit_decision) || "",
+    legitimacy: (row && row.legitimacy_tier) || (pkg && pkg.legitimacy_tier) || "",
+    workAuth: (row && row.work_auth) || (pkg && pkg.work_auth) || "",
+  };
+}
+
 function atsLabel(row, pkg) {
   const score = row && row.ats_score != null ? row.ats_score : pkg && (pkg.ats_score != null ? pkg.ats_score : pkg.score);
-  if (score == null || score === "") return "—";
-  return String(score);
+  const info = fitInfo(row, pkg);
+  if (!info) {
+    if (score == null || score === "") return "—";
+    return String(score);
+  }
+  const tail = `${info.fit}/5${info.decision ? ` ${info.decision}` : ""}`;
+  if (score == null || score === "") return tail;
+  return `${score} · ${tail}`;
+}
+
+function atsTitle(row, pkg) {
+  const info = fitInfo(row, pkg);
+  if (!info) return "";
+  const lines = [`Fit score: ${info.fit}/5${info.decision ? ` — ${info.decision}` : ""}`];
+  if (info.legitimacy) lines.push(`Posting legitimacy: ${info.legitimacy}`);
+  if (info.workAuth) lines.push(`Work authorization: ${info.workAuth}`);
+  return lines.join("\n");
 }
 
 function freedomLabel(row, pkg, attempts) {
@@ -445,13 +474,13 @@ function freedomDetailTitle(row, pkg, attempts) {
   return lines.join("\n");
 }
 
-function boardCells(roleHtml, company, location, mode, ats, freedom, statusHtml, resume, edit, link, apply, del, freedomTitle) {
+function boardCells(roleHtml, company, location, mode, ats, atsTitle, freedom, statusHtml, resume, edit, link, apply, del, freedomTitle) {
   return `
       <td class="col-role">${roleHtml}</td>
       <td class="col-company" title="${escapeAttr(company || "")}">${escapeHtml(company || "")}</td>
       <td class="col-location" title="${escapeAttr(location)}">${escapeHtml(location)}</td>
       <td class="col-mode">${escapeHtml(mode)}</td>
-      <td class="col-ats ats-cell">${escapeHtml(ats)}</td>
+      <td class="col-ats ats-cell" title="${escapeAttr(atsTitle || "")}">${escapeHtml(ats)}</td>
       <td class="col-freedom" title="${escapeAttr(freedomTitle || (freedom === "—" ? "" : "Fabrication freedom used"))}">${escapeHtml(freedom)}</td>
       <td class="col-status">${statusHtml}</td>
       <td class="col-resume">${resume}</td>
@@ -1085,6 +1114,7 @@ function boardItem(row, pkg) {
     location: locationLabel(row, pkg),
     mode: workModeLabel((row && row.work_mode) || (pkg && pkg.work_mode)),
     ats: atsLabel(row, pkg),
+    atsTitle: atsTitle(row, pkg),
     atsNum: Number.isFinite(atsNum) ? atsNum : -1,
     freedom: freedomLabel(row, pkg, (pkg && pkg.attempts) || (row && row.attempts) || []),
     freedomTitle: freedomDetailTitle(row, pkg, (pkg && pkg.attempts) || (row && row.attempts) || []),
@@ -1229,6 +1259,7 @@ function appendBoardRow(body, item, active) {
     item.location,
     item.mode,
     item.ats,
+    item.atsTitle,
     item.freedom,
     statusHtml,
     item.live ? liveResumeCell(row) : resumeCell(pkg),
@@ -1515,6 +1546,10 @@ async function openPackage(id) {
     metric("Score", ev.score),
     metric("Honesty", ev.honesty),
     metric("Keywords", ev.keyword_coverage),
+    metric("Fit", ev.fit_score_5 != null && ev.fit_score_5 !== "" ? `${ev.fit_score_5}/5` : null),
+    metric("Decision", ev.fit_decision),
+    metric("Legitimacy", ev.legitimacy_tier),
+    metric("Work auth", ev.work_auth),
   ].join("");
 
   const tabs = [
@@ -1551,9 +1586,17 @@ function showTab(detail, tabId, btn) {
   const ev = detail.evaluation || {};
   if (tabId === "feedback") {
     const gaps = (ev.gaps || []).map((g) => "· " + g).join("\n");
+    const drift = (ev.title_warnings || [])
+      .map((w) => `· ${w.employer || ""}: '${w.tailored || ""}' vs '${w.canonical || ""}' — ${w.detail || ""}`)
+      .join("\n");
+    const ungrounded = (ev.ungrounded_claims || [])
+      .map((c) => `· ${c.claim || ""} — ${c.reason || ""}`)
+      .join("\n");
     body.textContent = [
       ev.critique || "No critique stored.",
       gaps ? "\nGaps\n" + gaps : "",
+      drift ? "\nTitle drift (advisory)\n" + drift : "",
+      ungrounded ? "\nUngrounded numbers (advisory)\n" + ungrounded : "",
       ev.retry_history ? "\nRetry history\n" + ev.retry_history : "",
     ].join("\n").trim();
     return;

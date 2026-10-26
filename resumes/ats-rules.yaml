@@ -1,0 +1,58 @@
+# ATS lint rules for CV HTML templates (resumes/template*.html).
+# Machine-readable half of the template contract: single-column, parseable,
+# contact-bearing. Checked by pipeline/verify.py lint_template().
+#
+# Discipline: a rule without an implemented detector reports `skipped`,
+# never passes. Severity is warning throughout — the linter never blocks
+# a render; it keeps template #2 from regressing what template #1 got right.
+
+rules:
+  - id: single-column-layout
+    rule: Single-column layout
+    description: One content column so extraction order matches reading order. Row-internal micro-grids (bullet + text, label + value, title + date rail) are fine; two fr tracks or named sidebar containers are flagged.
+    severity: warning
+    scope: structural
+    detect: single_column
+    # Deeper extraction-order judgment and pixel-measured sidebars need a
+    # rendered PDF, not the template.
+
+  - id: extraction-order-audit
+    rule: Rendered extraction order matches visual order
+    description: Requires parsing a rendered PDF's text layer; out of scope for template lint.
+    severity: warning
+    scope: content
+    detect: null
+    unimplemented_because: needs rendered output, templates only carry markup
+
+  - id: no-layout-tables
+    rule: No tables used for layout
+    description: Tabular layout scrambles ATS reading order.
+    severity: warning
+    scope: structural
+    detect: no_layout_tables
+
+  - id: no-images
+    rule: No images
+    description: Images are invisible to ATS parsers; no logos, headshots, or skill bars.
+    severity: warning
+    scope: structural
+    detect: no_images
+
+  - id: contact-block
+    rule: Contact block present
+    description: Template carries {{CONTACT_LINE}} (or a literal email) so every render has contact text.
+    severity: warning
+    scope: structural
+    detect: contact_block
+
+  - id: section-markers
+    rule: Section markers present
+    description: Reorderable sections stay machine-addressable via cv-section markers.
+    severity: warning
+    scope: structural
+    detect: section_markers
+    markers:
+      - summary
+      - experience
+      - skills
+      - education

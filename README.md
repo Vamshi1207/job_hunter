@@ -3,7 +3,7 @@
 Turns a job description into a tailored CV PDF, cover letter, LinkedIn DM, and a paste-by-field playbook. It only rewrites experience that is already in your master CV and experience bank. **It never clicks Submit.**
 
 ```
-jobs.yaml / hunt / pasted URL  →  tailor (Nemotron 3.5 Lightning, Nemotron 3 Ultra, DeepSeek V4 Flash, then agy)  →  honesty critic  →  HTML → PDF
+jobs.yaml / hunt / pasted URL  →  JD brief  →  tailor (Muse Spark, NVIDIA chain, then agy)  →  ATS + honesty + voice critics  →  HTML → PDF
                                                                       ↓
                                          applications/<company>-<role>-<date>/
 ```
@@ -152,7 +152,7 @@ graph TB
 - **Direct Form URL Resolution (`pipeline/apply_url.py`)**: Resolves indirect job board links (e.g., LinkedIn `/jobs/view/...` or Indeed `/viewjob?...`) into direct canonical ATS application portal URLs (Greenhouse, Lever, Workday, etc.).
 - **Session Persistence**: Browser profiles, session cookies, and authentication tokens are persisted in the gitignored `.camoufox-profile/` directory.
 
-#### 4. Tailoring & Honesty Critic Engine (`pipeline/tailor.py`, `pipeline/llm.py`)
+#### 4. Tailoring, ATS & Voice Critic Engine (`pipeline/tailor.py`, `pipeline/llm.py`)
 - **LLM Cascade & Fault Tolerance**:
   1. **Primary**: NVIDIA NIM (`pipeline.model`, default `nvidia/nemotron-3.5-lightning-30b-a3b`).
   2. **Secondary Fallback**: NVIDIA NIM (`pipeline.nvidia.fallback_models`, fallback 1 `nvidia/nemotron-3-ultra-550b-a55b`).
@@ -162,7 +162,9 @@ graph TB
 - **Ground-Truth Invariant ("Honesty Critic")**:
   - The tailor is strictly constrained to `cv_master.md` and `experience-bank/*.md`. It is strictly forbidden from fabricating employers, employment dates, degrees, or unearned metrics.
   - **Key Skills Enrichment**: Enriches the Key Skills summary with matching JD keywords only when substantiated by existing master experience.
-  - **Iterative Scoring Loop**: Calculates ATS match score and evaluates honesty. If either score falls below threshold (`pipeline.ats_threshold`), it loops with corrective feedback up to `pipeline.max_attempts`.
+  - **JD Brief**: A cheap ATS/recruiter pass extracts must-have keywords, missing keywords, red flags, and 10-second skip risks before drafting. It prioritizes; it never authorizes fabrication or keyword stuffing.
+  - **Voice Gate**: A second critic scores naturalness and template sameness against `cv_master.md`, and flags uniform openers, metric stuffing, keyword salad, AI vocabulary, and em-dash overuse. A failing draft gets one targeted rewrite of the flagged fields.
+  - **Iterative Scoring Loop**: Calculates ATS match score, honesty, and voice. If any gate misses (`pipeline.ats_threshold` plus the per-freedom honesty gate, or `pipeline.voice_threshold`), it loops with corrective feedback up to `pipeline.max_attempts`.
 
 #### 5. Multi-Format Document Compiler (`pipeline/cv_export.py`, `resumes/template.html`)
 - **Dynamic HTML Template**: Fills `resumes/template.html` with role-adapted content and dynamic bullet counts (`cv_format.bullets.dynamic`), allocating more bullets to directly relevant past employers. Unused bullet rows are cleanly omitted.
@@ -329,6 +331,11 @@ If you add a fourth job, add a `JOB4` block in **both** `config.yaml` and `resum
 | `pipeline.workers` | Parallel tailor jobs (default 4). Shared 40 req/min NVIDIA cap. |
 | `pipeline.nvidia.rpm` | NVIDIA rate limit (default 40). |
 | `pipeline.ats_threshold` | Stop when score **and** honesty meet this (default 80). |
+| `pipeline.jd_brief` | Run the cheap ATS/recruiter brief before drafting (default `true`). |
+| `pipeline.voice_gate` | Require the voice/10-second-scan critic to pass (default `true`). |
+| `pipeline.voice_threshold` | Minimum naturalness score, 0-100 (default 75). |
+| `pipeline.voice_sameness_max` | Maximum template-sameness score, 0-100 (default 40). |
+| `pipeline.voice_rewrite` | Allow one targeted rewrite of voice-flagged fields per job (default `true`). |
 | `pipeline.max_attempts` | Tailor/critic loops (default 3). |
 | `pipeline.auto_apply` | Leave `false`. `--fill-form` still never clicks Submit. |
 
@@ -419,7 +426,7 @@ python3 -m unittest discover -p 'test_*.py'
 Or inside Docker:
 
 ```bash
-docker compose run --rm --profile batch pipeline python3 -m unittest discover -p 'test_*.py'
+docker compose --profile batch run --rm pipeline python3 -m unittest discover -p 'test_*.py'
 ```
 
 ## Cursor skills
@@ -440,3 +447,11 @@ What landed since the last published `main`:
 - **Live hunt table**, Word/HTML/Pages downloads, skip salary/search pages, skip already processed job URLs (same title at one company with a new URL is kept).
 - **Docker-only desk** at port 8000. Camoufox needs the entrypoint Xvfb and seccomp flags in `docker-compose.yml`.
 - **Gitignored personal files** have tracked examples (`config.example.yaml`, `cv_master.example.md`, `jobs.example.yaml`, `resumes/template.example.html`, memory templates, experience-bank examples, `.env.example`, `.cursor/mcp.example.json`). Copy them once; never commit `config.yaml` (it may hold a LinkedIn password). `applications/_tracker.md` is created at runtime.
+- **Liveness gate**: closed postings ("no longer available", filled, 404/410) are skipped before any LLM call. Toggle with `pipeline.liveness_check`.
+- **1–5 fit score** on every package (ATS 80 ≈ 4.2; apply line at 4.0) plus a `## Machine Summary` fence in `analysis.md`, posting-legitimacy observations, a 4-tier work-auth signal (only an explicit no-sponsorship JD blocks), and evidence confidence. The desk board shows `ATS · fit/5 Decision`; detail view adds Fit/Decision/Legitimacy/Work-auth. Thresholds live under `evaluation:` in `config.example.yaml`.
+- **Follow-ups & funnel**: `python3 -m pipeline.followup --summary` (or `--overdue-only`) lists overdue nudges and funnel conversion from `_tracker.md`; `python3 -m pipeline.followup` emits JSON. Cadence under `followup:`; `enabled: false` turns nudges off. Read-only — it never sends anything.
+- **Verification with teeth**: every package gets title-drift warnings (seniority escalation, role swaps — plain reframes stay quiet, never block) and numeric-claim grounding (each number traced to `cv_master`/bank; money must match exactly, `10k`≡`10,000`, plausible years-of-experience go to review). Under `verification.mode: enforce` (default), drafts with ungrounded numbers are rejected for retry *before* the LLM critics run; exhaustion saves an annotated failed-gates fallback, never a quiet pass. Reviews never block; `advisory` restores annotate-only. Toggle with `verification.enabled`.
+- **Skill-gap buckets**: a zero-LLM pre-draft check classifies JD requirements into existing / supported / gaps against your sources (years-prefixes and filler stripped, bonus sections tagged, duties prose ignored). Required gaps are disclosed in `analysis.md` ("Known gaps (proceeding anyway)") and `jd_brief.json`; inconclusive results say so instead of printing empty buckets.
+- **ATS template lint**: `resumes/ats-rules.yaml` holds structural rules (single column, no layout tables/images, contact block, section markers) checked by `pipeline/verify.py`; rules without detectors report `skipped`, never pass.
+
+> Evaluation, liveness, and follow-up designs are adapted from [career-ops](https://github.com/career-ops-hq/career-ops) (MIT), re-implemented here for this pipeline's tracker and config layout.

@@ -14,7 +14,7 @@
 
 ## Tests (no LLM, no browser)
 - Host (Python 3.10+): `python3 -m unittest discover -p 'test_*.py'`
-- Docker: `docker compose run --rm --profile batch pipeline python3 -m unittest discover -p 'test_*.py'`
+- Docker: `docker compose --profile batch run --rm pipeline python3 -m unittest discover -p 'test_*.py'`
 - LLM-calling runs take minutes; tests must stay hermetic.
 
 ## Config loading (pipeline/config.py)
@@ -29,7 +29,8 @@
 - Tailor loop: `pipeline/tailor.py` (rewrite → ATS/honesty critic → up to `pipeline.max_attempts`, default 3); freedom auto-escalates/de-escalates in `pipeline/fabrication.py`.
 - Export: `pipeline/cv_export.py` → Playwright Chromium HTML→PDF. `experience.jobs[].prefix` must match `{{PREFIX_*}}` placeholders in `resumes/template.html`; adding a JOBn slot requires editing **both** `config.yaml` and the HTML template.
 - Pages `.pages` output needs host helper: `python3 scripts/macos_pages_helper.py` (macOS + Pages.app).
-- Output: `applications/<company>-<role>-<YYYY-MM-DD>/` (CV pdf/html/docx/pages, cover_letter.md, linkedin_dm.txt, why_i_fit.txt, playbook.md, analysis.md, llm_output_raw.txt).
+- Output: `applications/<company>-<role>-<YYYY-MM-DD>/` (CV pdf/html/docx/pages, cover_letter.md, linkedin_dm.txt, why_i_fit.txt, playbook.md, analysis.md incl. `## Machine Summary` fence, evaluation.json with 1–5 fit fields, llm_output_raw.txt).
+- Pre-LLM gate: `pipeline/liveness.py` skips closed postings in `process_job` (`pipeline.liveness_check`, default true). Fit enrichment: `pipeline/evaluation.py` (`enrich_evaluation` → global_score/fit_decision/legitimacy/work-auth/evidence + machine summary; thresholds under `evaluation:`). Advisory verification: `pipeline/verify.py` (title drift warnings never block; numeric grounding rejects ungrounded drafts for retry under `verification.mode: enforce` (default), annotated failed-gates fallback on exhaustion, reviews never block; template lint from `resumes/ats-rules.yaml`; toggle `verification.enabled`). Skill gaps: zero-LLM JD buckets (`check_skill_gaps`) disclosed via `jd_brief` + `analysis.md`. Follow-ups: `python3 -m pipeline.followup --summary` (`pipeline/followup.py`, read-only; cadence under `followup:`).
 
 ## Camoufox / noVNC gotchas
 - Headed Camoufox on `DISPLAY=:99` via `scripts/docker-entrypoint.sh` (`setsid` keeps Xvfb alive). Never use `headless: "virtual"` — invisible to the noVNC panel.

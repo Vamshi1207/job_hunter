@@ -20,6 +20,7 @@ memory/*
 resumes/*
 !resumes/.gitkeep
 !resumes/template.example.html
+!resumes/ats-rules.yaml
 applications/*
 !applications/.gitkeep
 experience-bank/*

@@ -160,7 +160,7 @@ experience:
       bullets: 7
     - prefix: JOB2
       employer: Example Two
-      default_title: Data Engineer
+      default_title: Software Engineer
       bullets: 4
     - prefix: JOB3
       employer: Example Three
@@ -185,12 +185,22 @@ pipeline:
   applied_file: applied.yaml
   html_template: resumes/template.html
   ats_threshold: 80
+  # Skip postings that read closed before spending LLM tokens (pipeline/liveness.py).
+  liveness_check: true
   # 0–5 lock, or auto = choose per job before tailor (desk default).
   fabrication_freedom: auto
   fabrication_freedom_min: 1   # initial floor when mode is auto (0-5, default 1: keyword alignment)
   fabrication_freedom_max: 5   # cap when mode is auto (0-5, default 5)
   generate_cover_letter: false # toggle cover letter generation (default false to save tokens and speed up runs)
   max_attempts: 3
+  # Human-voice flow. The JD brief is one cheap ATS/recruiter pass before drafting.
+  # The voice gate rejects drafts that read like a keyword template; voice_rewrite
+  # runs one targeted edit of the flagged fields before the next attempt.
+  jd_brief: true
+  voice_gate: true
+  voice_threshold: 75        # naturalness score 0-100 required to accept a draft
+  voice_sameness_max: 40     # reject drafts that read like a reusable template
+  voice_rewrite: true
   # opencode = OpenCode Go gateway (OPENCODE_API_KEY from your Go subscription,
   # https://opencode.ai/zen/go/v1). Muse Spark / GPT / Grok IDs use the Responses
   # API, the rest chat/completions. A stable x-opencode-session header is sent
@@ -226,6 +236,35 @@ pipeline:
       - minimax-m3
   # Form fill is off unless you pass --fill-form. Submit is never clicked.
   auto_apply: false
+
+# ---------- Verification (deterministic checkers: title drift, numeric grounding) ----------
+# Findings annotate every package. Blocking rejects bad drafts for retry;
+# exhaustion still saves an annotated failed-gates fallback, never a quiet pass.
+verification:
+  enabled: true
+  # enforce = drafts with numbers absent from cv_master/bank are rejected and
+  # retried (exhaustion saves an annotated failed-gates fallback, never a
+  # quiet pass). advisory = annotate only. Reviews and title drift never block.
+  mode: enforce
+
+# ---------- Fit evaluation (1-5 global score + machine summary) ----------
+# The 0-100 ATS gate stays; this adds a holistic 1-5 fit score on every
+# package (ATS 80 ≈ 4.2). Legitimacy and requirement-importance never enter
+# the number, so score history stays comparable for funnel analysis.
+evaluation:
+  apply_at: 4.5      # >= this: apply now
+  consider_at: 4.0   # >= this: worth applying (ethical apply line)
+  research_at: 3.5   # >= this: research first; below: skip
+
+# ---------- Follow-up cadence (days; `enabled: false` turns nudges off) ----------
+followup:
+  enabled: true
+  applied_first_days: 7
+  applied_subsequent_days: 7
+  applied_max_followups: 2
+  responded_initial_days: 1
+  responded_subsequent_days: 3
+  interview_thankyou_days: 1
 
 # Public job hunt (desk "Hunt from profile" and `python3 -m pipeline.run_pipeline --hunt`)
 # Fit rules are config, not code. Browser hunt uses Camoufox; it never clicks Apply/Submit.

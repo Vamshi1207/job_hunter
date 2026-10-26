@@ -158,6 +158,15 @@ def package_summary(cfg: Config, folder: Path) -> dict:
         company = job_meta["company"]
     if job_meta.get("role"):
         role = job_meta["role"]
+    machine_summary: dict = {}
+    analysis_path = folder / "analysis.md"
+    if analysis_path.exists():
+        try:
+            from pipeline.evaluation import parse_machine_summary
+
+            machine_summary = parse_machine_summary(analysis_path.read_text())
+        except Exception:
+            machine_summary = {}
     from pipeline.jobs import is_placeholder_company
 
     if is_placeholder_company(company):
@@ -208,6 +217,14 @@ def package_summary(cfg: Config, folder: Path) -> dict:
         min_honesty = honesty_gate(freedom if freedom is not None else 0, threshold)
         passed = bool(int(eval_data["score"]) >= threshold and int(eval_data["honesty"]) >= min_honesty)
     apply_signal = "APPLY" if passed else "REJECT" if passed is not None else "UNKNOWN"
+    fit_score_5 = eval_data.get("global_score")
+    if fit_score_5 is None:
+        fit_score_5 = machine_summary.get("score")
+    fit_decision = eval_data.get("fit_decision") or machine_summary.get("final_decision")
+    legitimacy_tier = eval_data.get("legitimacy_tier") or machine_summary.get("legitimacy_tier")
+    work_auth = eval_data.get("work_auth") or machine_summary.get("work_auth")
+    title_warnings = eval_data.get("title_warnings") or []
+    ungrounded_claims = eval_data.get("ungrounded_claims") or []
 
     return {
         "id": folder.name,
@@ -232,6 +249,13 @@ def package_summary(cfg: Config, folder: Path) -> dict:
         "score": eval_data.get("score"),
         "ats_score": eval_data.get("score"),
         "honesty": eval_data.get("honesty"),
+        "fit_score_5": fit_score_5,
+        "fit_decision": fit_decision,
+        "legitimacy_tier": legitimacy_tier,
+        "work_auth": work_auth,
+        "evidence_confidence": eval_data.get("evidence_confidence"),
+        "title_warnings": title_warnings,
+        "ungrounded_claims": ungrounded_claims,
         "passed": passed,
         "apply_signal": apply_signal,
         "fabrication_freedom": freedom,
@@ -250,6 +274,15 @@ def package_summary(cfg: Config, folder: Path) -> dict:
             "honesty": eval_data.get("honesty"),
             "passed": passed,
             "apply_signal": apply_signal,
+            "fit_score_5": fit_score_5,
+            "fit_decision": fit_decision,
+            "legitimacy_tier": legitimacy_tier,
+            "work_auth": work_auth,
+            "evidence_confidence": eval_data.get("evidence_confidence"),
+            "title_warnings": title_warnings,
+            "ungrounded_claims": ungrounded_claims,
+            "claim_reviews": eval_data.get("claim_reviews") or [],
+            "verification_skipped": eval_data.get("verification_skipped") or [],
             "keyword_coverage": eval_data.get("keyword_coverage"),
             "critique": eval_data.get("critique") or "",
             "gaps": eval_data.get("gaps") or [],
